@@ -111,4 +111,16 @@
     <string name="disable_motion_sensors_setting_title">Deaktiviere Bewegungssensoren bei ausgeschaltetetem Bildschirm.</string>
     <string name="disable_motion_sensors_setting_summary">Deaktiviere Bewegungssensoren \nwenn das Gerät in den Doze Modus \ngeht.</string>
     <string name="disable_all_sensors_setting_title">Deaktiviere alle Sensoren bei\nausgeschaltetem Bildschirm</string>
+    <string name="copy_command_button_text">Befehl kopieren</string>
+    <string name="disable_all_sensors_setting_summary">Alle Sensoren deaktivieren wenn das Gerät im Dozemodus ist (Bewegung, Kamera, ...)</string>
+    <string name="enable_battery_saver_setting_title">Energiesparmodus aktivieren bei Bildschirmabschaltung</string>
+    <string name="enable_battery_saver_setting_summary">Energiesparmodus aktivieren wenn Gerät im Dozemodus ist</string>
+    <string name="enable_airplane_setting_title">Flugmodus aktivieren bei Bildschirmabschaltung</string>
+    <string name="enable_airplane_setting_summary">Flugmodus aktivieren im Dozemodus</string>
+    <string name="disable_bluetooth_setting_title">Bluetooth deaktivieren bei Bildschirmabschaltung</string>
+    <string name="disable_bluetooth_setting_summary">Bluetooth deaktivieren im Dozemodus</string>
+    <string name="disable_gps_setting_title">GPS deaktivieren bei Bildschirmabschaltung</string>
+    <string name="disable_gps_setting_summary">GPS/Standort deaktivieren bei Dozemodus</string>
+    <string name="disable_biometrics_setting_title">Biometrisches Entsperren bei Bildschirmabschaltung deaktivieren</string>
+    <string name="disable_biometrics_setting_summary">Deaktiviert biometrisches Entsperren bei Bildschirmabschaltung. Funktioniert möglicherweise nicht an allen Geräten.</string>
 </resources>
