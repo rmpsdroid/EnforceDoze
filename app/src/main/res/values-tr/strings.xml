@@ -14,7 +14,7 @@
     <string name="no_root_workaround_dialog_title">No-root olmadı için geçiçi çözüm</string>
     <string name="okay_button_text">Tamam</string>
     <string name="share_command_button_text">Komutu paylaş</string>
-    <string name="no_root_workaround_dialog_text">Cihazınız Root\'lu değilse, aşağıdaki uygulamayı yaparak \'android.permission.DUMP\' (ve Nougat\'da iseniz, \'android.permission.WRITE_SECURE_SETTINGS\') izin vermek üzere bu uygulamaya manuel olarak izin verebilirsiniz ADB komutu (komut tek satırdır, ayrılmaz):\n\n\"adb -d kabuğu pm grant com.akylas.enforcedoze android.permission.DUMP\" ve WRITE_SECURE_SETTINGS izniyle aynıdır (eğer açıksa Nougat)\n\nBitirdikten sonra, lütfen bu uygulamayı kapatın ve tekrar başlayın; ardından uygulamaya düzgün bir şekilde erişebilirsiniz.</string>
+    <string name="no_root_workaround_dialog_text">Cihazınızda kök erişimi yoksa, \'android.permission.DUMP\' iznini (ve Nougat sürümündeyseniz \'android.permission.WRITE_SECURE_SETTINGS\' iznini) bilgisayarınızdan aşağıdaki komutu çalıştırarak izin verebilirsiniz:</string>
     <string name="lockscreen_timeout_dialog_title">Kilit ekranı Zaman aşımı</string>
     <string name="open_security_settings_button_text">Aç Güvenlik Ayarını</string>
     <string name="lockscreen_timeout_dialog_text_p1">Cihazınızdaki kilit ekranı zaman aşımı değeri çok yüksek(</string>
@@ -129,4 +129,17 @@
     <string name="tunables_su_not_available_error_text">SU izni reddedildi veya mevcut değil. Bu özelliği kullanmak için root kullanmanız gerekir! Devam edebilirsiniz, ancak ayarlamaları kaydedemez, yalnızca panoya kopyalayamazsınız.</string>
     <string name="block_app_dialog_title">Uygulamalrı Blockla</string>
     <string name="block_app_notif_dialog_title">Bildirim alamıcanız uygulamalar</string>
+    <string name="doze_unsupported_more_info">Bazı cihazlarda Doze modu OEM tarafından devre dışı bırakılmıştır. Bu seçenek Doze modunun varsayılan olarak aktif olmadığı cihazlarda Doze\'u aktifleştirebilir.\n\nNot: Cihazınızı yeniden başlattığınızda bu seçeneği tekrardan açmanız gerekmektedir.</string>
+    <string name="copy_command_button_text">Komutu kopyala</string>
+    <string name="disable_motion_sensors_setting_title">Ekran kapalıyken hareket sensörlerini devre dışı bırak</string>
+    <string name="disable_motion_sensors_setting_summary">Cihaz Doze modundayken hareket sensörlerini devre dışı bırak</string>
+    <string name="disable_all_sensors_setting_title">Ekran kapalıyken bütün sensörleri devre dışı bırak</string>
+    <string name="disable_all_sensors_setting_summary">Cihaz Doze modundayken bütün sensörleri devre dışı bırak (hareket, kamera, ...)</string>
+    <string name="enable_battery_saver_setting_title">Ekran kapalıyken enerji tasarrufu modunu aktifleştir</string>
+    <string name="enable_battery_saver_setting_summary">Doze modundayken enerji tasarrufu modunu aktifleştir</string>
+    <string name="enable_airplane_setting_title">Ekran kapanınca uçuş modunu aktifleştir</string>
+    <string name="enable_airplane_setting_summary">Cihaz Doze moduna girdiğinde uçuş modunu aktifleştir</string>
+    <string name="disable_bluetooth_setting_title">Ekran kapanınca Bluetooth\'u devre dışı bırak</string>
+    <string name="disable_bluetooth_setting_summary">Cihaz Doze modundayken Bluetooth\'u kapat</string>
+    <string name="disable_gps_setting_title">Ekran kapanınca GPS\'i devre dışı bırak</string>
 </resources>
