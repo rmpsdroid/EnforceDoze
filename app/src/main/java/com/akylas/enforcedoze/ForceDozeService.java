@@ -313,7 +313,6 @@ public class ForceDozeService extends Service {
             this.registerReceiver(localDozeReceiver, filter);
         }
         registerUserPresentReceiver();
-        startCallStateWatcher();
         turnOffDataInDoze = getDefaultSharedPreferences(getApplicationContext()).getBoolean("turnOffDataInDoze", false);
         ignoreIfHotspot = getDefaultSharedPreferences(getApplicationContext()).getBoolean("ignoreIfHotspot", true);
         turnOffWiFiInDoze = getDefaultSharedPreferences(getApplicationContext()).getBoolean("turnOffWiFiInDoze", false);
@@ -400,6 +399,12 @@ public class ForceDozeService extends Service {
             executeCommand("whoami");
         }
         recoverAfterServiceRecreation();
+
+        // Deliberately last. A call callback goes straight to exitDoze(), which touches the
+        // settings, the blocklists, the statistics set and the shell backend - all of which are
+        // initialised above. Starting the watcher in the receiver block, as it was, meant an
+        // immediate callback could reach them while they were still null.
+        startCallStateWatcher();
     }
 
     /** unregisterReceiver throws if the receiver was never registered; onDestroy must not crash. */
@@ -896,7 +901,12 @@ public class ForceDozeService extends Service {
 
     public void grantReadPhoneStatePermission() {
         log("Granting android.permission.READ_PHONE_STATE to " + BuildConfig.APPLICATION_ID);
-        executeCommandWithRoot("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.READ_PHONE_STATE");
+        executeCommandWithRoot("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.READ_PHONE_STATE",
+                (commandCode, exitCode, stdout, stderr) -> {
+                    if (exitCode == 0) {
+                        onReadPhoneStateGranted();
+                    }
+                }, true);
     }
 
     public void grantReadPhoneStatePermissionViaShizuku() {
@@ -905,8 +915,20 @@ public class ForceDozeService extends Service {
             (commandCode, exitCode, stdout, stderr) -> {
                 if (exitCode == 0) {
                     log("READ_PHONE_STATE permission granted successfully");
+                    onReadPhoneStateGranted();
                 }
             }, true);
+    }
+
+    /**
+     * On a fresh install the permission is granted through Shizuku/root some time after the
+     * service starts, so the telephony half of the call watcher would otherwise stay unregistered
+     * for the life of the process. Registration is idempotent, so this cannot double-register.
+     */
+    private void onReadPhoneStateGranted() {
+        if (callStateWatcher != null) {
+            callStateWatcher.ensureTelephonyRegistered();
+        }
     }
 
     public void grantSensorPrivacyPermission() {

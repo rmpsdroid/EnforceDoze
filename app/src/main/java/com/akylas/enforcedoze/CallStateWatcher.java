@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -29,12 +30,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *     <li>audio mode - VoIP and other communication apps, which never change the telephony call
  *     state at all, via AudioManager.OnModeChangedListener on API 31+.</li>
  * </ul>
- * The two are combined into one latched "a call is happening" boolean, so a WhatsApp call and a
- * cellular call produce the same single transition and nothing double-fires.
+ * Call state is tracked <em>per telephony source</em> rather than in one shared flag. Each
+ * registered subscription reports only its own state, and a listener also receives an immediate
+ * callback when it registers, so a single shared boolean let SIM2's initial IDLE overwrite an
+ * active call on SIM1 and end the session underneath it. The aggregate is "any source is
+ * non-IDLE".
  * <p>
  * No polling, and no new permissions: READ_PHONE_STATE is already declared and already used by
- * {@link Utils#isUserInCall(Context)}. If it has not been granted yet the telephony registration
- * fails harmlessly and the caller's screen-on fallback still covers the case.
+ * {@link Utils#isUserInCall(Context)}. Telephony registration is skipped while that permission is
+ * missing and can be retried later through {@link #ensureTelephonyRegistered()} once the service
+ * has granted it; registration is idempotent, so retrying never produces duplicate callbacks.
  */
 public class CallStateWatcher {
 
@@ -47,38 +52,74 @@ public class CallStateWatcher {
 
     private static final String TAG = "CallStateWatcher";
 
+    /** One registered telephony subscription and the last state it reported for itself. */
+    private static final class TelephonySource {
+        final TelephonyManager manager;
+        volatile boolean busy;
+        Object callback;
+        PhoneStateListener legacyListener;
+
+        TelephonySource(TelephonyManager manager) {
+            this.manager = manager;
+        }
+    }
+
     private final AtomicBoolean callActive = new AtomicBoolean(false);
-    private final List<Object> telephonyCallbacks = new ArrayList<>();
-    private final List<TelephonyManager> callbackOwners = new ArrayList<>();
+    private final CopyOnWriteArrayList<TelephonySource> telephonySources = new CopyOnWriteArrayList<>();
 
     private Context appContext;
-    private Listener listener;
-    private PhoneStateListener legacyListener;
-    private TelephonyManager legacyManager;
+    private volatile Listener listener;
     private AudioManager.OnModeChangedListener modeChangedListener;
     private AudioManager audioManager;
-    /** Last known telephony state, kept so the audio mode cannot mask an ongoing cellular call. */
-    private volatile boolean telephonyBusy = false;
     private volatile boolean audioBusy = false;
 
+    /**
+     * Must only be called once the service is fully initialised. A call callback leads to
+     * exitDoze(), which touches the settings, the blocklists, the statistics and the shell
+     * backend, so starting the watcher earlier in onCreate() risked all of those being null.
+     */
     public void start(Context context, Listener listener) {
         this.appContext = context.getApplicationContext();
         this.listener = listener;
 
-        // Seed from the current state: a call may already be in progress when the service starts.
-        telephonyBusy = Utils.isUserInCall(appContext);
-        audioBusy = Utils.isUserInCommunicationCall(appContext);
-        callActive.set(telephonyBusy || audioBusy);
-
-        registerTelephony();
+        // Audio mode needs no permission, so it is always safe to watch.
         registerAudioMode();
-        logToLogcat(TAG, "Call watcher started, callActiveAtStart=" + callActive.get());
+        audioBusy = Utils.isUserInCommunicationCall(appContext);
+
+        ensureTelephonyRegistered();
+
+        // Report a call that was already in progress when the service started. The old code set
+        // the latch directly, which suppressed the notification entirely: the first telephony
+        // callback then saw the latch already true and never told the service. Going through
+        // evaluate() means the listener is notified exactly once, here or on the first callback,
+        // whichever observes the call first.
+        evaluate("initial");
+        logToLogcat(TAG, "Call watcher started, telephonySources=" + telephonySources.size()
+                + " callActive=" + callActive.get());
+    }
+
+    /**
+     * Registers the telephony listeners if they are not registered already and the permission is
+     * available. Idempotent: safe to call from start() and again from a later permission grant.
+     */
+    public synchronized void ensureTelephonyRegistered() {
+        if (appContext == null || !telephonySources.isEmpty()) {
+            return;
+        }
+        if (!Utils.isReadPhoneStatePermissionGranted(appContext)) {
+            logToLogcat(TAG, "READ_PHONE_STATE not granted yet, telephony watching deferred");
+            return;
+        }
+        registerTelephony();
+        if (!telephonySources.isEmpty()) {
+            logToLogcat(TAG, "Telephony watching active on " + telephonySources.size() + " source(s)");
+        }
     }
 
     public void stop() {
+        listener = null;
         unregisterTelephony();
         unregisterAudioMode();
-        listener = null;
         logToLogcat(TAG, "Call watcher stopped");
     }
 
@@ -99,35 +140,33 @@ public class CallStateWatcher {
         if (base == null) {
             return;
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // Register on the default manager plus every active subscription. A dual-SIM device
-            // reports call state per subscription, and a call on the non-default SIM would
-            // otherwise go unnoticed.
-            for (TelephonyManager manager : getManagersToWatch(base)) {
-                try {
-                    TelephonyCallback callback = new ModernCallStateCallback();
-                    manager.registerTelephonyCallback(appContext.getMainExecutor(), callback);
-                    telephonyCallbacks.add(callback);
-                    callbackOwners.add(manager);
-                } catch (Exception e) {
-                    // Most likely READ_PHONE_STATE has not been granted yet.
-                    Log.w(TAG, "Could not register telephony callback: " + e.getMessage());
-                }
-            }
-        } else {
+        for (TelephonyManager manager : getManagersToWatch(base)) {
+            TelephonySource source = new TelephonySource(manager);
             try {
-                legacyManager = base;
-                legacyListener = new PhoneStateListener() {
-                    @Override
-                    public void onCallStateChanged(int state, String phoneNumber) {
-                        // phoneNumber is deliberately ignored and never logged.
-                        onTelephonyState(state);
-                    }
-                };
-                legacyManager.listen(legacyListener, PhoneStateListener.LISTEN_CALL_STATE);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    ModernCallStateCallback callback = new ModernCallStateCallback(source);
+                    manager.registerTelephonyCallback(appContext.getMainExecutor(), callback);
+                    source.callback = callback;
+                } else {
+                    // Registered per subscription too on API 24-30, so multi-SIM behaves the same
+                    // way there. On API 23 getManagersToWatch() yields the default manager only,
+                    // because createForSubscriptionId does not exist - a documented limitation of
+                    // that one API level.
+                    PhoneStateListener legacy = new PhoneStateListener() {
+                        @Override
+                        public void onCallStateChanged(int state, String phoneNumber) {
+                            // phoneNumber is deliberately ignored and never logged.
+                            onTelephonyState(source, state);
+                        }
+                    };
+                    manager.listen(legacy, PhoneStateListener.LISTEN_CALL_STATE);
+                    source.legacyListener = legacy;
+                }
+                telephonySources.add(source);
             } catch (Exception e) {
-                Log.w(TAG, "Could not register legacy phone state listener: " + e.getMessage());
-                legacyListener = null;
+                // Most commonly a SecurityException because READ_PHONE_STATE was revoked between
+                // the check above and here.
+                Log.w(TAG, "Could not register telephony listener: " + e.getMessage());
             }
         }
     }
@@ -136,6 +175,9 @@ public class CallStateWatcher {
     private List<TelephonyManager> getManagersToWatch(TelephonyManager base) {
         List<TelephonyManager> managers = new ArrayList<>();
         managers.add(base);
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            return managers;
+        }
         try {
             SubscriptionManager subscriptionManager =
                     (SubscriptionManager) appContext.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE);
@@ -147,6 +189,7 @@ public class CallStateWatcher {
                 return managers;
             }
             Set<Integer> seen = new HashSet<>();
+            // The base manager already covers the default subscription.
             seen.add(SubscriptionManager.getDefaultSubscriptionId());
             for (SubscriptionInfo info : subscriptions) {
                 int subId = info.getSubscriptionId();
@@ -162,37 +205,38 @@ public class CallStateWatcher {
     }
 
     private void unregisterTelephony() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            for (int i = 0; i < telephonyCallbacks.size(); i++) {
-                try {
-                    callbackOwners.get(i).unregisterTelephonyCallback(
-                            (TelephonyCallback) telephonyCallbacks.get(i));
-                } catch (Exception e) {
-                    Log.w(TAG, "Could not unregister telephony callback: " + e.getMessage());
-                }
-            }
-            telephonyCallbacks.clear();
-            callbackOwners.clear();
-        } else if (legacyListener != null && legacyManager != null) {
+        for (TelephonySource source : telephonySources) {
             try {
-                legacyManager.listen(legacyListener, PhoneStateListener.LISTEN_NONE);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    if (source.callback instanceof TelephonyCallback) {
+                        source.manager.unregisterTelephonyCallback((TelephonyCallback) source.callback);
+                    }
+                } else if (source.legacyListener != null) {
+                    source.manager.listen(source.legacyListener, PhoneStateListener.LISTEN_NONE);
+                }
             } catch (Exception e) {
-                Log.w(TAG, "Could not unregister legacy listener: " + e.getMessage());
+                Log.w(TAG, "Could not unregister telephony listener: " + e.getMessage());
             }
-            legacyListener = null;
-            legacyManager = null;
         }
+        telephonySources.clear();
     }
 
     private class ModernCallStateCallback extends TelephonyCallback
             implements TelephonyCallback.CallStateListener {
+        private final TelephonySource source;
+
+        ModernCallStateCallback(TelephonySource source) {
+            this.source = source;
+        }
+
         @Override
         public void onCallStateChanged(int state) {
-            onTelephonyState(state);
+            onTelephonyState(source, state);
         }
     }
 
-    private void onTelephonyState(int state) {
+    /** Updates only the reporting source, then recomputes the aggregate. */
+    private void onTelephonyState(TelephonySource source, int state) {
         String name;
         switch (state) {
             case TelephonyManager.CALL_STATE_RINGING:
@@ -205,9 +249,22 @@ public class CallStateWatcher {
                 name = "IDLE";
                 break;
         }
-        DiagnosticLogger.i("CALL", "state=" + name);
-        telephonyBusy = state != TelephonyManager.CALL_STATE_IDLE;
+        boolean busy = state != TelephonyManager.CALL_STATE_IDLE;
+        if (source.busy != busy) {
+            source.busy = busy;
+            // No subscription identifier is logged, only the state name.
+            DiagnosticLogger.i("CALL", "state=" + name);
+        }
         evaluate(name);
+    }
+
+    private boolean anyTelephonyBusy() {
+        for (TelephonySource source : telephonySources) {
+            if (source.busy) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ----------------------------------------------------------------------------- audio mode
@@ -252,12 +309,12 @@ public class CallStateWatcher {
     // ------------------------------------------------------------------------------- combining
 
     /**
-     * Collapses both sources into one latched transition. compareAndSet means a cellular call that
+     * Collapses every source into one latched transition. compareAndSet means a cellular call that
      * also raises the audio mode produces a single onCallActive, and the listener is only told the
-     * call ended once both sources are clear.
+     * call ended once every source is clear.
      */
     private void evaluate(String reason) {
-        boolean busy = telephonyBusy || audioBusy;
+        boolean busy = anyTelephonyBusy() || audioBusy;
         Listener current = listener;
         if (current == null) {
             callActive.set(busy);
