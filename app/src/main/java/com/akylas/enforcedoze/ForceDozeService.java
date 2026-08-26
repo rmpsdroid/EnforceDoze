@@ -508,8 +508,33 @@ public class ForceDozeService extends Service {
             }
         }
 
+        // Both of these are safe on a restart and must not be skipped: the foreground notification
+        // has a hard deadline after startForegroundService(), and staying on the Doze whitelist is
+        // what keeps a recreated service alive.
         ensureForegroundNotification();
         addSelfToDozeWhitelist();
+
+        // START_STICKY brings the service back with a fresh process, so lastKnownState is back to
+        // its "null" initial value. enterDoze() tests !lastKnownState.equals("IDLE"), which is
+        // therefore true even though the device is already idle, and it would run the whole
+        // Doze-entry sequence a second time against a session that is still active: re-suspending
+        // packages, re-blocking notifications, another sensor timer, another ENTER stats row, and
+        // - worst of all - overwriting appliedSuspendedPackages with the *current* blocklist,
+        // which loses any package that was suspended before the blocklist was edited.
+        //
+        // Resuming an existing session means taking ownership of it, not starting it again.
+        boolean screenOn = Utils.isScreenOn(getApplicationContext());
+        boolean persistedInDoze = dozeStateStore.isInDoze();
+        if (!screenOn && persistedInDoze) {
+            lastKnownState = getDeviceIdleState();
+            log("RECOVERY_RESUME_ACTIVE_DOZE: screen off and inDoze persisted, resuming the "
+                    + "existing session without re-entering Doze (state=" + lastKnownState
+                    + ", suspendedPackages=" + dozeStateStore.getAppliedSuspendedPackages().size() + ")");
+            Utils.hideDisabledNotification(getApplicationContext());
+            Utils.updateTileState(getApplicationContext());
+            return START_STICKY;
+        }
+
         enterDoze(this);
         lastKnownState = getDeviceIdleState();
         // Hide disabled notification when service starts
