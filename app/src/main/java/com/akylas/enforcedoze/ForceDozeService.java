@@ -132,6 +132,12 @@ public class ForceDozeService extends Service {
     Timer enterDozeTimer;
     Timer disableSensorsTimer;
     DozeReceiver localDozeReceiver;
+    /**
+     * ACTION_USER_PRESENT gets its own receiver so it can be registered RECEIVER_EXPORTED without
+     * exporting the rest of the screen/Doze actions. It is a protected system broadcast, so this
+     * receiver deliberately carries no other action - nothing unprotected is reachable through it.
+     */
+    BroadcastReceiver userPresentReceiver;
     ReloadSettingsReceiver reloadSettingsReceiver;
     ReloadNotificationBlocklistReceiver reloadNotificationBlocklistReceiver;
     ReloadAppsBlocklistReceiver reloadAppsBlocklistReceiver;
@@ -231,6 +237,14 @@ public class ForceDozeService extends Service {
     public void onCreate() {
         super.onCreate();
         localDozeReceiver = new DozeReceiver();
+        userPresentReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent != null && Intent.ACTION_USER_PRESENT.equals(intent.getAction())) {
+                    handleUserPresent(context);
+                }
+            }
+        };
         reloadSettingsReceiver = new ReloadSettingsReceiver();
         reloadNotificationBlocklistReceiver = new ReloadNotificationBlocklistReceiver();
         reloadAppsBlocklistReceiver = new ReloadAppsBlocklistReceiver();
@@ -274,7 +288,8 @@ public class ForceDozeService extends Service {
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_SCREEN_ON);
         filter.addAction(Intent.ACTION_SCREEN_OFF);
-        filter.addAction(Intent.ACTION_USER_PRESENT);
+        // ACTION_USER_PRESENT is handled by userPresentReceiver, which is registered separately
+        // and exported; see registerUserPresentReceiver().
         filter.addAction(Intent.ACTION_POWER_CONNECTED);
 //        filter.addAction(Intent.ACTION_AIRPLANE_MODE_CHANGED);
         filter.addAction(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED);
@@ -290,6 +305,7 @@ public class ForceDozeService extends Service {
         } else {
             this.registerReceiver(localDozeReceiver, filter);
         }
+        registerUserPresentReceiver();
         turnOffDataInDoze = getDefaultSharedPreferences(getApplicationContext()).getBoolean("turnOffDataInDoze", false);
         ignoreIfHotspot = getDefaultSharedPreferences(getApplicationContext()).getBoolean("ignoreIfHotspot", true);
         turnOffWiFiInDoze = getDefaultSharedPreferences(getApplicationContext()).getBoolean("turnOffWiFiInDoze", false);
@@ -378,6 +394,66 @@ public class ForceDozeService extends Service {
         recoverAfterServiceRecreation();
     }
 
+    /** unregisterReceiver throws if the receiver was never registered; onDestroy must not crash. */
+    private void unregisterReceiverQuietly(BroadcastReceiver receiver) {
+        if (receiver == null) {
+            return;
+        }
+        try {
+            this.unregisterReceiver(receiver);
+        } catch (Exception e) {
+            log("Receiver was not registered: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Registers the unlock receiver on its own, exported on API 33+.
+     * <p>
+     * The combined receiver was registered RECEIVER_NOT_EXPORTED, and on the S26 Ultra
+     * ACTION_USER_PRESENT never arrived while ACTION_SCREEN_ON on the same registration did. The
+     * documented guidance for framework broadcasts is RECEIVER_EXPORTED, and the way to apply it
+     * without loosening the rest of the Doze actions is to partition the broadcast into its own
+     * receiver. Nothing unprotected is registered here, so exporting it grants no new surface:
+     * ACTION_USER_PRESENT can only be sent by the system.
+     */
+    private void registerUserPresentReceiver() {
+        IntentFilter userPresentFilter = new IntentFilter(Intent.ACTION_USER_PRESENT);
+        boolean exported = false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            this.registerReceiver(userPresentReceiver, userPresentFilter, Context.RECEIVER_EXPORTED);
+            exported = true;
+        } else {
+            this.registerReceiver(userPresentReceiver, userPresentFilter);
+        }
+        log("Registered ACTION_USER_PRESENT receiver, exported=" + exported);
+        DiagnosticLogger.i("WAKE", "user_present_receiver_registered exported=" + exported);
+    }
+
+    /**
+     * The single home of the unlock handling. Unchanged in behaviour from the branch it replaces in
+     * DozeReceiver; only the delivery route is different.
+     */
+    private void handleUserPresent(Context context) {
+        int time = Settings.Secure.getInt(getContentResolver(), "lock_screen_lock_after_timeout", 5000);
+        if (time == 0) {
+            time = 1000;
+        }
+        int delay = dozeEnterDelay * 1000;
+        time = time + delay;
+
+        log("UNLOCK received " + waitForUnlock);
+        DiagnosticLogger.i("WAKE", "user_present waitForUnlock=" + waitForUnlock);
+        // Recovery only: SCREEN_ON already dispatched the un-suspend. Both of these are
+        // no-ops when there is nothing left pending, and the in-flight guards collapse a
+        // SCREEN_ON/USER_PRESENT pair into a single batch.
+        restoreSuspendedPackages("user present");
+        if (waitForUnlock) {
+            handleScreenOn(context, time, delay);
+        } else {
+            restoreDeviceStates(context, "user present");
+        }
+    }
+
     /**
      * Shizuku coming back is a recovery opportunity: anything that failed while it was gone is
      * still recorded and can be retried now.
@@ -458,7 +534,8 @@ public class ForceDozeService extends Service {
         super.onDestroy();
         log("Stopping service and enabling sensors");
         DiagnosticLogger.i("APP", "onDestroy");
-        this.unregisterReceiver(localDozeReceiver);
+        unregisterReceiverQuietly(localDozeReceiver);
+        unregisterReceiverQuietly(userPresentReceiver);
         LocalBroadcastManager.getInstance(this).unregisterReceiver(reloadSettingsReceiver);
         LocalBroadcastManager.getInstance(this).unregisterReceiver(reloadNotificationBlocklistReceiver);
         LocalBroadcastManager.getInstance(this).unregisterReceiver(reloadAppsBlocklistReceiver);
@@ -2128,18 +2205,6 @@ public class ForceDozeService extends Service {
 
             if (action.equals(Intent.ACTION_AIRPLANE_MODE_CHANGED)) {
                 log("airplane mode changed " + Utils.isAirplaneEnabled(getContentResolver()));
-            } else if (action.equals(Intent.ACTION_USER_PRESENT)) {
-                log("UNLOCK received " + waitForUnlock);
-                DiagnosticLogger.i("WAKE", "user_present waitForUnlock=" + waitForUnlock);
-                // Recovery only: SCREEN_ON already dispatched the un-suspend. Both of these are
-                // no-ops when there is nothing left pending, and the in-flight guards collapse a
-                // SCREEN_ON/USER_PRESENT pair into a single batch.
-                restoreSuspendedPackages("user present");
-                if (waitForUnlock) {
-                    handleScreenOn(context, time, delay);
-                } else {
-                    restoreDeviceStates(context, "user present");
-                }
             } else if (action.equals(Intent.ACTION_SCREEN_ON)) {
                 wakeStartedAt = SystemClock.elapsedRealtime();
                 wakeTiming("screen_on");
