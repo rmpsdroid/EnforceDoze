@@ -44,11 +44,24 @@ public class BootCompleteReceiver extends BroadcastReceiver {
         // A reboot always ends the Doze session, whatever the flag said when we went down.
         store.setInDoze(false);
 
-        if (!store.hasPendingRestore()) {
+        // Two independent kinds of pending recovery, deliberately tested separately rather than
+        // folded into hasPendingRestore(): that method means "device-state toggles" everywhere
+        // else, and widening it here would change behaviour at call sites this commit is not
+        // meant to touch.
+        //
+        // The package-only case is real and was previously missed: with the Doze App Blocklist in
+        // use but no radio/sensor enhancement enabled, getAppliedKeys() is empty while packages
+        // are still suspended. pm suspend is persistent PackageManager state that survives the
+        // reboot, so those apps would have come back up greyed out with nothing left to fix them.
+        boolean hasDeviceStateRestore = store.hasPendingRestore();
+        boolean hasPackageRestore = store.hasAppliedSuspendedPackages();
+
+        if (!hasDeviceStateRestore && !hasPackageRestore) {
             return false;
         }
 
-        log("Device booted with " + store.getAppliedKeys() + " still applied, restoring");
+        log("BOOT_RECOVERY_PENDING deviceStates=" + store.getAppliedKeys()
+                + " suspendedPackages=" + store.getAppliedSuspendedPackages().size());
         try {
             Intent restore = new Intent(context, ForceDozeService.class);
             restore.setAction(ForceDozeService.ACTION_RESTORE_STATE);
