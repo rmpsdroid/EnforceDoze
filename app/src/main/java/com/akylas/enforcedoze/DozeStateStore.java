@@ -43,11 +43,17 @@ public class DozeStateStore {
     public static final String KEY_HOTSPOT = "hotspot";
 
     private static final String TAG = "DozeStateStore";
+    /**
+     * A private store of its own, deliberately not the default SharedPreferences. That keeps this
+     * transient recovery state out of the JSON settings backup (which exports the default file),
+     * where restoring another device's in-flight Doze session would be meaningless or harmful.
+     */
     private static final String PREFS_NAME = "enforcedoze_doze_state";
     private static final String PREFIX_PRE = "pre.";
     private static final String PREFIX_APPLIED = "applied.";
     private static final String KEY_APPLIED_AT = "appliedAt";
     private static final String KEY_IN_DOZE = "inDoze";
+    private static final String KEY_APPLIED_SUSPENDED_PACKAGES = "appliedSuspendedPackages";
 
     private static volatile DozeStateStore instance;
 
@@ -117,6 +123,43 @@ public class DozeStateStore {
         }
         editor.commit();
         logToLogcat(TAG, "Cleared " + keys + ", nothing left to restore for them");
+    }
+
+    /**
+     * Records the exact packages this Doze session suspended, which is what the wake-up path must
+     * un-suspend. The user's configured blocklist is <em>not</em> a safe substitute: if it changes
+     * while the device is dozing, a package that was suspended but has since been removed from the
+     * list would never be brought back.
+     * <p>
+     * Written synchronously and before the suspend command is issued, so a kill between the two
+     * still leaves a recoverable record. Suspending something twice is harmless; forgetting to
+     * un-suspend is not.
+     */
+    public void setAppliedSuspendedPackages(Collection<String> packages) {
+        if (packages == null || packages.isEmpty()) {
+            clearAppliedSuspendedPackages();
+            return;
+        }
+        prefs.edit()
+                .putStringSet(KEY_APPLIED_SUSPENDED_PACKAGES, new LinkedHashSet<>(packages))
+                .commit();
+        logToLogcat(TAG, "Recorded " + packages.size() + " suspended package(s) for this Doze session");
+    }
+
+    /** A copy: SharedPreferences forbids mutating the set it hands back. */
+    public Set<String> getAppliedSuspendedPackages() {
+        return new LinkedHashSet<>(
+                prefs.getStringSet(KEY_APPLIED_SUSPENDED_PACKAGES, new LinkedHashSet<String>()));
+    }
+
+    public boolean hasAppliedSuspendedPackages() {
+        return !getAppliedSuspendedPackages().isEmpty();
+    }
+
+    /** Only call once the un-suspend has actually reported success. */
+    public void clearAppliedSuspendedPackages() {
+        prefs.edit().remove(KEY_APPLIED_SUSPENDED_PACKAGES).commit();
+        logToLogcat(TAG, "Cleared the suspended-package record");
     }
 
     /** The toggles that are still waiting to be reverted. */
