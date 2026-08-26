@@ -155,6 +155,12 @@ public class ForceDozeService extends Service {
     static final String TAG_TIMING = "EnforceDozeTiming";
     /** Printed by the compatibility loop for each package it could not change. */
     private static final String FALLBACK_FAILURE_MARKER = "ENFORCEDOZE_PKG_FAIL";
+    /**
+     * Lowest API level on which the multi-package {@code pm suspend a b c} form is trusted. Below
+     * this the compatibility loop is used directly rather than probing with a batch that older
+     * PackageManagerShellCommand builds may silently mishandle.
+     */
+    private static final int MULTI_PACKAGE_PM_MIN_SDK = 36;
     String lastKnownState = "null";
 
     // Add near the top of the class
@@ -319,8 +325,7 @@ public class ForceDozeService extends Service {
             isShizukuAvailable = value;
             log("Shizuku availability changed: " + value);
             if (value) {
-                // A pending reversion may have been waiting for exactly this.
-                restoreDeviceStates(getApplicationContext(), "Shizuku became available");
+                onShizukuBecameAvailable();
             }
         };
         shizukuHandler.addOnAvailabilityChangeListener(shizukuAvailabilityListener);
@@ -367,6 +372,32 @@ public class ForceDozeService extends Service {
             executeCommand("whoami");
         }
         recoverAfterServiceRecreation();
+    }
+
+    /**
+     * Shizuku coming back is a recovery opportunity: anything that failed while it was gone is
+     * still recorded and can be retried now.
+     * <p>
+     * It is only an opportunity when the Doze session is actually over, though. A reconnect at
+     * 03:00 with the screen off and inDoze still true must leave every marker alone - restoring
+     * the radios there would end the Doze session the user asked for. This gate is the same one
+     * {@link #recoverAfterServiceRecreation()} applies.
+     */
+    private void onShizukuBecameAvailable() {
+        boolean screenOn = Utils.isScreenOn(getApplicationContext());
+        boolean inDoze = dozeStateStore.isInDoze();
+
+        if (!screenOn && inDoze) {
+            log("SHIZUKU_RECOVERY_DEFERRED screenOn=false inDoze=true, keeping all markers");
+            return;
+        }
+
+        log("SHIZUKU_RECOVERY_RUNNING screenOn=" + screenOn + " inDoze=" + inDoze);
+        // Packages first: they are the visible half, and a failed wake-up may have left them
+        // suspended with the record still pending.
+        restoreSuspendedPackages("Shizuku became available");
+        reEnableBlockedNotifications();
+        restoreDeviceStates(getApplicationContext(), "Shizuku became available");
     }
 
     /**
@@ -494,6 +525,11 @@ public class ForceDozeService extends Service {
      */
     private void handleRestoreStateRequest() {
         dozeStateStore.setInDoze(false);
+        // ACTION_RESTORE_STATE means "put back everything EnforceDoze owns", so the persisted
+        // suspended packages are part of it. Restoring only the radios left a device that booted
+        // mid-Doze with its blocklisted apps still greyed out.
+        restoreSuspendedPackages("restore requested");
+        reEnableBlockedNotifications();
         restoreDeviceStates(getApplicationContext(), "restore requested");
 
         if (!getDefaultSharedPreferences(getApplicationContext()).getBoolean("serviceEnabled", false)) {
@@ -1373,35 +1409,57 @@ public class ForceDozeService extends Service {
             verb = enabled ? "enable" : "disable";
         }
 
-        final String joined = TextUtils.join(" ", valid);
         log((enabled ? "Enabling " : "Disabling ") + valid.size() + " blocklisted package(s)");
 
-        executeCommandWithRoot("pm " + verb + " " + joined, (commandCode, exitCode, stdout, stderr) -> {
-            if (exitCode == 0) {
-                Log.i(TAG, "HARD_BLOCK_BATCH " + verb + " count=" + valid.size() + " exit=0");
-                if (done != null) {
-                    done.onCommandResult(commandCode, exitCode, stdout, stderr);
-                }
-                return;
-            }
-            // The multi-package form is not accepted here; retry one package per iteration inside
-            // the same single shell. Re-running it over already-changed packages is harmless.
-            Log.w(TAG, "HARD_BLOCK_COMPAT_FALLBACK " + verb + " count=" + valid.size()
-                    + " batchExit=" + exitCode);
+        if (Build.VERSION.SDK_INT < MULTI_PACKAGE_PM_MIN_SDK) {
+            // Deliberately no fast-path attempt here. Older PackageManagerShellCommand builds are
+            // single-target oriented and cannot be relied on to reject the extra arguments in a way
+            // we could detect, so a "try it and see" would risk acting on only the first package
+            // while reporting success.
+            Log.i(TAG, "HARD_BLOCK_COMPAT_FALLBACK reason=legacy_api verb=" + verb
+                    + " count=" + valid.size() + " sdk=" + Build.VERSION.SDK_INT);
             runPackageStateFallback(valid, verb, done);
-        }, false);
+            return;
+        }
+
+        executeCommandWithRoot("pm " + verb + " " + TextUtils.join(" ", valid),
+                (commandCode, exitCode, stdout, stderr) -> {
+                    if (exitCode == 0) {
+                        Log.i(TAG, "HARD_BLOCK_BATCH " + verb + " count=" + valid.size() + " exit=0");
+                        if (done != null) {
+                            done.onCommandResult(commandCode, exitCode, stdout, stderr);
+                        }
+                        return;
+                    }
+                    // The batch was rejected or partially failed on an API level that should
+                    // support it; fall back so a single bad package cannot strand the rest.
+                    Log.w(TAG, "HARD_BLOCK_COMPAT_FALLBACK reason=batch_failed verb=" + verb
+                            + " count=" + valid.size() + " batchExit=" + exitCode);
+                    runPackageStateFallback(valid, verb, done);
+                }, false);
     }
 
     /**
-     * One shell, one {@code pm} call per package. Individual failures (a package the user has since
-     * uninstalled, say) are reported on stdout rather than aborting the loop, so one dead entry
-     * cannot block the rest of the list from being restored.
+     * One shell, one {@code pm} call per installed package.
+     * <p>
+     * A package the user has uninstalled since Doze began can never be un-suspended, so it is
+     * skipped via {@code pm path} and does not count as a failure - otherwise the durable record
+     * would stay pending forever and every wake-up would retry it. A package that <em>is</em>
+     * installed and whose {@code pm} call fails does count, and the non-zero exit keeps the record
+     * pending so a later trigger retries it.
      */
     private void runPackageStateFallback(List<String> valid, String verb,
                                          Shell.OnCommandResultListener2 done) {
-        String command = "for p in " + TextUtils.join(" ", valid) + "; do pm " + verb
-                + " \"$p\" || echo " + FALLBACK_FAILURE_MARKER + " \"$p\"; done";
-        executeCommandWithRoot(command, (commandCode, exitCode, stdout, stderr) -> {
+        StringBuilder command = new StringBuilder("failed=0; for p in ");
+        command.append(TextUtils.join(" ", valid));
+        command.append("; do ");
+        // "pm path" is silent and cheap; a non-zero exit means the package is not installed.
+        command.append("if ! pm path \"$p\" >/dev/null 2>&1; then continue; fi; ");
+        command.append("if ! pm ").append(verb).append(" \"$p\" >/dev/null 2>&1; then ");
+        command.append("echo ").append(FALLBACK_FAILURE_MARKER).append(" \"$p\"; failed=1; fi; ");
+        command.append("done; exit $failed");
+
+        executeCommandWithRoot(command.toString(), (commandCode, exitCode, stdout, stderr) -> {
             int failures = 0;
             if (stdout != null) {
                 for (String line : stdout) {
@@ -1410,14 +1468,10 @@ public class ForceDozeService extends Service {
                     }
                 }
             }
-            // Every package failing means the shell itself could not do the job, so report failure
-            // and keep the recovery record. A few failures are as good as it gets and must not pin
-            // the record open forever.
-            int effectiveExit = (exitCode == 0 && failures < valid.size()) ? 0 : 1;
             Log.i(TAG, "HARD_BLOCK_COMPAT_FALLBACK finished " + verb + " count=" + valid.size()
-                    + " failures=" + failures + " exit=" + effectiveExit);
+                    + " installedFailures=" + failures + " exit=" + exitCode);
             if (done != null) {
-                done.onCommandResult(commandCode, effectiveExit, stdout, stderr);
+                done.onCommandResult(commandCode, exitCode, stdout, stderr);
             }
         }, false);
     }
