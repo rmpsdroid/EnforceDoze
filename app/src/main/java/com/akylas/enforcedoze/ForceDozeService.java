@@ -1777,11 +1777,15 @@ public class ForceDozeService extends Service {
         DiagnosticLogger.i("HARD_BLOCK", "suspend_intended count=" + valid.size());
         // Persist first: a kill between here and the command completing still leaves a record.
         // A genuinely fresh session, so this is the only place that allocates a new generation.
-        long generation = dozeStateStore.beginSuspendedPackageSession(valid);
-        DiagnosticLogger.i("HARD_BLOCK", "session_started gen=" + generation
-                + " count=" + valid.size());
-        submitPackageOp(new PackageOp(true, false, generation,
-                Collections.unmodifiableSet(new LinkedHashSet<>(valid)), "enter Doze"));
+        // The store returns the union of the fresh set with anything the previous session still
+        // owed, so a package whose final un-suspend failed keeps its owner and is released later.
+        DozeStateStore.SuspendedPackageSession session =
+                dozeStateStore.beginSuspendedPackageSession(valid);
+        DiagnosticLogger.i("HARD_BLOCK", "session_started gen=" + session.generation
+                + " owned=" + session.packages.size() + " intended=" + valid.size());
+        // Submitted from the returned snapshot verbatim: rebuilding the union here would reopen
+        // the split read/write the atomic call exists to close.
+        submitPackageOp(new PackageOp(true, false, session.generation, session.packages, "enter Doze"));
     }
 
     /**
@@ -2592,6 +2596,16 @@ public class ForceDozeService extends Service {
         if (isDozeSessionOver()) {
             log(logPrefix + "_RUNNING screenOn=" + screenOn + " inDoze=" + inDoze);
             DiagnosticLogger.i("RECOVERY", logPrefix + "_RUNNING screenOn=" + screenOn + " inDoze=" + inDoze);
+            if (inDoze) {
+                // Mode C has already concluded the session is over, so the durable flag must say so
+                // before any completion callback can read it. Both final-clear guards - the package
+                // generation clear and the KEY_ALL_SENSORS marker clear - refuse to release
+                // ownership while inDoze is true, so leaving it set here meant a Mode C restore
+                // could succeed and still never hand ownership back.
+                log(logPrefix + "_RUNNING: ending the durable session before restoring");
+                DiagnosticLogger.i("RECOVERY", logPrefix + "_SESSION_ENDED");
+                dozeStateStore.setInDoze(false);
+            }
             restoreSuspendedPackages(reason);
             reEnableBlockedNotifications();
             restoreDeviceStates(getApplicationContext(), reason);

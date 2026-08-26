@@ -162,17 +162,32 @@ public class DozeStateStore {
      * unsuspend and the screen-off re-suspend operate on the existing generation and never
      * allocate a new one.
      *
-     * @return the generation now owning the set
+     * Any package the previous session still owed is carried forward into the new ownership set.
+     * A final un-suspend that failed - Shizuku disappeared, say - correctly leaves its record in
+     * place, and simply overwriting it with the fresh blocklist would drop a package that is still
+     * physically suspended and would then never be released. The union is formed here, inside the
+     * monitor, so the read of the old set and the write of the new one cannot be split by another
+     * writer.
+     *
+     * @return an atomic snapshot of the generation and the exact set it now owns; the caller must
+     * submit its command from this, never by rebuilding the union afterwards
      */
-    public synchronized long beginSuspendedPackageSession(Collection<String> packages) {
+    public synchronized SuspendedPackageSession beginSuspendedPackageSession(Collection<String> packages) {
+        Set<String> union = new LinkedHashSet<>(
+                prefs.getStringSet(KEY_APPLIED_SUSPENDED_PACKAGES, new LinkedHashSet<String>()));
+        int previouslyOwed = union.size();
+        if (packages != null) {
+            union.addAll(packages);
+        }
+
         long next = prefs.getLong(KEY_APPLIED_SUSPENDED_PACKAGES_GENERATION, 0L) + 1;
         prefs.edit()
-                .putStringSet(KEY_APPLIED_SUSPENDED_PACKAGES, new LinkedHashSet<>(packages))
+                .putStringSet(KEY_APPLIED_SUSPENDED_PACKAGES, new LinkedHashSet<>(union))
                 .putLong(KEY_APPLIED_SUSPENDED_PACKAGES_GENERATION, next)
                 .commit();
         logToLogcat(TAG, "Began suspended-package session generation=" + next
-                + " count=" + packages.size());
-        return next;
+                + " owned=" + union.size() + " previouslyOwed=" + previouslyOwed);
+        return new SuspendedPackageSession(next, Collections.unmodifiableSet(union));
     }
 
     /**
