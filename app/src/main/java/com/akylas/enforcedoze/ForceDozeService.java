@@ -140,6 +140,20 @@ public class ForceDozeService extends Service {
     BroadcastReceiver userPresentReceiver;
     /** Watches cellular and VoIP call state so a call can release an active Doze session. */
     CallStateWatcher callStateWatcher;
+
+    /**
+     * Serialises every write to the global All Sensors toggle, so the newest lifecycle event always
+     * decides the final physical state. Without it the temporary lock-screen enable and the
+     * screen-off re-disable would be two independent Shizuku threads carrying opposite values.
+     * Latest-wins with a single pending slot; no timers and no sleeps.
+     */
+    private final Object sensorOpLock = new Object();
+    private boolean sensorOpInFlight = false;
+    private Boolean pendingSensorTarget = null;
+    private Shell.OnCommandResultListener2 pendingSensorCallback = null;
+    private String pendingSensorLabel = null;
+    /** True while sensors are temporarily enabled for lock-screen use during an owned session. */
+    private boolean lockscreenSensorOverrideActive = false;
     /**
      * Latched for the duration of one call so the telephony callback, the audio-mode callback and
      * the screen-on fallback together produce a single Doze exit rather than three.
@@ -168,6 +182,16 @@ public class ForceDozeService extends Service {
     static final String TAG_TIMING = "EnforceDozeTiming";
     /** Printed by the compatibility loop for each package it could not change. */
     private static final String FALLBACK_FAILURE_MARKER = "ENFORCEDOZE_PKG_FAIL";
+    /**
+     * Reported to a sensor request that was still queued when a newer one replaced it. Non-zero on
+     * purpose: it releases stateRestoreInFlight without letting the caller clear a durable marker
+     * for work that never ran.
+     */
+    private static final int SUPERSEDED_EXIT_CODE = -3;
+    private static final String SENSOR_LABEL_LOCKSCREEN_RESTORE = "lockscreen_restore";
+    private static final String SENSOR_LABEL_LOCKSCREEN_REAPPLY = "lockscreen_reapply";
+    private static final String SENSOR_LABEL_ENTER = "doze_enter";
+    private static final String SENSOR_LABEL_FINAL = "final_restore";
     /**
      * Lowest API level on which the multi-package {@code pm suspend a b c} form is trusted. Below
      * this the compatibility loop is used directly rather than probing with a batch that older
@@ -557,6 +581,8 @@ public class ForceDozeService extends Service {
 
         log("UNLOCK received " + waitForUnlock);
         DiagnosticLogger.i("WAKE", "user_present waitForUnlock=" + waitForUnlock);
+        // The full restore below owns the sensor state from here on.
+        cancelLockscreenSensorOverride("user_present");
         // Recovery only: SCREEN_ON already dispatched the un-suspend. Both of these are
         // no-ops when there is nothing left pending, and the in-flight guards collapse a
         // SCREEN_ON/USER_PRESENT pair into a single batch.
@@ -578,22 +604,7 @@ public class ForceDozeService extends Service {
      * {@link #recoverAfterServiceRecreation()} applies.
      */
     private void onShizukuBecameAvailable() {
-        boolean screenOn = Utils.isScreenOn(getApplicationContext());
-        boolean inDoze = dozeStateStore.isInDoze();
-
-        if (!screenOn && inDoze) {
-            log("SHIZUKU_RECOVERY_DEFERRED screenOn=false inDoze=true, keeping all markers");
-            DiagnosticLogger.i("RECOVERY", "SHIZUKU_RECOVERY_DEFERRED screenOn=false inDoze=true");
-            return;
-        }
-
-        log("SHIZUKU_RECOVERY_RUNNING screenOn=" + screenOn + " inDoze=" + inDoze);
-        DiagnosticLogger.i("RECOVERY", "SHIZUKU_RECOVERY_RUNNING screenOn=" + screenOn + " inDoze=" + inDoze);
-        // Packages first: they are the visible half, and a failed wake-up may have left them
-        // suspended with the record still pending.
-        restoreSuspendedPackages("Shizuku became available");
-        reEnableBlockedNotifications();
-        restoreDeviceStates(getApplicationContext(), "Shizuku became available");
+        applyRecoveryPolicy("SHIZUKU_RECOVERY", "Shizuku became available");
     }
 
     /**
@@ -623,18 +634,7 @@ public class ForceDozeService extends Service {
                 + " pendingPackages=" + (hasPackages ? dozeStateStore.getAppliedSuspendedPackages().size() : 0)
                 + " pendingStates=" + dozeStateStore.getAppliedKeys());
 
-        if (!screenOn && inDoze) {
-            log("RECOVERY_DEFERRED: still dozing with the screen off, keeping suspensions and "
-                    + "pending state until the screen comes back on");
-            DiagnosticLogger.i("RECOVERY", "RECOVERY_DEFERRED screenOn=false inDoze=true");
-            return;
-        }
-
-        log("RECOVERY_RUNNING: Doze session is over, restoring now");
-        DiagnosticLogger.i("RECOVERY", "RECOVERY_RUNNING screenOn=" + screenOn + " inDoze=" + inDoze);
-        restoreSuspendedPackages("service recreated");
-        reEnableBlockedNotifications();
-        restoreDeviceStates(getApplicationContext(), "service recreated");
+        applyRecoveryPolicy("RECOVERY", "service recreated");
     }
 
 
@@ -2069,7 +2069,9 @@ public class ForceDozeService extends Service {
         if (turnOffAllSensorsInDoze) {
             log("Disabling All sensors");
             dozeStateStore.markApplied(DozeStateStore.KEY_ALL_SENSORS, true);
-            setAllSensorsState(context, false);
+            // Same serializer as every other sensor write, so a late command from the previous
+            // session cannot be applied on top of this one.
+            requestSensorState(false, null, SENSOR_LABEL_ENTER);
         }
         if (turnOffBiometricsInDoze) {
             log("Disabling Biometrics");
@@ -2195,6 +2197,15 @@ public class ForceDozeService extends Service {
     private void onRestoreFinished(String key, int exitCode) {
         try {
             if (exitCode == 0) {
+                // Cross-session guard, currently only needed for the sensor key because it is the
+                // one a temporary lock-screen command can outlive: an old session's final restore
+                // can land after a new SCREEN_OFF has already begun a new session and re-marked it.
+                // Clearing then would drop a debt the new session genuinely owes.
+                if (DozeStateStore.KEY_ALL_SENSORS.equals(key) && dozeStateStore.isInDoze()) {
+                    Log.i(TAG, "RESTORE_SUPERSEDED " + key + ", a newer Doze session owns the marker");
+                    DiagnosticLogger.i("STATE", "RESTORE_SUPERSEDED " + key + " newSessionOwnsMarker=true");
+                    return;
+                }
                 dozeStateStore.clearApplied(key);
                 Log.i(TAG, "RESTORE_SUCCESS " + key + " exit=0");
                 DiagnosticLogger.i("STATE", "RESTORE_SUCCESS " + key + " exit=0");
@@ -2228,6 +2239,192 @@ public class ForceDozeService extends Service {
         DiagnosticLogger.i("STATE", "RESTORE_PENDING " + DozeStateStore.KEY_BIOMETRICS + " unlockCritical=true");
         setBiometricsSensorState(context, true, (commandCode, exitCode, stdout, stderr) ->
                 onRestoreFinished(DozeStateStore.KEY_BIOMETRICS, exitCode));
+    }
+
+    /**
+     * Queues a target state for the All Sensors toggle. Returns immediately.
+     * <p>
+     * If a command is already in flight the target is parked and applied when that command's real
+     * callback arrives, so an in-flight command is never completed artificially and no callback
+     * ever fires twice. A request that is still queued when a newer one arrives has its callback
+     * completed exactly once with {@link #SUPERSEDED_EXIT_CODE}.
+     */
+    private void requestSensorState(boolean enabled, Shell.OnCommandResultListener2 done, String label) {
+        Shell.OnCommandResultListener2 superseded;
+        boolean dispatchNow;
+        synchronized (sensorOpLock) {
+            superseded = pendingSensorCallback;
+            pendingSensorTarget = enabled;
+            pendingSensorCallback = done;
+            pendingSensorLabel = label;
+            dispatchNow = !sensorOpInFlight;
+            if (dispatchNow) {
+                sensorOpInFlight = true;
+            }
+        }
+        if (superseded != null) {
+            superseded.onCommandResult(0, SUPERSEDED_EXIT_CODE, new ArrayList<>(), new ArrayList<>());
+        }
+        if (dispatchNow) {
+            dispatchPendingSensorOp();
+        }
+    }
+
+    private void dispatchPendingSensorOp() {
+        final boolean target;
+        final Shell.OnCommandResultListener2 done;
+        final String label;
+        synchronized (sensorOpLock) {
+            if (pendingSensorTarget == null) {
+                sensorOpInFlight = false;
+                return;
+            }
+            target = pendingSensorTarget;
+            done = pendingSensorCallback;
+            label = pendingSensorLabel;
+            pendingSensorTarget = null;
+            pendingSensorCallback = null;
+            pendingSensorLabel = null;
+            sensorOpInFlight = true;
+        }
+
+        if (SENSOR_LABEL_LOCKSCREEN_RESTORE.equals(label)) {
+            DiagnosticLogger.i("LOCKSCREEN", "all_sensors_restore_start");
+        } else if (SENSOR_LABEL_LOCKSCREEN_REAPPLY.equals(label)) {
+            DiagnosticLogger.i("LOCKSCREEN", "all_sensors_reapply_start");
+        }
+
+        setAllSensorsState(getApplicationContext(), target, (commandCode, exitCode, stdout, stderr) -> {
+            if (SENSOR_LABEL_LOCKSCREEN_RESTORE.equals(label)) {
+                DiagnosticLogger.i("LOCKSCREEN", (exitCode == 0 ? "all_sensors_restore_success"
+                        : "all_sensors_restore_failed") + " exit=" + exitCode);
+            } else if (SENSOR_LABEL_LOCKSCREEN_REAPPLY.equals(label)) {
+                DiagnosticLogger.i("LOCKSCREEN", (exitCode == 0 ? "all_sensors_reapply_success"
+                        : "all_sensors_reapply_failed") + " exit=" + exitCode);
+            }
+            if (done != null) {
+                done.onCommandResult(commandCode, exitCode, stdout, stderr);
+            }
+            // Apply whatever the newest lifecycle event asked for while this was running.
+            dispatchPendingSensorOp();
+        });
+    }
+
+    /**
+     * True when the Doze session EnforceDoze owns has genuinely ended, as opposed to the device
+     * merely showing its lock screen mid-session. This is what separates a FINAL restore, which may
+     * clear durable markers, from TEMPORARY lock-screen access, which may not.
+     */
+    private boolean isDozeSessionOver() {
+        if (!dozeStateStore.isInDoze()) {
+            return true;
+        }
+        if (!Utils.isScreenOn(getApplicationContext())) {
+            return false;
+        }
+        return !(waitForUnlock && Utils.isDeviceLocked(getApplicationContext()));
+    }
+
+    /**
+     * Brings the physical All Sensors state into line with the current lifecycle, derived entirely
+     * from durable facts rather than from any in-memory flag - which is what makes it correct after
+     * a process death or a Shizuku reconnect. Never touches the journal: while KEY_ALL_SENSORS is
+     * applied the session still owes the user their recorded pre-Doze value.
+     */
+    private void enforceSensorStateForLifecycle(String reason) {
+        if (!dozeStateStore.isApplied(DozeStateStore.KEY_ALL_SENSORS)) {
+            return;
+        }
+        if (isCallActiveNow()) {
+            // The call handler owns the transition back to normal; never re-disable underneath it.
+            log("Not enforcing sensor state (" + reason + "), a call is active");
+            return;
+        }
+        if (!dozeStateStore.isInDoze()) {
+            // Session is over; the final restore path owns the value and the marker.
+            return;
+        }
+
+        boolean screenOn = Utils.isScreenOn(getApplicationContext());
+        if (screenOn) {
+            if (!(waitForUnlock && Utils.isDeviceLocked(getApplicationContext()))) {
+                // A full restore is running for this wake; leave it to that path.
+                return;
+            }
+            // Lock-screen access: give the user their recorded pre-Doze value so the secure camera
+            // and the proximity sensor work without unlocking. The marker deliberately stays.
+            boolean preDoze = dozeStateStore.getPreDozeValue(DozeStateStore.KEY_ALL_SENSORS, true);
+            lockscreenSensorOverrideActive = true;
+            log("Temporarily restoring All Sensors for the lock screen (" + reason + ")");
+            requestSensorState(preDoze, null, SENSOR_LABEL_LOCKSCREEN_RESTORE);
+        } else {
+            // Screen off inside an owned session: sensors must be off, whatever happened before.
+            log("Re-applying the All Sensors restriction (" + reason + ")");
+            requestSensorState(false, null, SENSOR_LABEL_LOCKSCREEN_REAPPLY);
+        }
+    }
+
+    /**
+     * Called on unlock. After this no queued or late temporary command may leave sensors off: a
+     * queued disable is rewritten to the pre-Doze value, and the session is about to end so
+     * enforceSensorStateForLifecycle() can no longer ask for off either.
+     */
+    private void cancelLockscreenSensorOverride(String reason) {
+        boolean wasActive;
+        boolean rewrotePending = false;
+        synchronized (sensorOpLock) {
+            wasActive = lockscreenSensorOverrideActive;
+            lockscreenSensorOverrideActive = false;
+            if (pendingSensorTarget != null && !pendingSensorTarget) {
+                pendingSensorTarget = dozeStateStore.getPreDozeValue(DozeStateStore.KEY_ALL_SENSORS, true);
+                rewrotePending = true;
+            }
+        }
+        if (wasActive || rewrotePending) {
+            DiagnosticLogger.i("LOCKSCREEN", "override_cancelled reason=" + reason
+                    + " rewrotePendingDisable=" + rewrotePending);
+        }
+    }
+
+    /**
+     * The three recovery modes, shared by service recreation and Shizuku reconnect.
+     * <p>
+     * Mode A - screen off inside an owned session: defer packages, radios and notifications exactly
+     * as before, but enforce the sensor restriction, because leaving sensors physically on while
+     * the phone is locked and dozing breaks what turnOffAllSensorsInDoze promises.
+     * <p>
+     * Mode B - screen on but still locked with waitForUnlock: mirror the tested pre-unlock SCREEN_ON
+     * behaviour (packages, biometrics) plus temporary sensor access. No radios, no Doze exit, and
+     * above all no generic restoreDeviceStates(), which would clear KEY_ALL_SENSORS mid-session.
+     * <p>
+     * Mode C - the session is genuinely over: the existing full restore.
+     */
+    private void applyRecoveryPolicy(String logPrefix, String reason) {
+        boolean screenOn = Utils.isScreenOn(getApplicationContext());
+        boolean inDoze = dozeStateStore.isInDoze();
+
+        if (isDozeSessionOver()) {
+            log(logPrefix + "_RUNNING screenOn=" + screenOn + " inDoze=" + inDoze);
+            DiagnosticLogger.i("RECOVERY", logPrefix + "_RUNNING screenOn=" + screenOn + " inDoze=" + inDoze);
+            restoreSuspendedPackages(reason);
+            reEnableBlockedNotifications();
+            restoreDeviceStates(getApplicationContext(), reason);
+            return;
+        }
+
+        if (screenOn) {
+            log(logPrefix + "_PARTIAL_LOCKSCREEN: session still active behind the keyguard");
+            DiagnosticLogger.i("RECOVERY", logPrefix + "_PARTIAL_LOCKSCREEN screenOn=true inDoze=true");
+            restoreSuspendedPackages(reason);
+            restoreBiometricsForUnlock(getApplicationContext());
+            enforceSensorStateForLifecycle(reason);
+            return;
+        }
+
+        log(logPrefix + "_DEFERRED: still dozing with the screen off, keeping suspensions and "
+                + "pending state until the screen comes back on");
+        DiagnosticLogger.i("RECOVERY", logPrefix + "_DEFERRED screenOn=false inDoze=true");
+        enforceSensorStateForLifecycle(reason);
     }
 
     /**
@@ -2299,7 +2496,9 @@ public class ForceDozeService extends Service {
                 setBatterSaverState(context, dozeStateStore.getPreDozeValue(key, false), done);
                 break;
             case DozeStateStore.KEY_ALL_SENSORS:
-                setAllSensorsState(context, dozeStateStore.getPreDozeValue(key, true), done);
+                // Through the serializer so a temporary lock-screen command can never be applied
+                // after this one and leave the user with the wrong sensor state.
+                requestSensorState(dozeStateStore.getPreDozeValue(key, true), done, SENSOR_LABEL_FINAL);
                 break;
             case DozeStateStore.KEY_BIOMETRICS:
                 setBiometricsSensorState(context, dozeStateStore.getPreDozeValue(key, true), done);
@@ -2385,6 +2584,9 @@ public class ForceDozeService extends Service {
                 cancelPendingEnterDoze();
                 restoreSuspendedPackages("screen on");
                 restoreBiometricsForUnlock(context);
+                // Lock-screen sensor access. No-ops unless the session is still owned behind the
+                // keyguard, so the waitForUnlock=false path is untouched.
+                enforceSensorStateForLifecycle("screen on");
 
                 // Safety net for the cases the callbacks cannot cover: VoIP below API 31, or
                 // READ_PHONE_STATE not granted yet. handleCallStarted is latched, so when the
@@ -2405,6 +2607,9 @@ public class ForceDozeService extends Service {
             } else if (action.equals(Intent.ACTION_SCREEN_OFF)) {
                 log("Screen OFF received");
                 DiagnosticLogger.i("DOZE", "screen_off");
+                // Re-apply the restriction if the screen went off again without an unlock. No-ops
+                // for a fresh screen-off, where nothing is marked yet.
+                enforceSensorStateForLifecycle("screen off");
                 if (disableWhenCharging && Utils.isConnectedToCharger(getApplicationContext())) {
                     log("Connected to charger and disableWhenCharging=true, skip entering Doze");
                 } else if (Utils.isUserInCommunicationCall(context)) {
