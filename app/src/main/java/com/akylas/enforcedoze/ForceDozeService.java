@@ -221,6 +221,7 @@ public class ForceDozeService extends Service {
         long started = wakeStartedAt;
         long elapsed = started == 0L ? 0L : SystemClock.elapsedRealtime() - started;
         Log.i(TAG_TIMING, "WAKE_TIMING " + event + " +" + elapsed + "ms");
+        DiagnosticLogger.i("WAKE_TIMING", event + " +" + elapsed + "ms");
     }
 
     public ForceDozeService() {
@@ -324,6 +325,7 @@ public class ForceDozeService extends Service {
         shizukuAvailabilityListener = value -> {
             isShizukuAvailable = value;
             log("Shizuku availability changed: " + value);
+            DiagnosticLogger.i("SHIZUKU", "availability_changed value=" + value);
             if (value) {
                 onShizukuBecameAvailable();
             }
@@ -333,6 +335,8 @@ public class ForceDozeService extends Service {
             shizukuHandler.checkShizukuAvailability();
             isShizukuAvailable = shizukuHandler.isShizukuAvailable();
             log("Shizuku mode enabled, available: " + isShizukuAvailable);
+            DiagnosticLogger.i("APP", "service onCreate executionMode=shizuku available="
+                    + isShizukuAvailable + " sdk=" + Build.VERSION.SDK_INT);
         }
 
         if (!Utils.isDumpPermissionGranted(getApplicationContext())) {
@@ -389,10 +393,12 @@ public class ForceDozeService extends Service {
 
         if (!screenOn && inDoze) {
             log("SHIZUKU_RECOVERY_DEFERRED screenOn=false inDoze=true, keeping all markers");
+            DiagnosticLogger.i("RECOVERY", "SHIZUKU_RECOVERY_DEFERRED screenOn=false inDoze=true");
             return;
         }
 
         log("SHIZUKU_RECOVERY_RUNNING screenOn=" + screenOn + " inDoze=" + inDoze);
+        DiagnosticLogger.i("RECOVERY", "SHIZUKU_RECOVERY_RUNNING screenOn=" + screenOn + " inDoze=" + inDoze);
         // Packages first: they are the visible half, and a failed wake-up may have left them
         // suspended with the record still pending.
         restoreSuspendedPackages("Shizuku became available");
@@ -420,6 +426,9 @@ public class ForceDozeService extends Service {
             return;
         }
 
+        DiagnosticLogger.i("RECOVERY", "RECOVERY_CHECK screenOn=" + screenOn + " inDoze=" + inDoze
+                + " pendingPackages=" + (hasPackages ? dozeStateStore.getAppliedSuspendedPackages().size() : 0)
+                + " pendingStates=" + dozeStateStore.getAppliedKeys());
         log("RECOVERY_CHECK screenOn=" + screenOn + " inDoze=" + inDoze
                 + " pendingPackages=" + (hasPackages ? dozeStateStore.getAppliedSuspendedPackages().size() : 0)
                 + " pendingStates=" + dozeStateStore.getAppliedKeys());
@@ -427,10 +436,12 @@ public class ForceDozeService extends Service {
         if (!screenOn && inDoze) {
             log("RECOVERY_DEFERRED: still dozing with the screen off, keeping suspensions and "
                     + "pending state until the screen comes back on");
+            DiagnosticLogger.i("RECOVERY", "RECOVERY_DEFERRED screenOn=false inDoze=true");
             return;
         }
 
         log("RECOVERY_RUNNING: Doze session is over, restoring now");
+        DiagnosticLogger.i("RECOVERY", "RECOVERY_RUNNING screenOn=" + screenOn + " inDoze=" + inDoze);
         restoreSuspendedPackages("service recreated");
         reEnableBlockedNotifications();
         restoreDeviceStates(getApplicationContext(), "service recreated");
@@ -446,6 +457,7 @@ public class ForceDozeService extends Service {
     public void onDestroy() {
         super.onDestroy();
         log("Stopping service and enabling sensors");
+        DiagnosticLogger.i("APP", "onDestroy");
         this.unregisterReceiver(localDozeReceiver);
         LocalBroadcastManager.getInstance(this).unregisterReceiver(reloadSettingsReceiver);
         LocalBroadcastManager.getInstance(this).unregisterReceiver(reloadNotificationBlocklistReceiver);
@@ -483,6 +495,8 @@ public class ForceDozeService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         super.onStartCommand(intent, flags, startId);
         log("Service has now started");
+        DiagnosticLogger.i("APP", "onStartCommand action=" + (intent != null ? intent.getAction() : "null")
+                + " flags=" + flags + " startId=" + startId);
 
         // A reload delivered as a service intent survives the service having been killed, unlike a
         // LocalBroadcast which is dropped when nothing is listening at that instant.
@@ -527,6 +541,8 @@ public class ForceDozeService extends Service {
         boolean persistedInDoze = dozeStateStore.isInDoze();
         if (!screenOn && persistedInDoze) {
             lastKnownState = getDeviceIdleState();
+            DiagnosticLogger.i("RECOVERY", "RECOVERY_RESUME_ACTIVE_DOZE state=" + lastKnownState
+                    + " suspendedPackages=" + dozeStateStore.getAppliedSuspendedPackages().size());
             log("RECOVERY_RESUME_ACTIVE_DOZE: screen off and inDoze persisted, resuming the "
                     + "existing session without re-entering Doze (state=" + lastKnownState
                     + ", suspendedPackages=" + dozeStateStore.getAppliedSuspendedPackages().size() + ")");
@@ -549,6 +565,7 @@ public class ForceDozeService extends Service {
      * afterwards - the service was started purely to get the device back to normal.
      */
     private void handleRestoreStateRequest() {
+        DiagnosticLogger.i("RECOVERY", "ACTION_RESTORE_STATE received");
         dozeStateStore.setInDoze(false);
         // ACTION_RESTORE_STATE means "put back everything EnforceDoze owns", so the persisted
         // suspended packages are part of it. Restoring only the radios left a device that booted
@@ -764,7 +781,11 @@ public class ForceDozeService extends Service {
     public void applyDoze() {
         if (Utils.isDeviceRunningOnN()) {
             if (isSuAvailable || isShizukuAvailable) {
-                executeCommandWithRoot("dumpsys deviceidle force-idle deep");
+                // printOutput stays true so the existing logcat echo is unchanged; the callback
+                // only adds the exit code to the diagnostic file.
+                executeCommandWithRoot("dumpsys deviceidle force-idle deep",
+                        (commandCode, exitCode, stdout, stderr) ->
+                                DiagnosticLogger.i("DOZE", "force_idle_deep exit=" + exitCode), true);
             } else {
                 DozeTunableHandler handler = DozeTunableHandler.getInstance();
                 log("Unrooted device, putting custom values in device_idle_constants...");
@@ -787,6 +808,7 @@ public class ForceDozeService extends Service {
                 executeCommandWithRoot("dumpsys deviceidle unforce",
                         (commandCode, exitCode, stdout, stderr) -> {
                             Log.i(TAG, "DOZE_UNFORCE_FINISHED exit=" + exitCode);
+                            DiagnosticLogger.i("DOZE", "DOZE_UNFORCE_FINISHED exit=" + exitCode);
                             wakeTiming("doze_unforce_finished");
                         }, false);
             } else {
@@ -870,6 +892,7 @@ public class ForceDozeService extends Service {
                     lastDozeEnterBatteryLife = Utils.getBatteryLevel(getApplicationContext());
                 }
                 log("Entering Doze");
+                DiagnosticLogger.i("DOZE", "enter_doze_start");
                 dozeStateStore.setInDoze(true);
                 applyDoze();
                 lastScreenOff = Utils.getDateCurrentTimeZone(System.currentTimeMillis());
@@ -939,6 +962,7 @@ public class ForceDozeService extends Service {
         leaveDoze();
 
         log("exitDoze current Doze state: " + newDeviceIdleState);
+        DiagnosticLogger.i("DOZE", "exit_doze state=" + newDeviceIdleState);
 
         if (!disableStats) {
             dozeUsageData.add(Long.toString(System.currentTimeMillis()).concat(",").concat(Float.toString(Utils.isConnectedToCharger(getApplicationContext()) ? 0.0f : Utils.getBatteryLevel(getApplicationContext()))).concat(",").concat("EXIT"));
@@ -1443,6 +1467,8 @@ public class ForceDozeService extends Service {
             // while reporting success.
             Log.i(TAG, "HARD_BLOCK_COMPAT_FALLBACK reason=legacy_api verb=" + verb
                     + " count=" + valid.size() + " sdk=" + Build.VERSION.SDK_INT);
+            DiagnosticLogger.i("HARD_BLOCK", "HARD_BLOCK_COMPAT_FALLBACK reason=legacy_api verb=" + verb
+                    + " count=" + valid.size() + " sdk=" + Build.VERSION.SDK_INT);
             runPackageStateFallback(valid, verb, done);
             return;
         }
@@ -1451,6 +1477,8 @@ public class ForceDozeService extends Service {
                 (commandCode, exitCode, stdout, stderr) -> {
                     if (exitCode == 0) {
                         Log.i(TAG, "HARD_BLOCK_BATCH " + verb + " count=" + valid.size() + " exit=0");
+                        DiagnosticLogger.i("HARD_BLOCK", "HARD_BLOCK_BATCH " + verb
+                                + " count=" + valid.size() + " exit=0");
                         if (done != null) {
                             done.onCommandResult(commandCode, exitCode, stdout, stderr);
                         }
@@ -1460,6 +1488,8 @@ public class ForceDozeService extends Service {
                     // support it; fall back so a single bad package cannot strand the rest.
                     Log.w(TAG, "HARD_BLOCK_COMPAT_FALLBACK reason=batch_failed verb=" + verb
                             + " count=" + valid.size() + " batchExit=" + exitCode);
+                    DiagnosticLogger.w("HARD_BLOCK", "HARD_BLOCK_COMPAT_FALLBACK reason=batch_failed verb="
+                            + verb + " count=" + valid.size() + " batchExit=" + exitCode);
                     runPackageStateFallback(valid, verb, done);
                 }, false);
     }
@@ -1495,6 +1525,8 @@ public class ForceDozeService extends Service {
             }
             Log.i(TAG, "HARD_BLOCK_COMPAT_FALLBACK finished " + verb + " count=" + valid.size()
                     + " installedFailures=" + failures + " exit=" + exitCode);
+            DiagnosticLogger.i("HARD_BLOCK", "HARD_BLOCK_COMPAT_FALLBACK finished " + verb
+                    + " count=" + valid.size() + " installedFailures=" + failures + " exit=" + exitCode);
             if (done != null) {
                 done.onCommandResult(commandCode, exitCode, stdout, stderr);
             }
@@ -1519,6 +1551,7 @@ public class ForceDozeService extends Service {
         if (valid.isEmpty()) {
             return;
         }
+        DiagnosticLogger.i("HARD_BLOCK", "suspend_intended count=" + valid.size());
         // Persist first: a kill between here and the command completing still leaves a record.
         dozeStateStore.setAppliedSuspendedPackages(valid);
         setPackagesState(valid, false, null);
@@ -1540,17 +1573,26 @@ public class ForceDozeService extends Service {
         }
 
         Log.i(TAG, "HARD_BLOCK_RESTORE_START reason=" + reason + " count=" + packages.size());
+        DiagnosticLogger.i("HARD_BLOCK", "HARD_BLOCK_RESTORE_START reason=" + reason
+                + " count=" + packages.size());
+        final long restoreStartedAt = SystemClock.elapsedRealtime();
         wakeTiming("hard_unsuspend_dispatched");
         setPackagesState(packages, true, (commandCode, exitCode, stdout, stderr) -> {
             try {
                 if (exitCode == 0) {
                     dozeStateStore.clearAppliedSuspendedPackages();
                     Log.i(TAG, "HARD_BLOCK_RESTORE_COMMAND_FINISHED exit=0 count=" + packages.size());
+                    DiagnosticLogger.i("HARD_BLOCK", "HARD_BLOCK_RESTORE_COMMAND_FINISHED exit=0 count="
+                            + packages.size() + " durationMs="
+                            + (SystemClock.elapsedRealtime() - restoreStartedAt));
                 } else {
                     // Keep the record so the next trigger - USER_PRESENT, a Shizuku reconnect or
                     // the next service start - can try again.
                     Log.e(TAG, "HARD_BLOCK_RESTORE_COMMAND_FINISHED exit=" + exitCode
                             + " count=" + packages.size() + ", record kept for retry");
+                    DiagnosticLogger.e("HARD_BLOCK", "HARD_BLOCK_RESTORE_COMMAND_FINISHED exit=" + exitCode
+                            + " count=" + packages.size() + " durationMs="
+                            + (SystemClock.elapsedRealtime() - restoreStartedAt) + " recordKept=true");
                 }
             } finally {
                 packageRestoreInFlight.set(false);
@@ -1902,6 +1944,7 @@ public class ForceDozeService extends Service {
             return;
         }
         Log.i(TAG, "DEVICE_STATE_RESTORE_STARTED reason=" + reason + " keys=" + pending);
+        DiagnosticLogger.i("STATE", "DEVICE_STATE_RESTORE_STARTED reason=" + reason + " keys=" + pending);
         wakeTiming("device_state_restore_started");
 
         Context appContext = context.getApplicationContext();
@@ -1914,6 +1957,7 @@ public class ForceDozeService extends Service {
                 continue;
             }
             Log.i(TAG, "RESTORE_PENDING " + key);
+            DiagnosticLogger.i("STATE", "RESTORE_PENDING " + key);
             try {
                 performRestore(appContext, key, (commandCode, exitCode, stdout, stderr) ->
                         onRestoreFinished(key, exitCode));
@@ -1924,6 +1968,7 @@ public class ForceDozeService extends Service {
             }
         }
         Log.i(TAG, "DEVICE_STATE_RESTORE_DISPATCHED count=" + dispatched);
+        DiagnosticLogger.i("STATE", "DEVICE_STATE_RESTORE_DISPATCHED count=" + dispatched);
         wakeTiming("device_state_restore_dispatched");
     }
 
@@ -1937,8 +1982,10 @@ public class ForceDozeService extends Service {
             if (exitCode == 0) {
                 dozeStateStore.clearApplied(key);
                 Log.i(TAG, "RESTORE_SUCCESS " + key + " exit=0");
+                DiagnosticLogger.i("STATE", "RESTORE_SUCCESS " + key + " exit=0");
             } else {
                 Log.e(TAG, "RESTORE_FAILED " + key + " exit=" + exitCode + ", marker kept for retry");
+                DiagnosticLogger.e("STATE", "RESTORE_FAILED " + key + " exit=" + exitCode + " markerKept=true");
             }
         } finally {
             stateRestoreInFlight.remove(key);
@@ -1963,6 +2010,7 @@ public class ForceDozeService extends Service {
             return;
         }
         Log.i(TAG, "RESTORE_PENDING " + DozeStateStore.KEY_BIOMETRICS + " (unlock-critical)");
+        DiagnosticLogger.i("STATE", "RESTORE_PENDING " + DozeStateStore.KEY_BIOMETRICS + " unlockCritical=true");
         setBiometricsSensorState(context, true, (commandCode, exitCode, stdout, stderr) ->
                 onRestoreFinished(DozeStateStore.KEY_BIOMETRICS, exitCode));
     }
@@ -2082,6 +2130,7 @@ public class ForceDozeService extends Service {
                 log("airplane mode changed " + Utils.isAirplaneEnabled(getContentResolver()));
             } else if (action.equals(Intent.ACTION_USER_PRESENT)) {
                 log("UNLOCK received " + waitForUnlock);
+                DiagnosticLogger.i("WAKE", "user_present waitForUnlock=" + waitForUnlock);
                 // Recovery only: SCREEN_ON already dispatched the un-suspend. Both of these are
                 // no-ops when there is nothing left pending, and the in-flight guards collapse a
                 // SCREEN_ON/USER_PRESENT pair into a single batch.
@@ -2094,7 +2143,10 @@ public class ForceDozeService extends Service {
             } else if (action.equals(Intent.ACTION_SCREEN_ON)) {
                 wakeStartedAt = SystemClock.elapsedRealtime();
                 wakeTiming("screen_on");
+                boolean deviceLocked = Utils.isDeviceLocked(context);
                 log("Screen ON received" + waitForUnlock);
+                DiagnosticLogger.i("WAKE", "screen_on waitForUnlock=" + waitForUnlock
+                        + " locked=" + deviceLocked);
 
                 // Everything below runs before the waitForUnlock decision on purpose. The user is
                 // looking at the launcher now; suspended apps must not stay greyed out until they
@@ -2103,11 +2155,12 @@ public class ForceDozeService extends Service {
                 restoreSuspendedPackages("screen on");
                 restoreBiometricsForUnlock(context);
 
-                if (!Utils.isDeviceLocked(context) || !waitForUnlock) {
+                if (!deviceLocked || !waitForUnlock) {
                     handleScreenOn(context, time, delay);
                 }
             } else if (action.equals(Intent.ACTION_SCREEN_OFF)) {
                 log("Screen OFF received");
+                DiagnosticLogger.i("DOZE", "screen_off");
                 if (disableWhenCharging && Utils.isConnectedToCharger(getApplicationContext())) {
                     log("Connected to charger and disableWhenCharging=true, skip entering Doze");
                 } else if (Utils.isUserInCommunicationCall(context)) {
@@ -2170,6 +2223,7 @@ public class ForceDozeService extends Service {
                     if (!inDeepIdle) {
                         if (!maintenance) {
                             log("Device exited Doze for maintenance");
+                            DiagnosticLogger.i("DOZE", "maintenance_enter");
                             if (!disableStats) {
                                 dozeUsageData.add(Long.toString(System.currentTimeMillis()).concat(",").concat(Float.toString(Utils.getBatteryLevel(getApplicationContext()))).concat(",").concat("EXIT_MAINTENANCE"));
                                 saveDozeDataStats();
@@ -2181,6 +2235,7 @@ public class ForceDozeService extends Service {
                     } else if (lastKnownState.equals("IDLE")) {
                         if (maintenance) {
                             log("Device entered Doze after maintenance");
+                            DiagnosticLogger.i("DOZE", "maintenance_exit");
                             if (!disableStats) {
                                 dozeUsageData.add(Long.toString(System.currentTimeMillis()).concat(",").concat(Float.toString(Utils.getBatteryLevel(getApplicationContext()))).concat(",").concat("ENTER_MAINTENANCE"));
                                 saveDozeDataStats();

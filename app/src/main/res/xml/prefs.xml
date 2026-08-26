@@ -147,6 +147,21 @@
                 android:targetPackage="com.akylas.enforcedoze.fork" />
         </Preference>
     </PreferenceCategory>
+    <PreferenceCategory android:title="@string/diagnostics_category_title">
+        <SwitchPreferenceCompat
+            android:defaultValue="true"
+            android:key="diagnosticLoggingEnabled"
+            android:summary="@string/diagnostic_logging_setting_summary"
+            android:title="@string/diagnostic_logging_setting_title" />
+        <Preference
+            android:key="exportDiagnosticLog"
+            android:summary="@string/export_diagnostic_setting_summary"
+            android:title="@string/export_diagnostic_setting_title" />
+        <Preference
+            android:key="clearDiagnosticLog"
+            android:summary="@string/clear_diagnostic_setting_summary"
+            android:title="@string/clear_diagnostic_setting_title" />
+    </PreferenceCategory>
     <PreferenceCategory android:title="Other">
         <SwitchPreferenceCompat
             android:defaultValue="false"

@@ -258,4 +258,17 @@
         <item quantity="one">%1$d app added to the whitelist</item>
         <item quantity="other">%1$d apps added to the whitelist</item>
     </plurals>
+    <!-- Diagnostics -->
+    <string name="diagnostics_category_title">Diagnostics</string>
+    <string name="diagnostic_logging_setting_title">Diagnostic file logging</string>
+    <string name="diagnostic_logging_setting_summary">Record Doze, wake and restore events to an app-private rotating file for troubleshooting</string>
+    <string name="export_diagnostic_setting_title">Export diagnostic log</string>
+    <string name="export_diagnostic_setting_summary">Save the collected diagnostic log to a text file</string>
+    <string name="clear_diagnostic_setting_title">Clear diagnostic log</string>
+    <string name="clear_diagnostic_setting_summary">Delete the collected diagnostic log files</string>
+    <string name="diagnostic_export_success">Diagnostic log exported (%1$s KB)</string>
+    <string name="diagnostic_export_failed">Diagnostic export failed: %1$s</string>
+    <string name="diagnostic_export_empty">No diagnostic log has been recorded yet</string>
+    <string name="diagnostic_cleared">Diagnostic log cleared</string>
+    <string name="diagnostic_clear_failed">Could not clear the diagnostic log: %1$s</string>
 </resources>

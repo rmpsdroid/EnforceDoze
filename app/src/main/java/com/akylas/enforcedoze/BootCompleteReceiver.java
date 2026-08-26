@@ -18,6 +18,8 @@ public class BootCompleteReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         boolean isServiceEnabled = PreferenceManager.getDefaultSharedPreferences(context).getBoolean("serviceEnabled", false);
         log("Received BOOT_COMPLETED intent, isServiceEnabled=" + Boolean.toString(isServiceEnabled));
+        DiagnosticLogger.init(context);
+        DiagnosticLogger.i("APP", "BOOT_COMPLETED serviceEnabled=" + isServiceEnabled);
 
         // Do this before anything else: if the phone was rebooted (or crashed) mid-Doze, toggles
         // like airplane mode, location mode and battery saver are persisted by the system and come
@@ -61,6 +63,8 @@ public class BootCompleteReceiver extends BroadcastReceiver {
         }
 
         log("BOOT_RECOVERY_PENDING deviceStates=" + store.getAppliedKeys()
+                + " suspendedPackages=" + store.getAppliedSuspendedPackages().size());
+        DiagnosticLogger.i("RECOVERY", "BOOT_RECOVERY_PENDING deviceStates=" + store.getAppliedKeys()
                 + " suspendedPackages=" + store.getAppliedSuspendedPackages().size());
         try {
             Intent restore = new Intent(context, ForceDozeService.class);

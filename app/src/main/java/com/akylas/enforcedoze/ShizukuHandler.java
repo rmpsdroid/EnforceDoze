@@ -60,12 +60,14 @@ public class ShizukuHandler {
      */
     private final Shizuku.OnBinderReceivedListener BINDER_RECEIVED_LISTENER = () -> {
         Log.i(TAG, "Shizuku binder received");
+        DiagnosticLogger.i("SHIZUKU", "binder_received");
         checkShizukuAvailability();
         notifyAvailabilityListeners();
     };
 
     private final Shizuku.OnBinderDeadListener BINDER_DEAD_LISTENER = () -> {
         Log.w(TAG, "Shizuku binder died");
+        DiagnosticLogger.w("SHIZUKU", "binder_dead");
         setAvailable(false);
     };
 
@@ -242,6 +244,8 @@ public class ShizukuHandler {
             CommandResult result;
             if (!awaitShizukuReady()) {
                 Log.e(TAG, "Shizuku is not available, cannot run: " + command);
+                // Command text is not logged to the diagnostic file: it can contain package lists.
+                DiagnosticLogger.e("SHIZUKU", "command_dropped reason=unavailable");
                 result = new CommandResult(-1, new ArrayList<>(), new ArrayList<>());
             } else {
                 result = runCommandOnce(command, printOutput);
@@ -301,6 +305,7 @@ public class ShizukuHandler {
                 // The user revoked EnforceDoze's Shizuku authorisation. Retrying cannot help and
                 // would just burn the retry budget, so report it as permanently refused.
                 Log.e(TAG, "Shizuku refused the command, permission was revoked: " + cause.getMessage());
+                DiagnosticLogger.e("SHIZUKU", "command_refused reason=permission_revoked");
                 setAvailable(false);
                 return new CommandResult(REFUSED_EXIT_CODE, stdout, stderr);
             }
@@ -308,6 +313,7 @@ public class ShizukuHandler {
                 // Shizuku's server went away (restarted, or stopped by the user). Mark it gone so
                 // the next attempt waits for the binder to come back instead of failing instantly.
                 Log.w(TAG, "Shizuku binder is dead, will wait for it to return");
+                DiagnosticLogger.w("SHIZUKU", "command_failed reason=dead_binder");
             } else {
                 Log.e(TAG, "Error executing command: " + e.getMessage());
                 e.printStackTrace();

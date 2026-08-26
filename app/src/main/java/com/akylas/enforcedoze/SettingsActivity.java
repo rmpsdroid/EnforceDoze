@@ -121,6 +121,7 @@ public class SettingsActivity extends AppCompatActivity {
         private ShizukuHandler.OnAvailibilityChange shizukuAvailabilityListener;
         private ActivityResultLauncher<String> exportSettingsLauncher;
         private ActivityResultLauncher<String[]> importSettingsLauncher;
+        private ActivityResultLauncher<String> exportDiagnosticLauncher;
 
         private void removeIconSpace(PreferenceGroup group) {
             for (int i = 0; i < group.getPreferenceCount(); i++) {
@@ -193,6 +194,45 @@ public class SettingsActivity extends AppCompatActivity {
                             confirmAndRunImport(uri);
                         }
                     });
+            // Plain text rather than JSON: this file is meant to be read, not re-imported.
+            exportDiagnosticLauncher = registerForActivityResult(
+                    new ActivityResultContracts.CreateDocument("text/plain"),
+                    uri -> {
+                        if (uri != null) {
+                            runDiagnosticExport(uri);
+                        }
+                    });
+        }
+
+        /**
+         * The copy runs on the DiagnosticLogger's own thread, which serialises it against live
+         * logging without any lock on the caller, so the wake path is untouched either way.
+         */
+        private void runDiagnosticExport(Uri uri) {
+            final Context context = requireContext().getApplicationContext();
+            DiagnosticLogger.exportAsync(context, uri, (success, detail) -> {
+                if (getActivity() == null) {
+                    return;
+                }
+                getActivity().runOnUiThread(() -> {
+                    if (success) {
+                        long bytes = 0L;
+                        try {
+                            bytes = Long.parseLong(String.valueOf(detail));
+                        } catch (NumberFormatException ignored) {
+                        }
+                        Toast.makeText(context, bytes == 0L
+                                        ? getString(R.string.diagnostic_export_empty)
+                                        : getString(R.string.diagnostic_export_success,
+                                        String.valueOf(Math.max(1L, bytes / 1024L))),
+                                Toast.LENGTH_LONG).show();
+                    } else {
+                        Toast.makeText(context,
+                                getString(R.string.diagnostic_export_failed, String.valueOf(detail)),
+                                Toast.LENGTH_LONG).show();
+                    }
+                });
+            });
         }
 
         private void runExport(Uri uri) {
@@ -304,6 +344,9 @@ public class SettingsActivity extends AppCompatActivity {
 //            PreferenceScreen preferenceScreen = (PreferenceScreen) findPreference("preferenceScreen");
 //            PreferenceCategory mainSettings = (PreferenceCategory) findPreference("mainSettings");
 //            PreferenceCategory dozeSettings = (PreferenceCategory) findPreference("dozeSettings");
+            Preference diagnosticLogging = (Preference) findPreference("diagnosticLoggingEnabled");
+            Preference exportDiagnosticLog = (Preference) findPreference("exportDiagnosticLog");
+            Preference clearDiagnosticLog = (Preference) findPreference("clearDiagnosticLog");
             Preference exportSettings = (Preference) findPreference("exportSettings");
             Preference importSettings = (Preference) findPreference("importSettings");
             Preference resetForceDozePref = (Preference) findPreference("resetForceDoze");
@@ -325,6 +368,35 @@ public class SettingsActivity extends AppCompatActivity {
             SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(getActivity());
             sharedPreferences.registerOnSharedPreferenceChangeListener(this);
             updateCustomDozePeriodsSummary(customDozePeriods, sharedPreferences);
+
+            diagnosticLogging.setOnPreferenceChangeListener((preference, value) -> {
+                // Applied immediately so the switch takes effect without restarting the service.
+                DiagnosticLogger.setEnabled(getActivity().getApplicationContext(), (boolean) value);
+                return true;
+            });
+
+            exportDiagnosticLog.setOnPreferenceClickListener(preference -> {
+                try {
+                    exportDiagnosticLauncher.launch(DiagnosticLogger.suggestedExportName());
+                } catch (android.content.ActivityNotFoundException e) {
+                    Toast.makeText(getActivity(), R.string.settings_backup_no_file_picker, Toast.LENGTH_LONG).show();
+                }
+                return true;
+            });
+
+            clearDiagnosticLog.setOnPreferenceClickListener(preference -> {
+                final Context context = requireContext().getApplicationContext();
+                DiagnosticLogger.clearAsync(context, (success, detail) -> {
+                    if (getActivity() == null) {
+                        return;
+                    }
+                    getActivity().runOnUiThread(() -> Toast.makeText(context, success
+                                    ? getString(R.string.diagnostic_cleared)
+                                    : getString(R.string.diagnostic_clear_failed, String.valueOf(detail)),
+                            Toast.LENGTH_SHORT).show());
+                });
+                return true;
+            });
 
             exportSettings.setOnPreferenceClickListener(preference -> {
                 try {
