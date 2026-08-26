@@ -138,6 +138,13 @@ public class ForceDozeService extends Service {
      * receiver deliberately carries no other action - nothing unprotected is reachable through it.
      */
     BroadcastReceiver userPresentReceiver;
+    /** Watches cellular and VoIP call state so a call can release an active Doze session. */
+    CallStateWatcher callStateWatcher;
+    /**
+     * Latched for the duration of one call so the telephony callback, the audio-mode callback and
+     * the screen-on fallback together produce a single Doze exit rather than three.
+     */
+    private final AtomicBoolean callDozeExitDone = new AtomicBoolean(false);
     ReloadSettingsReceiver reloadSettingsReceiver;
     ReloadNotificationBlocklistReceiver reloadNotificationBlocklistReceiver;
     ReloadAppsBlocklistReceiver reloadAppsBlocklistReceiver;
@@ -306,6 +313,7 @@ public class ForceDozeService extends Service {
             this.registerReceiver(localDozeReceiver, filter);
         }
         registerUserPresentReceiver();
+        startCallStateWatcher();
         turnOffDataInDoze = getDefaultSharedPreferences(getApplicationContext()).getBoolean("turnOffDataInDoze", false);
         ignoreIfHotspot = getDefaultSharedPreferences(getApplicationContext()).getBoolean("ignoreIfHotspot", true);
         turnOffWiFiInDoze = getDefaultSharedPreferences(getApplicationContext()).getBoolean("turnOffWiFiInDoze", false);
@@ -404,6 +412,99 @@ public class ForceDozeService extends Service {
         } catch (Exception e) {
             log("Receiver was not registered: " + e.getMessage());
         }
+    }
+
+    private void startCallStateWatcher() {
+        callStateWatcher = new CallStateWatcher();
+        callStateWatcher.start(getApplicationContext(), new CallStateWatcher.Listener() {
+            @Override
+            public void onCallActive(String reason) {
+                handleCallStarted(reason);
+            }
+
+            @Override
+            public void onCallEnded() {
+                handleCallEnded();
+            }
+        });
+    }
+
+    /**
+     * A call outranks waitForUnlock.
+     * <p>
+     * The existing protection only covered "a call is already running when the screen goes off, so
+     * do not enter Doze". The opposite order was unhandled: with waitForUnlock=true the device
+     * deliberately keeps its Doze state applied until ACTION_USER_PRESENT, so answering a call
+     * from the lock screen left the proximity sensor disabled for the whole call - the user had to
+     * unlock the phone to make their own call work properly.
+     * <p>
+     * Releasing the session here goes through the ordinary {@link #exitDoze(String)} transition, so
+     * packages, notifications, sensors and radios are all restored from the durable journal exactly
+     * as they are on a normal wake, and the EXIT statistics stay consistent. Nothing is cleared
+     * ahead of its command callback.
+     */
+    private void handleCallStarted(String reason) {
+        if (!callDozeExitDone.compareAndSet(false, true)) {
+            return;
+        }
+
+        boolean inDoze = dozeStateStore.isInDoze();
+        boolean pending = dozeStateStore.hasPendingRestore()
+                || dozeStateStore.hasAppliedSuspendedPackages();
+        if (!inDoze && !pending) {
+            log("Call started (" + reason + ") but no Doze session is owned, nothing to release");
+            return;
+        }
+
+        log("Call started (" + reason + "), releasing the Doze session without waiting for unlock");
+        DiagnosticLogger.i("CALL", "doze_exit_for_call reason=" + reason
+                + " inDoze=" + inDoze + " pendingStates=" + dozeStateStore.getAppliedKeys()
+                + " suspendedPackages=" + dozeStateStore.getAppliedSuspendedPackages().size());
+
+        cancelPendingEnterDoze();
+        // A maintenance window cannot survive the session ending.
+        maintenance = false;
+        DiagnosticLogger.i("CALL", "restore_dispatched keys=" + dozeStateStore.getAppliedKeys());
+        exitDoze(getDeviceIdleState());
+    }
+
+    /**
+     * On call end the screen is usually still on, in which case staying ACTIVE is right and the
+     * ordinary SCREEN_OFF path will start the next session. When the call ended with the screen
+     * already off - ended at the ear, proximity still holding the screen down - there will be no
+     * further SCREEN_OFF event, so a fresh cycle is started here using the same preconditions the
+     * SCREEN_OFF handler applies.
+     */
+    private void handleCallEnded() {
+        callDozeExitDone.set(false);
+        boolean screenOn = Utils.isScreenOn(getApplicationContext());
+        DiagnosticLogger.i("CALL", "call_ended screenOn=" + screenOn);
+
+        if (screenOn) {
+            log("Call ended with the screen on, staying ACTIVE");
+            return;
+        }
+        if (disableWhenCharging && Utils.isConnectedToCharger(getApplicationContext())) {
+            log("Call ended with the screen off but charging and disableWhenCharging=true");
+            return;
+        }
+        if (Utils.isUserInCommunicationCall(getApplicationContext()) || Utils.isUserInCall(getApplicationContext())) {
+            log("Call ended but another call is still active, not entering Doze");
+            return;
+        }
+        if (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasPendingRestore()) {
+            // The previous session has not finished unwinding. Entering again would let
+            // suspendPackagesForDoze() overwrite the journal with the current blocklist and lose
+            // any package the failed restore still owes the user. Leave it to the next SCREEN_OFF.
+            log("Call ended but the previous Doze journal is still pending, not entering Doze");
+            DiagnosticLogger.w("CALL", "doze_reentry_skipped reason=pending_restore"
+                    + " pendingStates=" + dozeStateStore.getAppliedKeys()
+                    + " suspendedPackages=" + dozeStateStore.getAppliedSuspendedPackages().size());
+            return;
+        }
+        log("Call ended with the screen off, starting a fresh Doze cycle");
+        DiagnosticLogger.i("CALL", "doze_reentry_after_call");
+        enterDoze(this);
     }
 
     /**
@@ -536,6 +637,9 @@ public class ForceDozeService extends Service {
         DiagnosticLogger.i("APP", "onDestroy");
         unregisterReceiverQuietly(localDozeReceiver);
         unregisterReceiverQuietly(userPresentReceiver);
+        if (callStateWatcher != null) {
+            callStateWatcher.stop();
+        }
         LocalBroadcastManager.getInstance(this).unregisterReceiver(reloadSettingsReceiver);
         LocalBroadcastManager.getInstance(this).unregisterReceiver(reloadNotificationBlocklistReceiver);
         LocalBroadcastManager.getInstance(this).unregisterReceiver(reloadAppsBlocklistReceiver);
@@ -2219,6 +2323,19 @@ public class ForceDozeService extends Service {
                 cancelPendingEnterDoze();
                 restoreSuspendedPackages("screen on");
                 restoreBiometricsForUnlock(context);
+
+                // Safety net for the cases the callbacks cannot cover: VoIP below API 31, or
+                // READ_PHONE_STATE not granted yet. handleCallStarted is latched, so when the
+                // telephony callback already fired this is a no-op.
+                if (callStateWatcher != null) {
+                    if (callStateWatcher.isCallActive()) {
+                        handleCallStarted("screen_on_fallback");
+                    } else {
+                        // Clears the latch for the degraded case where a call was only ever seen
+                        // through this fallback and its end was therefore never observed.
+                        callDozeExitDone.set(false);
+                    }
+                }
 
                 if (!deviceLocked || !waitForUnlock) {
                     handleScreenOn(context, time, delay);
