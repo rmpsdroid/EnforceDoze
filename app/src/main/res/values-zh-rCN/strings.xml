@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">EnforceDoze</string>
+    <string name="app_name">EnforceDoze Pro</string>
     <string name="close_button_text">关闭</string>
     <string name="lockscreen_timeout_snackbar_text">您的设备上的锁屏超时时间设置得太长了！</string>
     <string name="more_info_text">更多信息</string>
@@ -29,7 +29,7 @@
     <string name="error_text">错误</string>
     <string name="please_wait_text">请等待</string>
     <string name="requesting_su_access_text">正在请求root访问权限...</string>
-    <string name="read_logcat_su_not_avail_or_denied_error_text">SU权限被拒绝或SU不可用，因此无法读取log。\n\n请通过ADB授予READ_LOGS权限以使用此功能：\'adb shell pm grant com.akylas.enforcedoze android.permission.READ_LOGS\'（不带引号）</string>
+    <string name="read_logcat_su_not_avail_or_denied_error_text">SU权限被拒绝或SU不可用，因此无法读取log。\n\n请通过ADB授予READ_LOGS权限以使用此功能：\'adb shell pm grant com.akylas.enforcedoze.fork android.permission.READ_LOGS\'（不带引号）</string>
     <string name="loading_installed_apps_text">正在加载已安装的应用...</string>
     <string name="whitelisting_text">白名单</string>
     <string name="whitelisted_apps_restrictions_text">"白名单中的应用程序可以使用网络并在休眠和应用待机期间保持部分唤醒锁。然而，对白名单应用程序的限制仍然适用，就像对其他应用程序一样。例如，白名单应用程序的任务和同步被推迟，并且它的常规警报不会触发。 "</string>
@@ -122,7 +122,7 @@
     <string name="doze_stats_battery_icon_meaning_dialog_title">这些图标代表什么意思？</string>
     <string name="doze_stats_battery_icon_meaning_dialog_text">带有闪电标志的电池图标表示在该Doze会话期间电池使用量在可接受范围内，而带有感叹号标志的电池图标表示在该Doze会话期间电池使用量超过了可接受范围。如果任何Doze会话中的电池使用量超过可接受范围，建议您检查GSAM或其他第三方电池统计应用，以调查是什么耗尽了您的电池</string>
     <string name="clearing_doze_stats_text">清除Doze统计...</string>
-    <string name="tile_label">强制休眠</string>
+    <string name="tile_label">EnforceDoze Pro</string>
     <string name="notif_blocklist_setting_summary">防止在休眠模式期间发送通知</string>
     <string name="notif_blocklist_setting_title">休眠通知黑名单</string>
     <string name="app_blocklist_setting_summary">防止应用（及其后台服务）在休眠模式期间运行</string>
@@ -156,7 +156,7 @@
     <string name="notification_channel_tips_description">关于兼容性问题信息</string>
     <string name="notification_channel_silent_name">静默服务</string>
     <string name="notification_channel_silent_description">前台服务的最小通知</string>
-    <string name="silent_notification_title">EnforceDoze正在运行</string>
+    <string name="silent_notification_title">EnforceDoze Pro正在运行</string>
     <string name="silent_notification_text">Android 12+需要此通知。点击以自定义或隐藏。</string>
     <string name="notifications_permission">通知权限</string>
     <string name="notifications_permission_explanation">为了检测正在播放音乐的App，此应用需要读取当前显示的通知，因此需要权限</string>

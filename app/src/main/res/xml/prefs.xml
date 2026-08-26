@@ -51,7 +51,7 @@
             <intent
                 android:action="android.intent.action.VIEW"
                 android:targetClass="com.akylas.enforcedoze.WhitelistAppsActivity"
-                android:targetPackage="com.akylas.enforcedoze" />
+                android:targetPackage="com.akylas.enforcedoze.fork" />
         </Preference>
     </PreferenceCategory>
     <PreferenceCategory android:title="Doze enhancements" android:key="dozeSettings">
@@ -135,7 +135,7 @@
             <intent
                 android:action="android.intent.action.VIEW"
                 android:targetClass="com.akylas.enforcedoze.BlockNotificationsActivity"
-                android:targetPackage="com.akylas.enforcedoze" />
+                android:targetPackage="com.akylas.enforcedoze.fork" />
         </Preference>
         <Preference
             android:key="blacklistApps"
@@ -144,7 +144,7 @@
             <intent
                 android:action="android.intent.action.VIEW"
                 android:targetClass="com.akylas.enforcedoze.BlockAppsActivity"
-                android:targetPackage="com.akylas.enforcedoze" />
+                android:targetPackage="com.akylas.enforcedoze.fork" />
         </Preference>
     </PreferenceCategory>
     <PreferenceCategory android:title="Other">
@@ -158,6 +158,14 @@
             android:key="disableLogcat"
             android:summary="@string/disable_logcat_setting_summary"
             android:title="@string/disable_logcat_setting_title" />
+        <Preference
+            android:key="exportSettings"
+            android:summary="@string/export_settings_setting_summary"
+            android:title="@string/export_settings_setting_title" />
+        <Preference
+            android:key="importSettings"
+            android:summary="@string/import_settings_setting_summary"
+            android:title="@string/import_settings_setting_title" />
         <Preference
             android:key="resetForceDoze"
             android:summary="@string/reset_forcedoze_setting_summary"
@@ -173,7 +181,7 @@
             <intent
                 android:action="android.intent.action.VIEW"
                 android:targetClass="com.akylas.enforcedoze.LogActivity"
-                android:targetPackage="com.akylas.enforcedoze" />
+                android:targetPackage="com.akylas.enforcedoze.fork" />
         </Preference>
         <Preference
             android:key="taskerBroadcasts"
@@ -182,7 +190,7 @@
             <intent
                 android:action="android.intent.action.VIEW"
                 android:targetClass="com.akylas.enforcedoze.TaskerBroadcastsActivity"
-                android:targetPackage="com.akylas.enforcedoze" />
+                android:targetPackage="com.akylas.enforcedoze.fork" />
         </Preference>
         <Preference
             android:key="aboutForceDoze"
@@ -190,7 +198,7 @@
         <intent
             android:action="android.intent.action.VIEW"
             android:targetClass="com.akylas.enforcedoze.AboutAppActivity"
-            android:targetPackage="com.akylas.enforcedoze" />
+            android:targetPackage="com.akylas.enforcedoze.fork" />
         </Preference>
     </PreferenceCategory>
 </PreferenceScreen>

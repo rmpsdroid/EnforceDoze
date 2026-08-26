@@ -164,7 +164,7 @@ public class LogActivity extends AppCompatActivity {
                     isSuAvailable = result;
                     if (isSuAvailable) {
                         if (!Utils.isReadLogsPermissionGranted(context)) {
-                            executeCommand("pm grant com.akylas.enforcedoze android.permission.READ_LOGS");
+                            executeCommand("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.READ_LOGS");
                         }
                         getAndPrintLogcat();
                     } else {

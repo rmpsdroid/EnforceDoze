@@ -1,5 +1,5 @@
 <resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
-    <string name="app_name">EnforceDoze</string>
+    <string name="app_name">EnforceDoze Pro</string>
     <string name="service_active">EnforceDoze service is active</string>
     <string name="service_inactive">EnforceDoze service is inactive</string>
     <string name="service_disabled">EnforceDoze service is disabled</string>
@@ -28,7 +28,7 @@
     <string name="error_text">Error</string>
     <string name="please_wait_text">Please wait</string>
     <string name="requesting_su_access_text">Requesting SU access...</string>
-    <string name="read_logcat_su_not_avail_or_denied_error_text">SU permission denied or SU not available, so cannot read logcat.\n\nPlease grant READ_LOGS permission via ADB to use this feature: \'adb shell pm grant com.akylas.enforcedoze android.permission.READ_LOGS\' (without quotes)</string>
+    <string name="read_logcat_su_not_avail_or_denied_error_text">SU permission denied or SU not available, so cannot read logcat.\n\nPlease grant READ_LOGS permission via ADB to use this feature: \'adb shell pm grant com.akylas.enforcedoze.fork android.permission.READ_LOGS\' (without quotes)</string>
     <string name="loading_installed_apps_text">Loading installed apps...</string>
     <string name="whitelisting_text">Whitelisting</string>
     <string name="whitelisted_apps_restrictions_text">"An app that is whitelisted can use the network and hold partial wake locks during Doze and App Standby. However, other restrictions still apply to the whitelisted app, just as they do to other apps. For example, the whitelisted app’s jobs and syncs are deferred, and its regular AlarmManager alarms do not fire. "</string>
@@ -133,8 +133,8 @@
     <string name="doze_stats_battery_icon_meaning_dialog_title">What do the icons mean?</string>
     <string name="doze_stats_battery_icon_meaning_dialog_text">The battery icon with a lightning sign indicates the battery usage during that Doze session was within acceptable limits, and the battery icon with an exclamation sign indicates the battery usage during that Doze session was above acceptable limits. If the battery usage in any Doze session is above acceptable limits, you are advised to look into GSAM or another third party battery stats app to investigate what drained your battery</string>
     <string name="clearing_doze_stats_text">Clearing Doze stats...</string>
-    <string name="tile_label">ForceDoze</string>
-    <string name="airplane_tile_label">EnforceDoze Airplane</string>
+    <string name="tile_label">EnforceDoze Pro</string>
+    <string name="airplane_tile_label">EnforceDoze Pro Airplane</string>
     <string name="tile_subtitle_on">On</string>
     <string name="tile_subtitle_off">Off</string>
     <string name="notif_blocklist_setting_summary">Prevent notifications from being delivered during Doze</string>
@@ -178,7 +178,7 @@
     <string name="notification_channel_silent_name">Silent Service</string>
     <string name="notification_channel_silent_description">Minimal notification for foreground service</string>
 
-    <string name="silent_notification_title">EnforceDoze is running</string>
+    <string name="silent_notification_title">EnforceDoze Pro is running</string>
     <string name="silent_notification_text">Android 12+ requires this notification. Tap to customize or hide it.</string>
 
     <string name="notifications_permission">Notifications Permission</string>
@@ -225,4 +225,37 @@
     <string name="sponsor_settings_summary">EnforceDoze is free &amp; open-source — consider sponsoring</string>
 
     <string name="licenses_text">Material Dialogs\nhttps://github.com/afollestad/material-dialogs\nAidan Michael Follestad — MIT License\n\nlibsuperuser\nhttps://github.com/Chainfire/libsuperuser\nChainfire — Apache License 2.0\n\nNanotasks\nhttps://github.com/fabiendevos/nanotasks\nFabien Devos — Apache License 2.0\n\nProcessPhoenix\nhttps://github.com/JakeWharton/ProcessPhoenix\nJake Wharton — Apache License 2.0\n\nSimpleCustomTabs\nhttps://github.com/eliseomartelli/SimpleCustomTabs\nEliseo Martelli — MIT License</string>
+
+    <!-- Package chooser (multi-select) -->
+    <string name="package_chooser_title">Choose apps</string>
+    <string name="package_chooser_search_hint">Search app or package name</string>
+    <string name="package_chooser_no_results">No apps match your search</string>
+    <string name="package_chooser_already_added">Already in the list</string>
+    <string name="package_chooser_select_all">Select all</string>
+    <string name="package_chooser_deselect_all">Deselect all</string>
+    <string name="package_chooser_add_none">Add</string>
+    <string name="package_chooser_add_count">Add %1$d</string>
+    <plurals name="apps_added_to_blocklist">
+        <item quantity="one">%1$d app added to the blocklist</item>
+        <item quantity="other">%1$d apps added to the blocklist</item>
+    </plurals>
+
+    <!-- Settings backup and restore -->
+    <string name="export_settings_setting_title">Export settings</string>
+    <string name="export_settings_setting_summary">Save all EnforceDoze settings to a JSON file</string>
+    <string name="import_settings_setting_title">Import settings</string>
+    <string name="import_settings_setting_summary">Restore settings from a previously exported JSON file</string>
+    <string name="settings_export_success">Exported %1$d settings</string>
+    <string name="settings_export_failed">Export failed: %1$s</string>
+    <string name="settings_import_success">Imported %1$d settings</string>
+    <string name="settings_import_failed">Import failed: %1$s</string>
+    <string name="settings_import_invalid_file">Not an EnforceDoze settings file</string>
+    <string name="settings_import_confirm_title">Import settings?</string>
+    <string name="settings_import_confirm_text">This overwrites your current EnforceDoze settings with the contents of the selected file. Settings not present in the file are left unchanged.</string>
+    <string name="settings_backup_no_file_picker">No app on this device can pick files</string>
+    <string name="package_chooser_show_system_apps">Show system apps</string>
+    <plurals name="apps_added_to_whitelist">
+        <item quantity="one">%1$d app added to the whitelist</item>
+        <item quantity="other">%1$d apps added to the whitelist</item>
+    </plurals>
 </resources>

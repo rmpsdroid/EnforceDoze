@@ -15,7 +15,7 @@ public class EnableForceDozeService extends BroadcastReceiver {
     
     @Override
     public void onReceive(Context context, Intent intent) {
-        log("com.akylas.enforcedoze.ENABLE_FORCEDOZE broadcast intent received started: ");
+        log(Utils.ACTION_ENABLE_FORCEDOZE + " broadcast intent received started: ");
         PreferenceManager.getDefaultSharedPreferences(context).edit().putBoolean("serviceEnabled", true).apply();
         Utils.startForceDozeService(context);
     }

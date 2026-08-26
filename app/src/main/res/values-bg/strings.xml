@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">EnforceDoze</string>
+    <string name="app_name">EnforceDoze Pro</string>
     <string name="service_inactive">Услугата EnforceDoze е изключена</string>
     <string name="service_active">Услугата EnforceDoze е включена</string>
     <string name="service_disabled">Услугата EnforceDoze забранена</string>
@@ -34,7 +34,7 @@
     <string name="stats_long_text" formatted="false">Последно изключване на екрана: %1$s\nВреме в режим Doze: %2$d минути\nИзразходвано през последния Doze: %3$d %%</string>
     <string name="error_text">Грешка</string>
     <string name="please_wait_text">Изчакайте</string>
-    <string name="read_logcat_su_not_avail_or_denied_error_text">Достъпът до правата на суперпотребителя е отказан или липсва и за това дневникът не може да бъде прочетен.\n\nЗа да използвате тази способност на приложението, разрешете READ_LOGS чрез ADB: „adb shell pm grant com.akylas.enforcedoze android.permission.READ_LOGS“ (без кавичките)</string>
+    <string name="read_logcat_su_not_avail_or_denied_error_text">Достъпът до правата на суперпотребителя е отказан или липсва и за това дневникът не може да бъде прочетен.\n\nЗа да използвате тази способност на приложението, разрешете READ_LOGS чрез ADB: „adb shell pm grant com.akylas.enforcedoze.fork android.permission.READ_LOGS“ (без кавичките)</string>
     <string name="whitelisted_apps_restrictions_text">"Приложенията в белия списък, могат да използват мрежата и да държат частичен WakeLock по време на Doze и App Standby. Но другите ограничения продължават да важат, както и за останалите приложения. Например задачите са отложени, а обикновените будилници от AlarmManager не се изпълняват. "</string>
     <string name="app_already_whitelisted_text">Приложението е вече в списъка!</string>
     <string name="force_doze_info">EnforceDoze включва режим Doze в момента, в който изгасите екрана. Също така изключва сензорите за движение, така че устройството да не излезе от този режим по случайност, освен ако не е време за изпълнение на задачи за поддръжка. Това увеличава живота на батериятя много повече от стандартния режим Doze.</string>
@@ -120,7 +120,7 @@
     <string name="disable_stats_setting_summary">Изключване на статистиката на EnforceDoze</string>
     <string name="app_already_in_blocklist">Приложението е вече в списъка!</string>
     <string name="clearing_doze_stats_text">Премахване на статистиката…</string>
-    <string name="tile_label">EnforceDoze</string>
+    <string name="tile_label">EnforceDoze Pro</string>
     <string name="app_blocklist_setting_title">Черен списък за приложения в Doze</string>
     <string name="app_doesnt_exist_in_blocklist">Приложението не е в списъка, невъзможно е да бъде премхнато.</string>
     <string name="notifications_permission_explanation">За да открива приложения, които възпроизвеждат музика, приложението трябва да прочете показваните в момента известия и затова се нуждае от разрешение</string>
@@ -154,7 +154,7 @@
     <string name="notification_channel_tips_description">Информация относно съвместимостта</string>
     <string name="notification_channel_silent_name">Тиха услуга</string>
     <string name="notification_channel_silent_description">Минимално известие за услуга на преден план</string>
-    <string name="silent_notification_title">EnforceDoze е включено</string>
+    <string name="silent_notification_title">EnforceDoze Pro е включено</string>
     <string name="silent_notification_text">Android 12+ изисква това известие. Докоснете, за да персонализирате или скриете.</string>
     <string name="notifications_permission">Разрешение за достъп до известията</string>
     <string name="whitelist_music_app_network_setting_summary">Без изключване на мрежите, ако някое приложение възпроизвежда музика</string>
@@ -178,7 +178,7 @@
     <string name="notification_channel_disabled_description">Известие при изключено приложение EnforceDoze</string>
     <string name="enforcedoze_disabled_notif_title">EnforceDoze е изключено</string>
     <string name="enforcedoze_disabled_notif_text">Докоснете за включване</string>
-    <string name="airplane_tile_label">Самолетен режим от EnforceDoze</string>
+    <string name="airplane_tile_label">Самолетен режим от EnforceDoze Pro</string>
     <string name="tile_subtitle_on">Включен</string>
     <string name="tile_subtitle_off">Изключен</string>
     <string name="execution_mode_setting_summary">Избор на суперпотребител или Shizuku като метод за изпълняване на команди</string>

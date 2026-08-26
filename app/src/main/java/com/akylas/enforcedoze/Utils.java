@@ -50,8 +50,21 @@ public class Utils {
 
     private static final int DISABLED_NOTIFICATION_ID = 9876;
     private static final String CHANNEL_DISABLED = "CHANNEL_DISABLED";
-    public static final String ACTION_CUSTOM_DOZE_PERIOD_BOUNDARY = "com.akylas.enforcedoze.ACTION_CUSTOM_DOZE_PERIOD_BOUNDARY";
     private static final int CUSTOM_DOZE_PERIOD_REQUEST_CODE = 9012;
+
+    /**
+     * Broadcast actions this build listens for, derived from the applicationId so a fork installed
+     * next to upstream EnforceDoze answers only to its own intents. The manifest declares the very
+     * same names through the {@code ${applicationId}} placeholder, so the two cannot drift apart.
+     * Automation apps (Tasker and friends) must use the names shown in the Tasker broadcasts screen.
+     */
+    public static final String ACTION_ENABLE_FORCEDOZE = BuildConfig.APPLICATION_ID + ".ENABLE_FORCEDOZE";
+    public static final String ACTION_DISABLE_FORCEDOZE = BuildConfig.APPLICATION_ID + ".DISABLE_FORCEDOZE";
+    public static final String ACTION_ADD_WHITELIST = BuildConfig.APPLICATION_ID + ".ADD_WHITELIST";
+    public static final String ACTION_REMOVE_WHITELIST = BuildConfig.APPLICATION_ID + ".REMOVE_WHITELIST";
+    public static final String ACTION_CHANGE_SETTING = BuildConfig.APPLICATION_ID + ".CHANGE_SETTING";
+    public static final String ACTION_CUSTOM_DOZE_PERIOD_BOUNDARY =
+            BuildConfig.APPLICATION_ID + ".ACTION_CUSTOM_DOZE_PERIOD_BOUNDARY";
 
     public static void startForceDozeService(Context context) {
         if (isMyServiceRunning(ForceDozeService.class, context)) {
@@ -255,6 +268,30 @@ public class Utils {
         } catch (NumberFormatException e) {
             return -1;
         }
+    }
+
+    /**
+     * Package names reach a root/Shizuku shell, and the blocklist screens let the user type one by
+     * hand, so anything that is not a plain package name is rejected before it can be interpolated
+     * into a command. A real package name is only letters, digits, underscores and dots.
+     */
+    public static boolean isValidPackageName(String packageName) {
+        if (packageName == null) {
+            return false;
+        }
+        String trimmed = packageName.trim();
+        if (trimmed.isEmpty() || trimmed.length() > 255) {
+            return false;
+        }
+        for (int i = 0; i < trimmed.length(); i++) {
+            char c = trimmed.charAt(i);
+            boolean ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                    || (c >= '0' && c <= '9') || c == '.' || c == '_';
+            if (!ok) {
+                return false;
+            }
+        }
+        return true;
     }
 
     public static boolean isMyServiceRunning(Class<?> serviceClass, Context context) {
@@ -467,11 +504,27 @@ public class Utils {
         return ((Settings.Secure.getInt(contentResolver, "lock_screen_lock_after_timeout", 5000) / 1000f) / 60f);
     }
 
+    /**
+     * Every preference ForceDozeService reads in reloadSettings(), so an external change (Tasker
+     * broadcast, quick settings tile) can reach all of them. The old list was missing most of the
+     * toggles and named two of them wrongly ("useAutoRotateAndBrightnessFix" instead of
+     * "autoRotateAndBrightnessFix", "enableSensors" instead of "disableMotionSensors"), so those
+     * changes were rejected with "Setting does not exist or not updatable".
+     */
+    private static final String[] UPDATABLE_SETTINGS = {
+            "ignoreIfHotspot", "turnOffDataInDoze", "turnOffWiFiInDoze", "turnOffAllSensorsInDoze",
+            "turnOffBiometricsInDoze", "turnOnBatterySaverInDoze", "turnOnAirplaneInDoze",
+            "turnOffBluetoothInDoze", "turnOffGPSInDoze", "whitelistMusicAppNetwork",
+            "whitelistCurrentApp", "ignoreLockscreenTimeout", "waitForUnlock", "dozeEnterDelay",
+            "autoRotateAndBrightnessFix", "disableMotionSensors", "disableStats", "disableLogcat",
+            "disableWhenCharging", "showPersistentNotif", "showDisabledNotification"
+    };
+
+    /** Settings stored as an int rather than a boolean. */
+    private static final String[] INT_SETTINGS = {"dozeEnterDelay"};
+
     public static boolean doesSettingExist(String settingName) {
-        String[] updatableSettings = {"ignoreIfHotspot", "turnOffDataInDoze", "turnOffWiFiInDoze", "ignoreLockscreenTimeout",
-                "dozeEnterDelay", "useAutoRotateAndBrightnessFix", "enableSensors", "disableWhenCharging",
-                "showPersistentNotif", "useNonRootSensorWorkaround"};
-        return Arrays.asList(updatableSettings).contains(settingName);
+        return Arrays.asList(UPDATABLE_SETTINGS).contains(settingName);
     }
 
     public static void updateSettingBool(Context context, String settingName, boolean settingValue) {
@@ -483,11 +536,63 @@ public class Utils {
     }
 
     public static boolean isSettingBool(String settingName) {
-        // Since all the settings loaded dynamically by the service except dozeEnterDelay are bools,
-        // return true only if settingName != dozeEnterDelay
-        if (settingName.equals("dozeEnterDelay")) {
-            return false;
-        } else return true;
+        return !Arrays.asList(INT_SETTINGS).contains(settingName);
+    }
+
+    /**
+     * Tells ForceDozeService that a preference changed.
+     * <p>
+     * Two channels on purpose. The LocalBroadcast reaches a live service instantly; the service
+     * intent is what makes the change stick when the service is not currently listening - it was
+     * killed, it is being recreated, or getRunningServices() misreported it (which happens on One
+     * UI, where the old {@code isMyServiceRunning()} gate silently swallowed the reload). Delivering
+     * the same reload twice is harmless: reloadSettings() just re-reads the preferences.
+     */
+    public static void notifyServiceSettingsChanged(Context context) {
+        notifyService(context, ForceDozeService.ACTION_RELOAD_SETTINGS);
+    }
+
+    public static void notifyServiceNotificationBlocklistChanged(Context context) {
+        notifyService(context, ForceDozeService.ACTION_RELOAD_NOTIFICATION_BLOCKLIST);
+    }
+
+    public static void notifyServiceAppBlocklistChanged(Context context) {
+        notifyService(context, ForceDozeService.ACTION_RELOAD_APP_BLOCKLIST);
+    }
+
+    private static void notifyService(Context context, String action) {
+        String localAction;
+        switch (action) {
+            case ForceDozeService.ACTION_RELOAD_NOTIFICATION_BLOCKLIST:
+                localAction = "reload-notification-blocklist";
+                break;
+            case ForceDozeService.ACTION_RELOAD_APP_BLOCKLIST:
+                localAction = "reload-app-blocklist";
+                break;
+            default:
+                localAction = "reload-settings";
+                break;
+        }
+        LocalBroadcastManager.getInstance(context).sendBroadcast(new Intent(localAction));
+
+        if (!PreferenceManager.getDefaultSharedPreferences(context).getBoolean("serviceEnabled", false)) {
+            // EnforceDoze is off; nothing to reload and starting the service here would turn it on.
+            return;
+        }
+
+        try {
+            Intent serviceIntent = new Intent(context, ForceDozeService.class);
+            serviceIntent.setAction(action);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(serviceIntent);
+            } else {
+                context.startService(serviceIntent);
+            }
+        } catch (Exception e) {
+            // Background start restrictions can refuse this; the LocalBroadcast above still applies
+            // the change to a running service, and onCreate() re-reads everything anyway.
+            logToLogcat("EnforceDoze", "Could not deliver " + action + " to the service: " + e.getMessage());
+        }
     }
 
     public static boolean isScreenOn(Context context) {
@@ -552,7 +657,7 @@ public class Utils {
 
         // Create broadcast intent to enable ForceDoze when tapping the notification
         Intent enableIntent = new Intent(context, EnableForceDozeService.class);
-        enableIntent.setAction("com.akylas.enforcedoze.ENABLE_FORCEDOZE");
+        enableIntent.setAction(ACTION_ENABLE_FORCEDOZE);
         PendingIntent pendingIntent = PendingIntent.getBroadcast(
             context, 
             0, 
@@ -601,8 +706,8 @@ public class Utils {
     public static void grantPermissionsViaShizuku(Context context) {
         ShizukuHandler shizukuHandler = ShizukuHandler.getInstance(context);
         if (!Utils.isDumpPermissionGranted(context)) {
-            logToLogcat("Utils", "Granting android.permission.DUMP to com.akylas.enforcedoze via Shizuku");
-            shizukuHandler.executeCommand("pm grant com.akylas.enforcedoze android.permission.DUMP",
+            logToLogcat("Utils", "Granting android.permission.DUMP to " + BuildConfig.APPLICATION_ID + " via Shizuku");
+            shizukuHandler.executeCommand("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.DUMP",
                     (commandCode, exitCode, stdout, stderr) -> {
                         if (exitCode == 0) {
                             logToLogcat("Utils", "DUMP permission granted successfully");
@@ -612,8 +717,8 @@ public class Utils {
                     }, true);
         }
         if (!Utils.isReadPhoneStatePermissionGranted(context)) {
-            logToLogcat("Utils", "Granting android.permission.READ_PHONE_STATE to com.akylas.enforcedoze via Shizuku");
-            shizukuHandler.executeCommand("pm grant com.akylas.enforcedoze android.permission.READ_PHONE_STATE",
+            logToLogcat("Utils", "Granting android.permission.READ_PHONE_STATE to " + BuildConfig.APPLICATION_ID + " via Shizuku");
+            shizukuHandler.executeCommand("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.READ_PHONE_STATE",
                     (commandCode, exitCode, stdout, stderr) -> {
                         if (exitCode == 0) {
                             logToLogcat("Utils", "READ_PHONE_STATE permission granted successfully");
@@ -623,8 +728,8 @@ public class Utils {
                     }, true);
         }
         if (!Utils.isSecureSettingsPermissionGranted(context) && Utils.isDeviceRunningOnN()) {
-            logToLogcat("Utils", "Granting android.permission.WRITE_SECURE_SETTINGS to com.akylas.enforcedoze via Shizuku");
-            shizukuHandler.executeCommand("pm grant com.akylas.enforcedoze android.permission.WRITE_SECURE_SETTINGS",
+            logToLogcat("Utils", "Granting android.permission.WRITE_SECURE_SETTINGS to " + BuildConfig.APPLICATION_ID + " via Shizuku");
+            shizukuHandler.executeCommand("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.WRITE_SECURE_SETTINGS",
                     (commandCode, exitCode, stdout, stderr) -> {
                         if (exitCode == 0) {
                             logToLogcat("Utils", "WRITE_SECURE_SETTINGS permission granted successfully");

@@ -6,7 +6,7 @@
         android:shortcutShortLabel="@string/settings_menu_item">
         <intent
             android:action="android.intent.action.VIEW"
-            android:targetPackage="com.akylas.enforcedoze"
+            android:targetPackage="com.akylas.enforcedoze.fork"
             android:targetClass="com.akylas.enforcedoze.SettingsActivity" />/>
     </shortcut>
     <shortcut
@@ -16,7 +16,7 @@
         android:shortcutShortLabel="@string/doze_stats_menu_item">
         <intent
             android:action="android.intent.action.VIEW"
-            android:targetPackage="com.akylas.enforcedoze"
+            android:targetPackage="com.akylas.enforcedoze.fork"
             android:targetClass="com.akylas.enforcedoze.DozeBatteryStatsActivity" />/>
     </shortcut>
 </shortcuts>

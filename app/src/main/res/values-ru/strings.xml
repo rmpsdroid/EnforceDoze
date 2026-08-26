@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
-    <string name="app_name">EnforceDoze</string>
+    <string name="app_name">EnforceDoze Pro</string>
     <string name="service_active">Служба EnforceDoze активна</string>
     <string name="service_inactive">Служба EnforceDoze неактивна</string>
     <string name="service_disabled">Служба EnforceDoze отключена</string>
@@ -27,7 +27,7 @@
     <string name="error_text">Ошибка</string>
     <string name="please_wait_text">Пожалуйста, подождите</string>
     <string name="requesting_su_access_text">Запрашивается доступ SU...</string>
-    <string name="read_logcat_su_not_avail_or_denied_error_text">Разрешение SU отклонено или недоступно, поэтому невозможно читать logcat. \n\nПожалуйста, предоставьте разрешение READ_LOGS через ADB для использования этой функции: «adb shell pm grant com.akylas.enforcedoze android.permission.READ_LOGS» (без кавычек)</string>
+    <string name="read_logcat_su_not_avail_or_denied_error_text">Разрешение SU отклонено или недоступно, поэтому невозможно читать logcat. \n\nПожалуйста, предоставьте разрешение READ_LOGS через ADB для использования этой функции: «adb shell pm grant com.akylas.enforcedoze.fork android.permission.READ_LOGS» (без кавычек)</string>
     <string name="loading_installed_apps_text">Загрузка установленных приложений...</string>
     <string name="whitelisting_text">Белый список</string>
     <string name="whitelisted_apps_restrictions_text">"Приложение из белого списка может использовать сеть и удерживать частичные WakeLock во время Doze и App Standby. Однако другие ограничения все еще применяются к приложению из белого списка, так же как и к другим приложениям. Например, задачи и синхронизации приложения из белого списка откладываются, а его обычные сигналы тревоги AlarmManager не срабатывают. "</string>
@@ -106,7 +106,7 @@
     <string name="doze_stats_battery_icon_meaning_dialog_title">Что означают иконки?</string>
     <string name="doze_stats_battery_icon_meaning_dialog_text">Иконка батареи с молнией указывает, что расход батареи во время этой сессии Doze был в пределах нормы, а иконка батареи с восклицательным знаком указывает, что расход батареи превысил допустимые пределы. Если расход батареи в любой сессии Doze превышает норму, рекомендуется проверить GSAM или другое приложение для статистики батареи, чтобы выяснить, что разрядило батарею</string>
     <string name="clearing_doze_stats_text">Очистка статистики Doze...</string>
-    <string name="tile_label">ForceDoze</string>
+    <string name="tile_label">EnforceDoze Pro</string>
     <string name="doze_unsupported_more_info">На некоторых устройствах режим Doze отключен производителем. Эта опция может включить режим Doze на устройствах, где он не включен по умолчанию.\n\nПримечание: вам придется включать эту опцию каждый раз после перезагрузки телефона.</string>
     <string name="copy_command_button_text">Копировать команду</string>
     <string name="disable_motion_sensors_setting_title">Отключать датчики движения при выкл. экрана</string>
@@ -127,7 +127,7 @@
     <string name="wait_unlock_setting_title">Ждать разблокировки для выхода из Doze</string>
     <string name="ignore_hospot_during_doze_setting_summary">Отключить, чтобы предотвратить отключение WiFi/данных при раздаче интернета</string>
     <string name="ignore_hospot_during_doze_setting_title">Игнорировать состояние точки доступа при входе в Doze</string>
-    <string name="airplane_tile_label">EnforceDoze Авиарежим</string>
+    <string name="airplane_tile_label">EnforceDoze Pro Авиарежим</string>
     <string name="tile_subtitle_on">Вкл</string>
     <string name="tile_subtitle_off">Выкл</string>
     <string name="notif_blocklist_setting_summary">Предотвращать доставку уведомлений во время Doze</string>
@@ -163,7 +163,7 @@
     <string name="notification_channel_tips_description">Информация о проблемах совместимости</string>
     <string name="notification_channel_silent_name">Тихая служба</string>
     <string name="notification_channel_silent_description">Минимальное уведомление для службы на переднем плане</string>
-    <string name="silent_notification_title">EnforceDoze работает</string>
+    <string name="silent_notification_title">EnforceDoze Pro работает</string>
     <string name="silent_notification_text">Android 12+ требует это уведомление. Нажмите для настройки или скрытия.</string>
     <string name="notifications_permission">Разрешение на уведомления</string>
     <string name="notifications_permission_explanation">Для обнаружения приложений, воспроизводящих музыку, приложению нужно читать текущие уведомления, поэтому требуется разрешение</string>

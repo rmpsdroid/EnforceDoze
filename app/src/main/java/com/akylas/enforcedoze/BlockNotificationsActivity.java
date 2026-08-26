@@ -21,6 +21,7 @@ import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.widget.ListView;
+import android.widget.Toast;
 
 import com.afollestad.materialdialogs.MaterialDialog;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
@@ -29,6 +30,7 @@ import com.nanotasks.Completion;
 import com.nanotasks.Tasks;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 
@@ -83,10 +85,7 @@ public class BlockNotificationsActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (Utils.isMyServiceRunning(ForceDozeService.class, BlockNotificationsActivity.this)) {
-            Intent intent = new Intent("reload-notification-blocklist");
-            LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
-        }
+        Utils.notifyServiceNotificationBlocklistChanged(getApplicationContext());
     }
 
     @Override
@@ -99,7 +98,12 @@ public class BlockNotificationsActivity extends AppCompatActivity {
     public boolean onOptionsItemSelected(MenuItem item) {
         int id = item.getItemId();
         if (id == R.id.action_add_notification_blocklist) {
-            startActivityForResult(new Intent(BlockNotificationsActivity.this, PackageChooserActivity.class), 503);
+            Intent chooser = new Intent(BlockNotificationsActivity.this, PackageChooserActivity.class);
+            chooser.putExtra(PackageChooserActivity.EXTRA_MULTI_SELECT, true);
+            chooser.putExtra(PackageChooserActivity.EXTRA_PRESELECTED_PACKAGES,
+                    blockedPackages.toArray(new String[0]));
+            chooser.putExtra(PackageChooserActivity.EXTRA_TITLE, getString(R.string.notif_blocklist_setting_title));
+            startActivityForResult(chooser, 503);
         } else if (id == R.id.action_add_notification_blocklist_package) {
             showManuallyAddPackageDialog();
         } else if (id == R.id.action_remove_notification_blocklist_package) {
@@ -118,8 +122,12 @@ public class BlockNotificationsActivity extends AppCompatActivity {
         super.onActivityResult(requestCode, resultCode, data);
         if (data != null) {
             if (requestCode == 503) {
-                String pkg = data.getStringExtra("package_name");
-                verifyAndAddPackage(pkg);
+                String[] packages = data.getStringArrayExtra(PackageChooserActivity.RESULT_PACKAGE_NAMES);
+                if (packages != null) {
+                    addPackages(Arrays.asList(packages));
+                } else {
+                    verifyAndAddPackage(data.getStringExtra(PackageChooserActivity.RESULT_PACKAGE_NAME));
+                }
             } else if (requestCode == 504) {
                 String pkg = data.getStringExtra("package_name");
                 verifyAndRemovePackage(pkg);
@@ -223,6 +231,30 @@ public class BlockNotificationsActivity extends AppCompatActivity {
             modifyBlockList(packageName, true);
             loadPackagesFromBlockList();
         }
+    }
+
+    /** Adds a whole selection in one preference write instead of one per app. */
+    public void addPackages(List<String> packageNames) {
+        List<String> added = new ArrayList<>();
+        for (String packageName : packageNames) {
+            if (packageName != null && !packageName.trim().isEmpty() && !blockedPackages.contains(packageName)) {
+                blockedPackages.add(packageName);
+                added.add(packageName);
+            }
+        }
+
+        if (added.isEmpty()) {
+            displayDialog(getString(R.string.info_text), getString(R.string.app_already_in_blocklist));
+            return;
+        }
+
+        log("Adding " + added.size() + " app(s) to the Notification blocklist: " + added);
+        sharedPreferences.edit().putStringSet("notificationBlockList", new LinkedHashSet<>(blockedPackages)).apply();
+        Utils.notifyServiceNotificationBlocklistChanged(getApplicationContext());
+        loadPackagesFromBlockList();
+        Toast.makeText(this,
+                getResources().getQuantityString(R.plurals.apps_added_to_blocklist, added.size(), added.size()),
+                Toast.LENGTH_SHORT).show();
     }
 
     public void modifyBlockList(String packageName, boolean remove) {

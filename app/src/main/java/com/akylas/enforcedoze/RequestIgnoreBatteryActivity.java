@@ -12,8 +12,8 @@ import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import android.provider.Settings;
 
 public class RequestIgnoreBatteryActivity extends AppCompatActivity {
-    public static final String ACTION_IGNORE_RESULT = "com.akylas.enforcedoze.ACTION_IGNORE_BATTERY_OPTIMIZATION_RESULT";
-    public static final String EXTRA_IGNORED = "com.akylas.enforcedoze.EXTRA_IGNORED";
+    public static final String ACTION_IGNORE_RESULT = BuildConfig.APPLICATION_ID + ".ACTION_IGNORE_BATTERY_OPTIMIZATION_RESULT";
+    public static final String EXTRA_IGNORED = BuildConfig.APPLICATION_ID + ".EXTRA_IGNORED";
 
     private ActivityResultLauncher<Intent> launcher;
 

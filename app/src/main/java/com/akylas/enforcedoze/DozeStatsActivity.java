@@ -132,10 +132,7 @@ public class DozeStatsActivity extends AppCompatActivity {
                 }
                 if (result) {
                     log("Doze stats successfully cleared");
-                    if (Utils.isMyServiceRunning(ForceDozeService.class, context)) {
-                        Intent intent = new Intent("reload-settings");
-                        LocalBroadcastManager.getInstance(context).sendBroadcast(intent);
-                    }
+                    Utils.notifyServiceSettingsChanged(context);
                     batteryConsumptionItems.clear();
                     batteryConsumptionAdapter.notifyDataSetChanged();
                     MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(context);

@@ -21,7 +21,9 @@ import android.content.pm.ServiceInfo;
 import android.net.wifi.WifiManager;
 import android.os.AsyncTask;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.preference.PreferenceManager;
 import android.provider.Settings;
@@ -38,6 +40,8 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -51,6 +55,7 @@ import java.util.TimerTask;
 import java.util.TreeMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -66,6 +71,22 @@ public class ForceDozeService extends Service {
     private static final String CHANNEL_TIPS = "CHANNEL_TIPS";
     private static final String CHANNEL_SILENT = "CHANNEL_SILENT";
     private static final int PERSISTENT_NOTIF_ID = 1234;
+
+    /**
+     * Delivered as a real service intent (not only as a LocalBroadcast) so that a settings change
+     * reaches the service even when it was killed in the meantime: starting it redelivers the
+     * action instead of the change being silently dropped.
+     */
+    public static final String ACTION_RELOAD_SETTINGS = BuildConfig.APPLICATION_ID + ".ACTION_RELOAD_SETTINGS";
+    public static final String ACTION_RELOAD_NOTIFICATION_BLOCKLIST = BuildConfig.APPLICATION_ID + ".ACTION_RELOAD_NOTIFICATION_BLOCKLIST";
+    public static final String ACTION_RELOAD_APP_BLOCKLIST = BuildConfig.APPLICATION_ID + ".ACTION_RELOAD_APP_BLOCKLIST";
+    /**
+     * Sent by {@link BootCompleteReceiver} when the device rebooted with toggles still applied.
+     * Airplane mode, location mode and battery saver all survive a restart, so without this the
+     * phone would come back up permanently in the state Doze left it in.
+     */
+    public static final String ACTION_RESTORE_STATE = BuildConfig.APPLICATION_ID + ".ACTION_RESTORE_STATE";
+
 
     private static Shell.Interactive rootSession;
     private static Shell.Interactive nonRootSession;
@@ -90,13 +111,11 @@ public class ForceDozeService extends Service {
     boolean turnOffDataInDoze = false;
     boolean whitelistMusicAppNetwork = false;
     boolean whitelistCurrentApp = false;
-    boolean wasBatterSaverOn = false;
-    boolean wasWiFiTurnedOn = false;
-    boolean wasMobileDataTurnedOn = false;
-    boolean wasAirplaneOn = false;
-    boolean wasBluetoothOn = false;
-    boolean wasGPSOn = false;
-    boolean wasHotSpotTurnedOn = false;
+    /**
+     * True while blocklisted apps are suspended by us. Lets the several wake-up triggers share one
+     * unblock instead of each firing its own batch of shell commands.
+     */
+    boolean blockedAppsApplied = false;
     boolean maintenance = false;
     boolean setPendingDozeEnterAlarm = false;
     boolean disableStats = false;
@@ -104,7 +123,6 @@ public class ForceDozeService extends Service {
     int dozeEnterDelay = 0;
     Timer enterDozeTimer;
     Timer disableSensorsTimer;
-    Timer enableSensorsTimer;
     DozeReceiver localDozeReceiver;
     ReloadSettingsReceiver reloadSettingsReceiver;
     ReloadNotificationBlocklistReceiver reloadNotificationBlocklistReceiver;
@@ -112,6 +130,8 @@ public class ForceDozeService extends Service {
     NotificationCompat.Builder mStatsBuilder;
     PowerManager pm;
     PowerManager.WakeLock tempWakeLock;
+    DozeStateStore dozeStateStore;
+    ShizukuHandler.OnAvailibilityChange shizukuAvailabilityListener;
     Set<String> dozeUsageData;
     Set<String> dozeNotificationBlocklist;
     Set<String> dozeAppBlocklist;
@@ -126,8 +146,8 @@ public class ForceDozeService extends Service {
     String lastKnownState = "null";
 
     // Add near the top of the class
-    private static final String ACTION_IGNORE_RESULT = "com.akylas.enforcedoze.ACTION_IGNORE_BATTERY_OPTIMIZATION_RESULT";
-    private static final String EXTRA_IGNORED = "com.akylas.enforcedoze.EXTRA_IGNORED";
+    private static final String ACTION_IGNORE_RESULT = RequestIgnoreBatteryActivity.ACTION_IGNORE_RESULT;
+    private static final String EXTRA_IGNORED = RequestIgnoreBatteryActivity.EXTRA_IGNORED;
 
     private BroadcastReceiver ignoreBatteryResultReceiver = new BroadcastReceiver() {
         @Override
@@ -159,6 +179,17 @@ public class ForceDozeService extends Service {
     };
     private final ExecutorService rootShellExecutor = Executors.newSingleThreadExecutor();
 
+
+    /**
+     * What a Doze maintenance window brings back. Biometrics and the motion sensors stay off: they
+     * are only re-disabled when a new Doze cycle begins, so restoring them here would leave them on
+     * for the rest of the night.
+     */
+    private static final Set<String> MAINTENANCE_RESTORE_KEYS = new HashSet<>(Arrays.asList(
+            DozeStateStore.KEY_AIRPLANE, DozeStateStore.KEY_BLUETOOTH, DozeStateStore.KEY_GPS,
+            DozeStateStore.KEY_WIFI, DozeStateStore.KEY_MOBILE_DATA,
+            DozeStateStore.KEY_BATTERY_SAVER, DozeStateStore.KEY_ALL_SENSORS));
+
     private void log(String message) {
         logToLogcat(TAG, message);
     }
@@ -174,7 +205,6 @@ public class ForceDozeService extends Service {
         reloadNotificationBlocklistReceiver = new ReloadNotificationBlocklistReceiver();
         reloadAppsBlocklistReceiver = new ReloadAppsBlocklistReceiver();
         enterDozeTimer = new Timer();
-        enableSensorsTimer = new Timer();
         disableSensorsTimer = new Timer();
 
 
@@ -210,6 +240,7 @@ public class ForceDozeService extends Service {
 
         mStatsBuilder = new NotificationCompat.Builder(this, CHANNEL_STATS);
         pm = (PowerManager) getSystemService(POWER_SERVICE);
+        dozeStateStore = DozeStateStore.getInstance(getApplicationContext());
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_SCREEN_ON);
         filter.addAction(Intent.ACTION_SCREEN_OFF);
@@ -224,7 +255,11 @@ public class ForceDozeService extends Service {
         LocalBroadcastManager.getInstance(this).registerReceiver(reloadNotificationBlocklistReceiver, new IntentFilter("reload-notification-blocklist"));
         LocalBroadcastManager.getInstance(this).registerReceiver(reloadAppsBlocklistReceiver, new IntentFilter("reload-app-blocklist"));
         LocalBroadcastManager.getInstance(this).registerReceiver(ignoreBatteryResultReceiver, new IntentFilter(ACTION_IGNORE_RESULT));
-        this.registerReceiver(localDozeReceiver, filter);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            this.registerReceiver(localDozeReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            this.registerReceiver(localDozeReceiver, filter);
+        }
         turnOffDataInDoze = getDefaultSharedPreferences(getApplicationContext()).getBoolean("turnOffDataInDoze", false);
         ignoreIfHotspot = getDefaultSharedPreferences(getApplicationContext()).getBoolean("ignoreIfHotspot", true);
         turnOffWiFiInDoze = getDefaultSharedPreferences(getApplicationContext()).getBoolean("turnOffWiFiInDoze", false);
@@ -247,19 +282,27 @@ public class ForceDozeService extends Service {
         disableWhenCharging = getDefaultSharedPreferences(getApplicationContext()).getBoolean("disableWhenCharging", true);
         isSuAvailable = getDefaultSharedPreferences(getApplicationContext()).getBoolean("isSuAvailable", false);
         showPersistentNotif = PreferenceManager.getDefaultSharedPreferences(getApplicationContext()).getBoolean("showPersistentNotif", false);
-        dozeUsageData = PreferenceManager.getDefaultSharedPreferences(getApplicationContext()).getStringSet("dozeUsageDataAdvanced", new LinkedHashSet<String>());
-        dozeNotificationBlocklist = PreferenceManager.getDefaultSharedPreferences(getApplicationContext()).getStringSet("notificationBlockList", new LinkedHashSet<String>());
-        dozeAppBlocklist = PreferenceManager.getDefaultSharedPreferences(getApplicationContext()).getStringSet("dozeAppBlockList", new LinkedHashSet<String>());
+        dozeUsageData = loadDozeUsageData();
+        dozeNotificationBlocklist = loadStringSet("notificationBlockList");
+        dozeAppBlocklist = loadStringSet("dozeAppBlockList");
 
         // Initialize Shizuku handler
         shizukuHandler = ShizukuHandler.getInstance(getApplicationContext());
         boolean useShizuku = Utils.isShizukuMode(getApplicationContext());
         isShizukuAvailable = false;
+        // Registered unconditionally: the user can switch to Shizuku mode while the service runs,
+        // and the binder can arrive (or come back) long after the service was created.
+        shizukuAvailabilityListener = value -> {
+            isShizukuAvailable = value;
+            log("Shizuku availability changed: " + value);
+            if (value) {
+                // A pending reversion may have been waiting for exactly this.
+                restoreDeviceStates(getApplicationContext(), "Shizuku became available");
+            }
+        };
+        shizukuHandler.addOnAvailabilityChangeListener(shizukuAvailabilityListener);
         if (useShizuku) {
             shizukuHandler.checkShizukuAvailability();
-            shizukuHandler.setOnAvailibilityChangeListener(value -> {
-                isShizukuAvailable = value;
-            });
             isShizukuAvailable = shizukuHandler.isShizukuAvailable();
             log("Shizuku mode enabled, available: " + isShizukuAvailable);
         }
@@ -303,9 +346,41 @@ public class ForceDozeService extends Service {
         // ensure blocked apps are enable in case we were killed before we could enable them after doze
         if (dozeAppBlocklist.size() != 0) {
             log("Re-enabling apps that are in the Doze app blocklist");
-            for (String pkg : dozeAppBlocklist) {
-                setPackageState(getApplicationContext(), pkg, true);
+            setPackagesState(dozeAppBlocklist, true);
+        }
+        // Same for notifications: the old safety net only covered suspended apps, so a service kill
+        // mid-Doze left the blocklisted apps silently muted until the next Doze cycle ended.
+        if (dozeNotificationBlocklist.size() != 0) {
+            List<String> toUnblock = new ArrayList<>();
+            for (String pkg : dozeNotificationBlocklist) {
+                if (!dozeAppBlocklist.contains(pkg)) {
+                    toUnblock.add(pkg);
+                }
             }
+            if (!toUnblock.isEmpty()) {
+                log("Re-enabling notifications for apps in the Notification blocklist");
+                setNotificationsEnabledForPackages(toUnblock, true);
+            }
+        }
+
+        recoverPendingStateReversion();
+    }
+
+    /**
+     * The service may have been killed while the device was dozing with radios/sensors turned off.
+     * Because the pre-Doze state now lives on disk we can still put the device back the way the
+     * user left it, either right away (screen already back on) or when the screen next turns on.
+     */
+    private void recoverPendingStateReversion() {
+        if (!dozeStateStore.hasPendingRestore()) {
+            return;
+        }
+        log("Service was recreated with " + dozeStateStore.getAppliedKeys() + " still applied");
+        if (Utils.isScreenOn(getApplicationContext()) || !dozeStateStore.isInDoze()) {
+            log("Screen is on (or we are no longer dozing), restoring device state now");
+            restoreDeviceStates(getApplicationContext(), "service recreated");
+        } else {
+            log("Still dozing with the screen off, reversion stays pending until screen on");
         }
     }
 
@@ -321,9 +396,18 @@ public class ForceDozeService extends Service {
         log("Stopping service and enabling sensors");
         this.unregisterReceiver(localDozeReceiver);
         LocalBroadcastManager.getInstance(this).unregisterReceiver(reloadSettingsReceiver);
-        LocalBroadcastManager.getInstance(this).unregisterReceiver(ignoreBatteryResultReceiver);        if (disableMotionSensors) {
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(reloadNotificationBlocklistReceiver);
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(reloadAppsBlocklistReceiver);
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(ignoreBatteryResultReceiver);
+        if (shizukuAvailabilityListener != null) {
+            shizukuHandler.removeOnAvailabilityChangeListener(shizukuAvailabilityListener);
+        }
+        if (disableMotionSensors) {
             executeCommand("dumpsys sensorservice enable");
         }
+        // Put back everything we changed for Doze; without this a service stopped while dozing
+        // would leave airplane mode on and the sensors off with nobody left to revert them.
+        restoreDeviceStates(getApplicationContext(), "service destroyed");
         //ensure we exit doze if stopped from background
         exitDoze(getDeviceIdleState());
         if (rootSession != null) {
@@ -346,24 +430,32 @@ public class ForceDozeService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         super.onStartCommand(intent, flags, startId);
         log("Service has now started");
-        // On Android 12+, we must call startForeground() immediately when service is started
-        // as a foreground service, regardless of showPersistentNotif setting
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (showPersistentNotif) {
-                // Show notification with stats if user enabled it
-                showPersistentNotification();
-            } else {
-                // Show minimal silent notification on Android 12+ to comply with foreground service requirements
-                showSilentNotification();
-            }
-        } else {
-            // On older versions, respect the user's preference
-            if (showPersistentNotif) {
-                showPersistentNotification();
-            } else {
-                hidePersistentNotification();
+
+        // A reload delivered as a service intent survives the service having been killed, unlike a
+        // LocalBroadcast which is dropped when nothing is listening at that instant.
+        String action = intent != null ? intent.getAction() : null;
+        if (action != null) {
+            switch (action) {
+                case ACTION_RELOAD_SETTINGS:
+                    ensureForegroundNotification();
+                    reloadSettings();
+                    return START_STICKY;
+                case ACTION_RELOAD_NOTIFICATION_BLOCKLIST:
+                    ensureForegroundNotification();
+                    reloadNotificationBlockList();
+                    return START_STICKY;
+                case ACTION_RELOAD_APP_BLOCKLIST:
+                    ensureForegroundNotification();
+                    reloadAppsBlockList();
+                    return START_STICKY;
+                case ACTION_RESTORE_STATE:
+                    ensureForegroundNotification();
+                    handleRestoreStateRequest();
+                    return START_STICKY;
             }
         }
+
+        ensureForegroundNotification();
         addSelfToDozeWhitelist();
         enterDoze(this);
         lastKnownState = getDeviceIdleState();
@@ -374,9 +466,38 @@ public class ForceDozeService extends Service {
         return START_STICKY;
     }
 
+    /**
+     * Restores whatever Doze left applied and, when EnforceDoze itself is switched off, stops again
+     * afterwards - the service was started purely to get the device back to normal.
+     */
+    private void handleRestoreStateRequest() {
+        dozeStateStore.setInDoze(false);
+        restoreDeviceStates(getApplicationContext(), "restore requested");
+
+        if (!getDefaultSharedPreferences(getApplicationContext()).getBoolean("serviceEnabled", false)) {
+            log("EnforceDoze is disabled, stopping once the reversion has been given time to run");
+            // Brief grace period so the fire-and-forget shell commands have left the process.
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                log("Reversion issued, stopping the service again");
+                stopSelf();
+            }, 3000);
+        }
+    }
+
     public void reloadSettings() {
         log("EnforceDoze settings reloaded ----------------------------------");
-        dozeUsageData = PreferenceManager.getDefaultSharedPreferences(getApplicationContext()).getStringSet("dozeUsageDataAdvanced", new LinkedHashSet<String>());
+        // The execution mode can be switched from the UI while we are running, so re-evaluate it
+        // here instead of trusting what was cached when the service was created.
+        boolean useShizuku = Utils.isShizukuMode(getApplicationContext());
+        if (useShizuku) {
+            shizukuHandler.checkShizukuAvailability();
+            isShizukuAvailable = shizukuHandler.isShizukuAvailable();
+        } else {
+            isShizukuAvailable = false;
+        }
+        log("executionMode: " + (useShizuku ? "shizuku" : "root") + ", Shizuku available: " + isShizukuAvailable);
+        isSuAvailable = getDefaultSharedPreferences(getApplicationContext()).getBoolean("isSuAvailable", false);
+        dozeUsageData = loadDozeUsageData();
         log("dozeUsageData: " + "Total Entries -> " + dozeUsageData.size());
         turnOffDataInDoze = getDefaultSharedPreferences(getApplicationContext()).getBoolean("turnOffDataInDoze", false);
         log("turnOffDataInDoze: " + turnOffDataInDoze);
@@ -421,15 +542,25 @@ public class ForceDozeService extends Service {
         showPersistentNotif = getDefaultSharedPreferences(getApplicationContext()).getBoolean("showPersistentNotif", false);
         log("showPersistentNotif: " + showPersistentNotif);
         log("EnforceDoze settings reloaded ----------------------------------");
-        // On Android 12+, we must keep the foreground notification
+        ensureForegroundNotification();
+    }
+
+    /**
+     * On Android 12+ a foreground service must own a notification, so we always post one (a silent
+     * one when the user does not want the stats notification). Must be called on every entry point
+     * that can be reached through startForegroundService().
+     */
+    private void ensureForegroundNotification() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (showPersistentNotif) {
+                // Show notification with stats if user enabled it
                 showPersistentNotification();
             } else {
-                // Show minimal silent notification on Android 12+
+                // Show minimal silent notification on Android 12+ to comply with foreground service requirements
                 showSilentNotification();
             }
         } else {
+            // On older versions, respect the user's preference
             if (showPersistentNotif) {
                 showPersistentNotification();
             } else {
@@ -440,26 +571,26 @@ public class ForceDozeService extends Service {
 
     public void reloadNotificationBlockList() {
         log("Notification blocklist reloaded ----------------------------------");
-        dozeNotificationBlocklist = PreferenceManager.getDefaultSharedPreferences(getApplicationContext()).getStringSet("notificationBlockList", new LinkedHashSet<String>());
+        dozeNotificationBlocklist = loadStringSet("notificationBlockList");
         log("notificationBlockList: " + dozeNotificationBlocklist.size() + " items");
         log("Notification blocklist reloaded ----------------------------------");
     }
 
     public void reloadAppsBlockList() {
         log("Apps blocklist reloaded ----------------------------------");
-        dozeAppBlocklist = PreferenceManager.getDefaultSharedPreferences(getApplicationContext()).getStringSet("dozeAppBlockList", new LinkedHashSet<String>());
+        dozeAppBlocklist = loadStringSet("dozeAppBlockList");
         log("dozeAppBlockList: " + dozeAppBlocklist.size() + " items");
         log("Apps blocklist reloaded ----------------------------------");
     }
 
     public void grantDumpPermission() {
-        log("Granting android.permission.DUMP to com.akylas.enforcedoze");
-        executeCommandWithRoot("pm grant com.akylas.enforcedoze android.permission.DUMP");
+        log("Granting android.permission.DUMP to " + BuildConfig.APPLICATION_ID);
+        executeCommandWithRoot("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.DUMP");
     }
 
     public void grantDumpPermissionViaShizuku() {
-        log("Granting android.permission.DUMP to com.akylas.enforcedoze via Shizuku");
-        shizukuHandler.executeCommand("pm grant com.akylas.enforcedoze android.permission.DUMP",
+        log("Granting android.permission.DUMP to " + BuildConfig.APPLICATION_ID + " via Shizuku");
+        shizukuHandler.executeCommand("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.DUMP",
             (commandCode, exitCode, stdout, stderr) -> {
                 if (exitCode == 0) {
                     log("DUMP permission granted successfully");
@@ -468,13 +599,13 @@ public class ForceDozeService extends Service {
     }
 
     public void grantSecureSettingsPermission() {
-        log("Granting android.permission.WRITE_SECURE_SETTINGS to com.akylas.enforcedoze");
-        executeCommandWithRoot("pm grant com.akylas.enforcedoze android.permission.WRITE_SECURE_SETTINGS");
+        log("Granting android.permission.WRITE_SECURE_SETTINGS to " + BuildConfig.APPLICATION_ID);
+        executeCommandWithRoot("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.WRITE_SECURE_SETTINGS");
     }
 
     public void grantSecureSettingsPermissionViaShizuku() {
-        log("Granting android.permission.WRITE_SECURE_SETTINGS to com.akylas.enforcedoze via Shizuku");
-        shizukuHandler.executeCommand("pm grant com.akylas.enforcedoze android.permission.WRITE_SECURE_SETTINGS",
+        log("Granting android.permission.WRITE_SECURE_SETTINGS to " + BuildConfig.APPLICATION_ID + " via Shizuku");
+        shizukuHandler.executeCommand("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.WRITE_SECURE_SETTINGS",
             (commandCode, exitCode, stdout, stderr) -> {
                 if (exitCode == 0) {
                     log("WRITE_SECURE_SETTINGS permission granted successfully");
@@ -483,13 +614,13 @@ public class ForceDozeService extends Service {
     }
 
     public void grantReadPhoneStatePermission() {
-        log("Granting android.permission.READ_PHONE_STATE to com.akylas.enforcedoze");
-        executeCommandWithRoot("pm grant com.akylas.enforcedoze android.permission.READ_PHONE_STATE");
+        log("Granting android.permission.READ_PHONE_STATE to " + BuildConfig.APPLICATION_ID);
+        executeCommandWithRoot("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.READ_PHONE_STATE");
     }
 
     public void grantReadPhoneStatePermissionViaShizuku() {
-        log("Granting android.permission.READ_PHONE_STATE to com.akylas.enforcedoze via Shizuku");
-        shizukuHandler.executeCommand("pm grant com.akylas.enforcedoze android.permission.READ_PHONE_STATE",
+        log("Granting android.permission.READ_PHONE_STATE to " + BuildConfig.APPLICATION_ID + " via Shizuku");
+        shizukuHandler.executeCommand("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.READ_PHONE_STATE",
             (commandCode, exitCode, stdout, stderr) -> {
                 if (exitCode == 0) {
                     log("READ_PHONE_STATE permission granted successfully");
@@ -498,8 +629,8 @@ public class ForceDozeService extends Service {
     }
 
     public void grantSensorPrivacyPermission() {
-        log("Granting android.permission.MANAGE_SENSOR_PRIVACY to com.akylas.enforcedoze");
-        executeCommandWithRoot("pm grant com.akylas.enforcedoze android.permission.MANAGE_SENSOR_PRIVACY");
+        log("Granting android.permission.MANAGE_SENSOR_PRIVACY to " + BuildConfig.APPLICATION_ID);
+        executeCommandWithRoot("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.MANAGE_SENSOR_PRIVACY");
     }
 
     public void addSelfToDozeWhitelist() {
@@ -510,10 +641,10 @@ public class ForceDozeService extends Service {
         if (!pm.isIgnoringBatteryOptimizations(packageName)) {
             if (!Utils.isDeviceRunningOnN()) {
                 log("Adding service to Doze whitelist for stability");
-                executeCommand("dumpsys deviceidle whitelist +com.akylas.enforcedoze");
+                executeCommand("dumpsys deviceidle whitelist +" + BuildConfig.APPLICATION_ID);
             } else if (Utils.isDeviceRunningOnN() && (isSuAvailable || isShizukuAvailable)) {
                 log("Adding service to Doze whitelist for stability");
-                executeCommandWithRoot("dumpsys deviceidle whitelist +com.akylas.enforcedoze");
+                executeCommandWithRoot("dumpsys deviceidle whitelist +" + BuildConfig.APPLICATION_ID);
             } else {
                 log("Requesting user to disable battery optimizations via system dialog...");
                 try {
@@ -600,6 +731,7 @@ public class ForceDozeService extends Service {
                 }
                 if (dozeAppBlocklist.size() != 0) {
                     log("Disabling apps that are in the Doze app blocklist");
+                    blockedAppsApplied = true;
                     if (whitelistCurrentApp) {
                         // when root is not available we use UsageStatsManager
                         // but i am not sure i can trust it as it does not really returns the front
@@ -607,39 +739,43 @@ public class ForceDozeService extends Service {
                         if (isSuAvailable || isShizukuAvailable) {
                             try {
                                 getFocusedApps((HashSet<String> packageNames) -> {
+                                    List<String> toBlock = new ArrayList<>();
                                     for (String pkg : dozeAppBlocklist) {
                                         if (!packageNames.contains(pkg)) {
-                                            setPackageState(context, pkg, false);
+                                            toBlock.add(pkg);
                                         }
                                     }
+                                    setPackagesState(toBlock, false);
                                 });
                             } catch (Exception e) {
                                 e.printStackTrace();
                             }
                         } else {
                             String currentlyFocused = getNonRootFocusedPackageName();
+                            List<String> toBlock = new ArrayList<>();
                             for (String pkg : dozeAppBlocklist) {
                                 if (!pkg.equals(currentlyFocused)) {
-                                    setPackageState(context, pkg, false);
+                                    toBlock.add(pkg);
                                 }
                             }
+                            setPackagesState(toBlock, false);
                         }
                     } else {
-
-                        for (String pkg : dozeAppBlocklist) {
-                            setPackageState(context, pkg, false);
-                        }
+                        setPackagesState(dozeAppBlocklist, false);
                     }
 
                 }
 
                 if (dozeNotificationBlocklist.size() != 0) {
                     log("Disabling notifications for apps in the Notification blocklist");
+                    blockedAppsApplied = true;
+                    List<String> toBlock = new ArrayList<>();
                     for (String pkg : dozeNotificationBlocklist) {
                         if (!dozeAppBlocklist.contains(pkg)) {
-                            setNotificationEnabledForPackage(pkg, false);
+                            toBlock.add(pkg);
                         }
                     }
+                    setNotificationsEnabledForPackages(toBlock, false);
                 }
                 timeEnterDoze = System.currentTimeMillis();
                 if (Utils.isConnectedToCharger(getApplicationContext())) {
@@ -648,6 +784,7 @@ public class ForceDozeService extends Service {
                     lastDozeEnterBatteryLife = Utils.getBatteryLevel(getApplicationContext());
                 }
                 log("Entering Doze");
+                dozeStateStore.setInDoze(true);
                 applyDoze();
                 lastScreenOff = Utils.getDateCurrentTimeZone(System.currentTimeMillis());
 
@@ -657,6 +794,7 @@ public class ForceDozeService extends Service {
                 }
 
                 if (disableMotionSensors) {
+                    dozeStateStore.markApplied(DozeStateStore.KEY_MOTION_SENSORS, true);
                     disableSensorsTimer = new Timer();
                     disableSensorsTimer.schedule(new TimerTask() {
                         @Override
@@ -684,21 +822,31 @@ public class ForceDozeService extends Service {
         }
     }
 
+    /**
+     * Undoes the app/notification blocking. Several triggers can reach this for one wake-up
+     * (screen on, then exitDoze), so it no-ops once the unblock has already been issued rather
+     * than sending a second batch of shell commands.
+     */
     private void reEnableBlockedAppsAndNotifications() {
+        if (!blockedAppsApplied) {
+            return;
+        }
+        blockedAppsApplied = false;
+
         if (dozeAppBlocklist.size() != 0) {
             log("Re-enabling apps that are in the Doze app blocklist");
-            for (String pkg : dozeAppBlocklist) {
-                setPackageState(getApplicationContext(), pkg, true);
-            }
+            setPackagesState(dozeAppBlocklist, true);
         }
 
         if (dozeNotificationBlocklist.size() != 0) {
             log("Re-enabling notifications for apps in the Notification blocklist");
+            List<String> toUnblock = new ArrayList<>();
             for (String pkg : dozeNotificationBlocklist) {
                 if (!dozeAppBlocklist.contains(pkg)) {
-                    setNotificationEnabledForPackage(pkg, true);
+                    toUnblock.add(pkg);
                 }
             }
+            setNotificationsEnabledForPackages(toUnblock, true);
         }
     }
 
@@ -710,6 +858,7 @@ public class ForceDozeService extends Service {
             lastDozeExitBatteryLife = Utils.getBatteryLevel(getApplicationContext());
         }
         lastKnownState = "ACTIVE";
+        dozeStateStore.setInDoze(false);
         leaveDoze();
 
         log("exitDoze current Doze state: " + newDeviceIdleState);
@@ -721,17 +870,9 @@ public class ForceDozeService extends Service {
 
         reEnableBlockedAppsAndNotifications();
 
-        if (disableMotionSensors) {
-            enableSensorsTimer = new Timer();
-            enableSensorsTimer.schedule(new TimerTask() {
-                @Override
-                public void run() {
-                    log("Re-enabling motion sensors");
-                    executeCommand("dumpsys sensorservice enable");
-                    autoRotateBrightnessFix();
-                }
-            }, 2000);
-        }
+        // Motion sensors are part of the persisted state now, so they are re-enabled (and verified,
+        // and retried) by the same code path as the radios instead of a one-shot timer.
+        restoreDeviceStates(getApplicationContext(), "exit Doze");
 
         if (showPersistentNotif) {
             Timer updateNotif = new Timer();
@@ -750,8 +891,8 @@ public class ForceDozeService extends Service {
     }
     public void executeCommand(final String command, Shell.OnCommandResultListener2 onResult, Boolean printOutput) {
         boolean useShizuku = Utils.isShizukuMode(getApplicationContext());
-        
-        if (useShizuku && isShizukuAvailable) {
+
+        if (useShizuku) {
             shizukuHandler.executeCommand(command, (commandCode, exitCode, stdout, stderr) -> {
                 if (onResult != null) {
                     onResult.onCommandResult(commandCode, exitCode, stdout, stderr);
@@ -848,16 +989,25 @@ public class ForceDozeService extends Service {
     }
 
     public void executeCommandWithRoot(final String command, Shell.OnCommandResultListener2 onResult) {
+        executeCommandWithRoot(command, onResult, true);
+    }
+
+    public void executeCommandWithRoot(final String command, Shell.OnCommandResultListener2 onResult, boolean printOutput) {
         boolean useShizuku = Utils.isShizukuMode(getApplicationContext());
-        
-        if (useShizuku && isShizukuAvailable) {
+
+        if (useShizuku) {
+            // Do not gate on the cached availability flag: ShizukuHandler waits for the binder and
+            // retries by itself, so a command issued while Shizuku is briefly disconnected is
+            // delivered once it comes back instead of being dropped.
             shizukuHandler.executeCommand(command, (commandCode, exitCode, stdout, stderr) -> {
                 if (onResult != null) {
                     onResult.onCommandResult(commandCode, exitCode, stdout, stderr);
                 }
-                printShellOutput(stdout);
-                printShellOutput(stderr);
-            }, true);
+                if (printOutput) {
+                    printShellOutput(stdout);
+                    printShellOutput(stderr);
+                }
+            }, printOutput);
             return;
         }
 
@@ -867,8 +1017,10 @@ public class ForceDozeService extends Service {
                     if (onResult != null) {
                         onResult.onCommandResult(commandCode, exitCode, STDOUT, STDERR);
                     }
-                    printShellOutput(STDOUT);
-                    printShellOutput(STDERR);
+                    if (printOutput) {
+                        printShellOutput(STDOUT);
+                        printShellOutput(STDERR);
+                    }
                 });
             } else {
                 rootSession = new Shell.Builder().
@@ -878,12 +1030,20 @@ public class ForceDozeService extends Service {
                         open((success, reason) -> {
                             if (reason != Shell.OnShellOpenResultListener.SHELL_RUNNING) {
                                 log("Error opening root shell: exitCode " + reason);
+                                if (onResult != null) {
+                                    // Report the failure instead of leaving the caller waiting
+                                    // forever for a callback that will never come.
+                                    onResult.onCommandResult(0, -1, new ArrayList<>(), new ArrayList<>());
+                                }
                             } else {
                                 rootSession.addCommand(command, 0, (Shell.OnCommandResultListener2) (commandCode, exitCode, STDOUT, STDERR) -> {
                                     if (onResult != null) {
                                         onResult.onCommandResult(commandCode, exitCode, STDOUT, STDERR);
                                     }
-                                    printShellOutput(STDOUT);
+                                    if (printOutput) {
+                                        printShellOutput(STDOUT);
+                                        printShellOutput(STDERR);
+                                    }
                                 });
                             }
                         });
@@ -902,16 +1062,42 @@ public class ForceDozeService extends Service {
         }
     }
 
-    public void saveDozeDataStats() {
-        SharedPreferences sharedPreferences = getDefaultSharedPreferences(getApplicationContext());
-        SharedPreferences.Editor editor = sharedPreferences.edit();
-        editor.remove("dozeUsageDataAdvanced");
-        editor.apply();
-        editor.putStringSet("dozeUsageDataAdvanced", dozeUsageData);
-        editor.apply();
+    /**
+     * SharedPreferences hands back the very instance it keeps in its cache, and explicitly forbids
+     * modifying it. The old code added entries to that instance and then wrote it back, so
+     * SharedPreferencesImpl saw "new value equals existing value" and skipped the write entirely -
+     * which is why the stats (and anything else stored as a string set) never survived a restart.
+     * Always read into a copy, and always write a fresh copy back.
+     */
+    private Set<String> loadStringSet(String key) {
+        return new LinkedHashSet<>(PreferenceManager.getDefaultSharedPreferences(getApplicationContext())
+                .getStringSet(key, new LinkedHashSet<String>()));
     }
 
+    private Set<String> loadDozeUsageData() {
+        return loadStringSet("dozeUsageDataAdvanced");
+    }
+
+    public void saveDozeDataStats() {
+        SharedPreferences sharedPreferences = getDefaultSharedPreferences(getApplicationContext());
+        sharedPreferences.edit()
+                .putStringSet("dozeUsageDataAdvanced", new LinkedHashSet<>(dozeUsageData))
+                .apply();
+    }
+
+    /**
+     * The toggle dance below sleeps 4 x 100ms. Upstream only ever reached it from a background
+     * TimerTask; the reversion path calls it straight from the screen-on broadcast, so it gets its
+     * own thread rather than stalling the main thread for 400ms at exactly the wrong moment.
+     */
     public void autoRotateBrightnessFix() {
+        if (!useAutoRotateAndBrightnessFix) {
+            return;
+        }
+        new Thread(this::runAutoRotateBrightnessFix, "ForceDozeAutoRotateFix").start();
+    }
+
+    private void runAutoRotateBrightnessFix() {
         if (useAutoRotateAndBrightnessFix && Utils.isWriteSettingsPermissionGranted(getApplicationContext())) {
             log("Executing auto-rotate fix by doing a toggle");
             log("Current value: " + (Utils.isAutoRotateEnabled(getApplicationContext())) + " to " + (!Utils.isAutoRotateEnabled(getApplicationContext())));
@@ -959,7 +1145,10 @@ public class ForceDozeService extends Service {
                 .setContentIntent(intent)
                 .setOngoing(true)
                 .build();
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+        // FOREGROUND_SERVICE_TYPE_SPECIAL_USE and the matching manifest value both arrive in API
+        // 34. On Android 13 the manifest attribute parses to "no type", so passing the constant
+        // there throws IllegalArgumentException ("not a subset of foregroundServiceType").
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(PERSISTENT_NOTIF_ID, n);
         } else {
             startForeground(PERSISTENT_NOTIF_ID, n,
@@ -1015,7 +1204,10 @@ public class ForceDozeService extends Service {
                 .setShowWhen(false)
                 .build();
         
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+        // FOREGROUND_SERVICE_TYPE_SPECIAL_USE and the matching manifest value both arrive in API
+        // 34. On Android 13 the manifest attribute parses to "no type", so passing the constant
+        // there throws IllegalArgumentException ("not a subset of foregroundServiceType").
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(PERSISTENT_NOTIF_ID, n);
         } else {
             startForeground(PERSISTENT_NOTIF_ID, n,
@@ -1037,16 +1229,10 @@ public class ForceDozeService extends Service {
                 if (transactionCode != null && transactionCode.length() > 0) {
                     @SuppressLint("MissingPermission") int subscriptionId = mSubscriptionManager.getActiveSubscriptionInfoList().get(i).getSubscriptionId();
                     command = "service call phone " + transactionCode + " i32 " + subscriptionId + " i32 " + targetState;
-                    List<String> output = new ArrayList<>();
-                    List<String> err = new ArrayList<>();
-                    Shell.Pool.SU.run(command, output, err, false);
-                    if (err.isEmpty()) {
-                        for (String s : output) {
-                            log(s);
-                        }
-                    } else {
-                        log("Error occurred while executing command (" + err + ")");
-                    }
+                    // Goes through executeCommandWithRoot so it uses Shizuku when that is the
+                    // configured backend; Shell.Pool.SU always tried su and silently did nothing
+                    // (while blocking the caller) on a Shizuku-only device.
+                    executeCommandWithRoot(command);
                 }
             }
         } catch (Exception e) {
@@ -1073,11 +1259,26 @@ public class ForceDozeService extends Service {
     }
 
     public void setNotificationEnabledForPackage(String packageName, boolean enabled) {
-        int command = 0;
+        setNotificationsEnabledForPackages(Collections.singletonList(packageName), enabled);
+    }
+
+    /**
+     * Toggles notifications for a whole set of packages using a single shell invocation.
+     * <p>
+     * The old per-package version called getInstalledPackages(GET_META_DATA) - a full enumeration
+     * of every app on the device, several hundred of them on One UI - once for <em>each</em>
+     * package, just to look up one uid. The uid is now read directly.
+     */
+    public void setNotificationsEnabledForPackages(Collection<String> packageNames, boolean enabled) {
+        if (packageNames == null || packageNames.isEmpty()) {
+            return;
+        }
+
+        int transaction = 0;
         try {
             @SuppressLint("PrivateApi") Field field = Class.forName("android.app.INotificationManager").getDeclaredClasses()[0].getDeclaredField("TRANSACTION_setNotificationsEnabledForPackage");
             field.setAccessible(true);
-            command = field.getInt(null);
+            transaction = field.getInt(null);
         } catch (ClassNotFoundException e) {
             log(e.toString());
         } catch (NoSuchFieldException e2) {
@@ -1085,71 +1286,94 @@ public class ForceDozeService extends Service {
         } catch (IllegalAccessException e3) {
             log(e3.toString());
         }
+        if (transaction == 0) {
+            Log.e(TAG, "Could not resolve the notification transaction code, skipping");
+            return;
+        }
 
-        ArrayList<PackageInfo> packageInfos = new ArrayList<>(getPackageManager().getInstalledPackages(PackageManager.GET_META_DATA));
-
-        for (PackageInfo p : packageInfos) {
-            if (p.packageName.equals(packageName)) {
-                log((enabled ? "Turning on " : "Turning off ") + "notifications for " + packageName);
-                String exec = String.format(Locale.US, "service call notification %d s16 %s i32 %d i32 %d", command, packageName, p.applicationInfo.uid, enabled ? 1 : 0);
-                executeCommandWithRoot(exec);
+        List<String> commands = new ArrayList<>();
+        for (String packageName : packageNames) {
+            if (!Utils.isValidPackageName(packageName)) {
+                Log.e(TAG, "Refusing to run a shell command for invalid package name: " + packageName);
+                continue;
+            }
+            try {
+                int uid = getPackageManager().getApplicationInfo(packageName, 0).uid;
+                commands.add(String.format(Locale.US, "service call notification %d s16 %s i32 %d i32 %d",
+                        transaction, packageName, uid, enabled ? 1 : 0));
+            } catch (PackageManager.NameNotFoundException e) {
+                log("Skipping notifications for '" + packageName + "', it is not installed");
             }
         }
+
+        if (commands.isEmpty()) {
+            return;
+        }
+        log((enabled ? "Turning on " : "Turning off ") + "notifications for " + commands.size() + " package(s)");
+        executeCommandWithRoot(TextUtils.join("; ", commands), null, false);
     }
 
     public void setPackageState(Context context, String packageName, boolean enabled) {
-        log((enabled ? "Enabling " : "Disabling ") + packageName);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            executeCommandWithRoot("pm " + (enabled ? "unsuspend " : "suspend ") + packageName);
-        } else {
-            executeCommandWithRoot("pm " + (enabled ? "enable " : "disable ") + packageName);
-        }
+        setPackagesState(Collections.singletonList(packageName), enabled);
     }
 
+    /**
+     * Suspends or un-suspends a whole set of packages in <em>one</em> shell invocation.
+     * <p>
+     * Every command previously went through its own Shizuku process, serialised behind the single
+     * command thread. With 20-50 blocked apps that meant 20-50 round trips on wake-up, which is why
+     * the launcher icons came back one at a time over several seconds. A single {@code for} loop in
+     * one shell restores them together.
+     */
+    public void setPackagesState(Collection<String> packageNames, boolean enabled) {
+        if (packageNames == null || packageNames.isEmpty()) {
+            return;
+        }
+
+        StringBuilder packageList = new StringBuilder();
+        int count = 0;
+        for (String packageName : packageNames) {
+            if (!Utils.isValidPackageName(packageName)) {
+                Log.e(TAG, "Refusing to run a shell command for invalid package name: " + packageName);
+                continue;
+            }
+            if (count > 0) {
+                packageList.append(' ');
+            }
+            packageList.append(packageName.trim());
+            count++;
+        }
+        if (count == 0) {
+            return;
+        }
+
+        // pm suspend/unsuspend is what dims the launcher icons and makes widgets read
+        // "unavailable"; that is the intended blocking behaviour, unchanged from upstream.
+        String verb;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            verb = enabled ? "unsuspend" : "suspend";
+        } else {
+            verb = enabled ? "enable" : "disable";
+        }
+
+        log((enabled ? "Enabling " : "Disabling ") + count + " blocklisted package(s) in one batch");
+        // A shell loop rather than "pm suspend a b c": passing several packages to one pm call is
+        // not supported on every Android version, while the loop behaves the same everywhere.
+        executeCommandWithRoot("for p in " + packageList + "; do pm " + verb + " \"$p\"; done", null, false);
+    }
+
+    /**
+     * Always returns a usable state. The previous implementation only ever filled {@link #state}
+     * from {@code rootSession}, which is null in Shizuku mode, so this returned the empty string
+     * and every "are we dozing?" comparison downstream was meaningless. PowerManager gives us a
+     * synchronous ACTIVE/IDLE answer; the dumpsys query then refines it in the background.
+     */
     public String getDeviceIdleState() {
         log("Fetching Device Idle state...");
         if (Utils.isDeviceRunningOnN()) {
+            state = pm.isDeviceIdleMode() ? "IDLE" : "ACTIVE";
             if (isSuAvailable || isShizukuAvailable) {
-                if (rootSession != null) {
-                    rootSession.addCommand("dumpsys deviceidle", 0, (Shell.OnCommandResultListener2) (commandCode, exitCode, output, stderr) -> {
-                        if (!output.isEmpty()) {
-                            String outputString = TextUtils.join(", ", output);
-                            if (outputString.contains("mState=ACTIVE")) {
-                                state = "ACTIVE";
-                            } else if (outputString.contains("mState=INACTIVE")) {
-                                state = "INACTIVE";
-                            } else if (outputString.contains("mState=IDLE_PENDING")) {
-                                state = "IDLE_PENDING";
-                            } else if (outputString.contains("mState=SENSING")) {
-                                state = "SENSING";
-                            } else if (outputString.contains("mState=LOCATING")) {
-                                state = "LOCATING";
-                            } else if (outputString.contains("mState=IDLE")) {
-                                state = "IDLE";
-                            } else if (outputString.contains("mState=IDLE_MAINTENANCE")) {
-                                state = "IDLE_MAINTENANCE";
-                            } else if (outputString.contains("mState=PRE_IDLE")) {
-                                state = "PRE_IDLE";
-                            } else if (outputString.contains("mState=WAITING_FOR_NETWORK")) {
-                                state = "WAITING_FOR_NETWORK";
-                            } else if (outputString.contains("mState=OVERRIDE")) {
-                                state = "OVERRIDE";
-                            }
-                        } else {
-                            if (pm.isDeviceIdleMode()) {
-                                state = "IDLE";
-                            } else {
-                                state = "ACTIVE";
-                            }
-                        }
-                    });
-                }
-            } else {
-                if (pm.isDeviceIdleMode()) {
-                    state = "IDLE";
-                } else {
-                    state = "ACTIVE";
-                }
+                refreshDeviceIdleStateAsync();
             }
         } else {
             List<String> output = new ArrayList<>();
@@ -1159,25 +1383,38 @@ public class ForceDozeService extends Service {
             } catch (Shell.ShellDiedException e) {
                 e.printStackTrace();
             }
-            String outputString = TextUtils.join(", ", output);
-            if (outputString.contains("mState=ACTIVE")) {
-                state = "ACTIVE";
-            } else if (outputString.contains("mState=INACTIVE")) {
-                state = "INACTIVE";
-            } else if (outputString.contains("mState=IDLE_PENDING")) {
-                state = "IDLE_PENDING";
-            } else if (outputString.contains("mState=SENSING")) {
-                state = "SENSING";
-            } else if (outputString.contains("mState=LOCATING")) {
-                state = "LOCATING";
-            } else if (outputString.contains("mState=IDLE")) {
-                state = "IDLE";
-            } else if (outputString.contains("mState=IDLE_MAINTENANCE")) {
-                state = "IDLE_MAINTENANCE";
+            String parsed = parseDeviceIdleState(output);
+            if (parsed != null) {
+                state = parsed;
             }
         }
 
         return state;
+    }
+
+    private void refreshDeviceIdleStateAsync() {
+        executeCommandWithRoot("dumpsys deviceidle", (commandCode, exitCode, output, stderr) -> {
+            String parsed = parseDeviceIdleState(output);
+            if (parsed != null) {
+                state = parsed;
+            }
+        }, false);
+    }
+
+    private String parseDeviceIdleState(List<String> output) {
+        if (output == null || output.isEmpty()) {
+            return null;
+        }
+        String outputString = TextUtils.join(", ", output);
+        // Order matters: "mState=IDLE_MAINTENANCE" also contains "mState=IDLE".
+        String[] states = {"ACTIVE", "INACTIVE", "IDLE_PENDING", "SENSING", "LOCATING",
+                "IDLE_MAINTENANCE", "PRE_IDLE", "WAITING_FOR_NETWORK", "OVERRIDE", "IDLE"};
+        for (String candidate : states) {
+            if (outputString.contains("mState=" + candidate)) {
+                return candidate;
+            }
+        }
+        return null;
     }
 
 
@@ -1217,13 +1454,13 @@ public class ForceDozeService extends Service {
 
     public void setAllSensorsState(Context context, boolean enabled) {
         if (!isSuAvailable && !isShizukuAvailable) {
+            log("Cannot toggle sensors, neither root nor Shizuku is available");
             return;
         }
 //        if (!Utils.isSecureSensorPrivacyPermissionGranted(context)) {
 //            grantSensorPrivacyPermission();
 //        }
 
-        String command;
         try {
             int transactionCode = 4;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -1231,20 +1468,11 @@ public class ForceDozeService extends Service {
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 transactionCode = 8;
             }
-//            executeCommandWithRoot("service call sensor_privacy " + transactionCode + " i32 " +(enabled? 0:1));
-            command = "service call sensor_privacy " + transactionCode + " i32 " + (enabled ? 0 : 1);
-            List<String> output = new ArrayList<>();
-            List<String> err = new ArrayList<>();
-            Shell.Pool.SU.run(command, output, err, false);
-            if (err.isEmpty()) {
-//                for (String s : output) {
-//                    log(s);
-//                }
-            } else {
-                log("Error occurred while executing command (" + err + ")");
-            }
+            // Was running through Shell.Pool.SU, which bypassed Shizuku entirely: on a Shizuku-only
+            // device the sensors were never turned back on. It also blocked the calling thread.
+            executeCommandWithRoot("service call sensor_privacy " + transactionCode + " i32 " + (enabled ? 0 : 1));
         } catch (Exception e) {
-            log("Failed to toggle sensor off: " + e.getMessage());
+            log("Failed to toggle sensors: " + e.getMessage());
         }
     }
 
@@ -1354,50 +1582,61 @@ public class ForceDozeService extends Service {
     public void actualEnterDozeHandleNetwork(Context context, String packageName) {
         log("playingPackageName: " + packageName);
         // Capture the CURRENT device state at the moment screen turns off
-        // These represent user's preference while screen was on
-        wasWiFiTurnedOn = Utils.isWiFiEnabled(context);
-        wasMobileDataTurnedOn = Utils.isMobileDataEnabled(context);
-        wasAirplaneOn = Utils.isAirplaneEnabled(getContentResolver());
-        wasBluetoothOn = Utils.isBluetoothEnabled(getContentResolver());
-        wasGPSOn =  Utils.isLocationEnabled(getContentResolver());
-        wasHotSpotTurnedOn = Utils.isHotspotEnabled(context);
-        wasBatterSaverOn = Utils.isBatterSaverEnabled(getContentResolver());
+        // These represent user's preference while screen was on.
+        // Every toggle we actually change is written to disk *before* the shell command runs, so a
+        // service kill mid-Doze cannot lose the information needed to put the device back.
+        boolean wasWiFiTurnedOn = Utils.isWiFiEnabled(context);
+        boolean wasMobileDataTurnedOn = Utils.isMobileDataEnabled(context);
+        boolean wasAirplaneOn = Utils.isAirplaneEnabled(getContentResolver());
+        boolean wasBluetoothOn = Utils.isBluetoothEnabled(getContentResolver());
+        boolean wasGPSOn = Utils.isLocationEnabled(getContentResolver());
+        boolean wasHotSpotTurnedOn = Utils.isHotspotEnabled(context);
+        boolean wasBatterSaverOn = Utils.isBatterSaverEnabled(getContentResolver());
+        dozeStateStore.recordPreDozeValue(DozeStateStore.KEY_HOTSPOT, wasHotSpotTurnedOn);
 
         if (turnOffAllSensorsInDoze) {
             log("Disabling All sensors");
+            dozeStateStore.markApplied(DozeStateStore.KEY_ALL_SENSORS, true);
             setAllSensorsState(context, false);
         }
         if (turnOffBiometricsInDoze) {
             log("Disabling Biometrics");
+            dozeStateStore.markApplied(DozeStateStore.KEY_BIOMETRICS, true);
             setBiometricsSensorState(context, false);
         }
-        if (turnOnBatterySaverInDoze) {
+        if (turnOnBatterySaverInDoze && !wasBatterSaverOn) {
             log("Enabling Battery Saver");
+            dozeStateStore.markApplied(DozeStateStore.KEY_BATTERY_SAVER, false);
             setBatterSaverState(context, true);
         }
 
         if (turnOnAirplaneInDoze && (ignoreIfHotspot || !wasHotSpotTurnedOn) && !wasAirplaneOn && packageName == null) {
             log("Enabling airplane");
+            dozeStateStore.markApplied(DozeStateStore.KEY_AIRPLANE, false);
             setAirplaneState(context, true);
         }
 
         if (turnOffBluetoothInDoze && wasBluetoothOn && packageName == null) {
             log("Disabling Bluetooth");
+            dozeStateStore.markApplied(DozeStateStore.KEY_BLUETOOTH, true);
             setBluetoothState(context, false);
         }
 
         if (turnOffGPSInDoze && wasGPSOn && packageName == null) {
             log("Disabling GPS/Location");
+            dozeStateStore.markApplied(DozeStateStore.KEY_GPS, true);
             setGPSState(context, false);
         }
 
         if (turnOffWiFiInDoze && (ignoreIfHotspot || !wasHotSpotTurnedOn) && wasWiFiTurnedOn && packageName == null) {
             log("Disabling WiFi");
+            dozeStateStore.markApplied(DozeStateStore.KEY_WIFI, true);
             disableWiFi();
         }
 
         if (turnOffDataInDoze && wasMobileDataTurnedOn && (ignoreIfHotspot || !wasHotSpotTurnedOn) && (packageName == null || wasWiFiTurnedOn)) {
             log("Disabling mobile data");
+            dozeStateStore.markApplied(DozeStateStore.KEY_MOBILE_DATA, true);
             disableMobileData();
         }
     }
@@ -1421,60 +1660,104 @@ public class ForceDozeService extends Service {
         actualEnterDozeHandleNetwork(context, null);
     }
 
-    public void leaveDozeHandleNetwork(Context context) {
+    /**
+     * Puts back every toggle we changed for Doze, driven by what is recorded on disk rather than by
+     * in-memory fields, so a reversion still happens after the service was killed and recreated.
+     * <p>
+     * Commands are fired immediately and concurrently - each goes onto its own thread inside the
+     * shell backend - with no verification pass, no retry timer and no wakelock gate. That is what
+     * upstream did, and it is what makes a wake-up instant: the radios, the sensors and the app
+     * un-suspend all leave at the same moment rather than queueing behind one another.
+     */
+    public void restoreDeviceStates(Context context, String reason) {
+        restoreDeviceStates(context, reason, null);
+    }
 
-        if (turnOnAirplaneInDoze) {
-            log("wasAirplaneOn: " + wasAirplaneOn);
-            if (!wasAirplaneOn) {
-                log("disabling Airplane");
-                setAirplaneState(context, false);
-            }
+    /**
+     * @param onlyKeys when non-null, restricts the reversion to those toggles. Used for maintenance
+     *                 windows, which bring the radios back briefly but must leave the sensors off
+     *                 (they are only re-disabled when a fresh Doze cycle starts).
+     */
+    public void restoreDeviceStates(Context context, String reason, Set<String> onlyKeys) {
+        Set<String> pending = dozeStateStore.getAppliedKeys();
+        if (onlyKeys != null) {
+            pending.retainAll(onlyKeys);
         }
-        if (turnOffBluetoothInDoze) {
-            log("wasBluetoothOn: " + wasBluetoothOn);
-            if (wasBluetoothOn) {
-                log("Enabling Bluetooth");
-                setBluetoothState(context, true);
-            }
+        if (pending.isEmpty()) {
+            return;
         }
-        if (turnOffGPSInDoze) {
-            log("wasGPSOn: " + wasGPSOn);
-            if (wasGPSOn) {
-                log("Enabling GPS/Location");
-                setGPSState(context, true);
-            }
-        }
-        if (turnOffWiFiInDoze) {
-            log("wasWiFiTurnedOn: " + wasWiFiTurnedOn);
-            if (wasWiFiTurnedOn) {
-                log("Enabling WiFi");
-                enableWiFi();
-            }
+        log("Restoring device state (" + reason + "): " + pending);
 
-        }
-        if (turnOffAllSensorsInDoze) {
-            log("Enabling All sensors");
-            setAllSensorsState(context, true);
-        }
-        // biometrics are re enabled directly on screen on
-//        if (turnOffBiometricsInDoze) {
-//            log("Enabling biometrics");
-//            setBiometricsSensorState(context, true);
-//        }
-        if (turnOnBatterySaverInDoze) {
-            log("Disabling battery saver");
-            setBatterSaverState(context, false);
-        }
-
-        if (turnOffDataInDoze) {
-            log("wasDataTurnedOn: " + wasMobileDataTurnedOn);
-            if (wasMobileDataTurnedOn) {
-                log("Enabling mobile data");
-                enableMobileData();
+        Context appContext = context.getApplicationContext();
+        for (String key : pending) {
+            try {
+                performRestore(appContext, key);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to restore '" + key + "': " + e.getMessage());
             }
         }
-        // Note: was... properties are NOT reset here anymore.
-        // They will be reset when screen turns ON to track new user preferences.
+        // One write for the whole batch, after every command has been fired. The on-disk marks
+        // exist to survive process death, not to track command results, so nothing waits on them.
+        dozeStateStore.clearApplied(pending);
+    }
+
+    /**
+     * Cancels a delayed enterDoze if one is armed. Timer.cancel() makes the instance unusable, but
+     * every scheduling site already builds a fresh Timer, so this is safe to call at any time.
+     */
+    private void cancelPendingEnterDoze() {
+        try {
+            if (enterDozeTimer != null) {
+                enterDozeTimer.cancel();
+                enterDozeTimer = new Timer();
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Could not cancel the pending enterDoze timer: " + e.getMessage());
+        }
+    }
+
+    private void performRestore(Context context, String key) {
+        switch (key) {
+            case DozeStateStore.KEY_AIRPLANE:
+                setAirplaneState(context, dozeStateStore.getPreDozeValue(key, false));
+                break;
+            case DozeStateStore.KEY_BLUETOOTH:
+                setBluetoothState(context, dozeStateStore.getPreDozeValue(key, true));
+                break;
+            case DozeStateStore.KEY_GPS:
+                setGPSState(context, dozeStateStore.getPreDozeValue(key, true));
+                break;
+            case DozeStateStore.KEY_WIFI:
+                if (dozeStateStore.getPreDozeValue(key, true)) {
+                    enableWiFi();
+                } else {
+                    disableWiFi();
+                }
+                break;
+            case DozeStateStore.KEY_MOBILE_DATA:
+                if (dozeStateStore.getPreDozeValue(key, true)) {
+                    enableMobileData();
+                } else {
+                    disableMobileData();
+                }
+                break;
+            case DozeStateStore.KEY_BATTERY_SAVER:
+                setBatterSaverState(context, dozeStateStore.getPreDozeValue(key, false));
+                break;
+            case DozeStateStore.KEY_ALL_SENSORS:
+                setAllSensorsState(context, dozeStateStore.getPreDozeValue(key, true));
+                break;
+            case DozeStateStore.KEY_BIOMETRICS:
+                setBiometricsSensorState(context, dozeStateStore.getPreDozeValue(key, true));
+                break;
+            case DozeStateStore.KEY_MOTION_SENSORS:
+                executeCommand("dumpsys sensorservice enable");
+                autoRotateBrightnessFix();
+                break;
+            default:
+                Log.e(TAG, "Unknown state key: " + key);
+                break;
+        }
     }
 
     public void handleScreenOn(Context context, int time, int delay) {
@@ -1488,18 +1771,19 @@ public class ForceDozeService extends Service {
             }
         }
 
-        // Restore settings based on was... properties, THEN reset them
-        leaveDozeHandleNetwork(context);
-        
-        // Reset was... properties to track new user preferences while screen is on
-        // This ensures we capture fresh state when screen next turns off
-        wasWiFiTurnedOn = false;
-        wasBatterSaverOn = false;
-        wasMobileDataTurnedOn = false;
-        wasAirplaneOn = false;
-        wasBluetoothOn = false;
-        wasGPSOn = false;
-        
+        dozeStateStore.setInDoze(false);
+        // A maintenance window cannot outlive the screen turning on
+        maintenance = false;
+        // Always drop a delayed enterDoze: it used to be cancelled only when the device was found
+        // ACTIVE, so turning the screen on during the delay could still let Doze fire afterwards.
+        cancelPendingEnterDoze();
+
+        // Everything below fires immediately and runs concurrently - the app un-suspend, the
+        // radios and the sensors all leave at once. Unblocking the apps is issued first purely
+        // because a greyed-out launcher is the most visible thing the user is waiting on.
+        reEnableBlockedAppsAndNotifications();
+        restoreDeviceStates(context, "screen on");
+
         String newDeviceIdleState = getDeviceIdleState();
         if (!newDeviceIdleState.equals("ACTIVE") || !lastKnownState.equals("ACTIVE")) {
             log("Exiting Doze");
@@ -1510,7 +1794,6 @@ public class ForceDozeService extends Service {
             } else {
                 log("Cancelling enterDoze() because user turned on screen and " + (time) + "ms has not passed OR disableWhenCharging=true");
             }
-            enterDozeTimer.cancel();
             // Ensure apps in dozeAppBlocklist are re-enabled even when device is already ACTIVE
             reEnableBlockedAppsAndNotifications();
         }
@@ -1520,6 +1803,11 @@ public class ForceDozeService extends Service {
 
         @Override
         public void onReceive(final Context context, Intent intent) {
+            final String action = intent != null ? intent.getAction() : null;
+            if (action == null) {
+                return;
+            }
+
             int time = Settings.Secure.getInt(getContentResolver(), "lock_screen_lock_after_timeout", 5000);
             if (time == 0) {
                 time = 1000;
@@ -1527,14 +1815,18 @@ public class ForceDozeService extends Service {
             int delay = dozeEnterDelay * 1000;
             time = time + delay;
 
-            if (intent.getAction().equals(Intent.ACTION_AIRPLANE_MODE_CHANGED)) {
+            if (action.equals(Intent.ACTION_AIRPLANE_MODE_CHANGED)) {
                 log("airplane mode changed " + Utils.isAirplaneEnabled(getContentResolver()));
-            } else if (intent.getAction().equals(Intent.ACTION_USER_PRESENT)) {
+            } else if (action.equals(Intent.ACTION_USER_PRESENT)) {
                 log("UNLOCK received " + waitForUnlock);
                 if (waitForUnlock) {
                     handleScreenOn(context, time, delay);
+                } else {
+                    // Screen-on may have been missed (or its restore may have failed while the
+                    // device was still locked); unlocking is the last moment to get this right.
+                    restoreDeviceStates(context, "user present");
                 }
-            } else if (intent.getAction().equals(Intent.ACTION_SCREEN_ON)) {
+            } else if (action.equals(Intent.ACTION_SCREEN_ON)) {
                 log("Screen ON received" + waitForUnlock);
                 if (!Utils.isDeviceLocked(context) || !waitForUnlock) {
                     handleScreenOn(context, time, delay);
@@ -1542,9 +1834,10 @@ public class ForceDozeService extends Service {
                 // we always enable biometrics on screen on for the user to be able to unlock
                 if (turnOffBiometricsInDoze) {
                     log("Enabling biometrics");
+                    dozeStateStore.clearApplied(DozeStateStore.KEY_BIOMETRICS);
                     setBiometricsSensorState(context, true);
                 }
-            } else if (intent.getAction().equals(Intent.ACTION_SCREEN_OFF)) {
+            } else if (action.equals(Intent.ACTION_SCREEN_OFF)) {
                 log("Screen OFF received");
                 if (disableWhenCharging && Utils.isConnectedToCharger(getApplicationContext())) {
                     log("Connected to charger and disableWhenCharging=true, skip entering Doze");
@@ -1588,19 +1881,24 @@ public class ForceDozeService extends Service {
                     }
 
                 }
-            } else if (intent.getAction().equals(Intent.ACTION_POWER_CONNECTED)) {
+            } else if (action.equals(Intent.ACTION_POWER_CONNECTED)) {
                 String newDeviceIdleState = getDeviceIdleState();
                 if (disableWhenCharging && (newDeviceIdleState.equals("IDLE") || !Utils.isScreenOn(context)) ) {
                     log("Charger connected, exiting Doze mode");
                     enterDozeTimer.cancel();
                     exitDoze(newDeviceIdleState);
                 }
-            } else if (intent.getAction().equals(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)) {
+            } else if (action.equals(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)) {
                 if (!Utils.isScreenOn(context)) {
                     log("ACTION_DEVICE_IDLE_MODE_CHANGED received");
+                    // Leaving deep idle while the screen is still off means a maintenance window.
+                    // Reading it from PowerManager works on every backend - the old code compared
+                    // against a dumpsys-derived string that was never filled in Shizuku mode, so
+                    // maintenance windows went unnoticed there.
+                    boolean inDeepIdle = pm.isDeviceIdleMode();
                     lastKnownState = getDeviceIdleState();
-                    log("Current (Deep) state: " + lastKnownState);
-                    if (lastKnownState.equals("IDLE_MAINTENANCE")) {
+                    log("Current (Deep) state: " + lastKnownState + ", deep idle: " + inDeepIdle);
+                    if (!inDeepIdle) {
                         if (!maintenance) {
                             log("Device exited Doze for maintenance");
                             if (!disableStats) {
@@ -1608,7 +1906,7 @@ public class ForceDozeService extends Service {
                                 saveDozeDataStats();
                             }
 
-                            leaveDozeHandleNetwork(context);
+                            restoreDeviceStates(context, "Doze maintenance window", MAINTENANCE_RESTORE_KEYS);
                             maintenance = true;
                         }
                     } else if (lastKnownState.equals("IDLE")) {
@@ -1623,7 +1921,7 @@ public class ForceDozeService extends Service {
                         }
                     }
                 }
-            } else if (intent.getAction().equals("android.os.action.LIGHT_DEVICE_IDLE_MODE_CHANGED")) {
+            } else if (action.equals("android.os.action.LIGHT_DEVICE_IDLE_MODE_CHANGED")) {
                 if (!Utils.isScreenOn(context)) {
                     log("LIGHT_DEVICE_IDLE_MODE_CHANGED received");
                     lastKnownState = getDeviceIdleState();

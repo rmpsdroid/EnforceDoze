@@ -20,6 +20,7 @@ import android.text.InputType;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.widget.Toast;
 
 import com.afollestad.materialdialogs.MaterialDialog;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
@@ -28,6 +29,7 @@ import com.nanotasks.Completion;
 import com.nanotasks.Tasks;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 
@@ -99,7 +101,12 @@ public class WhitelistAppsActivity extends AppCompatActivity {
     public boolean onOptionsItemSelected(MenuItem item) {
         int id = item.getItemId();
         if (id == R.id.action_add_whitelist) {
-            startActivityForResult(new Intent(WhitelistAppsActivity.this, PackageChooserActivity.class), 999);
+            Intent chooser = new Intent(WhitelistAppsActivity.this, PackageChooserActivity.class);
+            chooser.putExtra(PackageChooserActivity.EXTRA_MULTI_SELECT, true);
+            chooser.putExtra(PackageChooserActivity.EXTRA_PRESELECTED_PACKAGES,
+                    whitelistedPackages.toArray(new String[0]));
+            chooser.putExtra(PackageChooserActivity.EXTRA_TITLE, getString(R.string.whitelist_apps_setting_text));
+            startActivityForResult(chooser, 999);
         } else if (id == R.id.action_add_whitelist_package) {
             showManuallyAddPackageDialog();
         } else if (id == R.id.action_remove_whitelist_package) {
@@ -123,8 +130,12 @@ public class WhitelistAppsActivity extends AppCompatActivity {
         super.onActivityResult(requestCode, resultCode, data);
         if (data != null) {
             if (requestCode == 999) {
-                String pkg = data.getStringExtra("package_name");
-                verifyAndAddPackage(pkg);
+                String[] packages = data.getStringArrayExtra(PackageChooserActivity.RESULT_PACKAGE_NAMES);
+                if (packages != null) {
+                    addPackages(Arrays.asList(packages));
+                } else {
+                    verifyAndAddPackage(data.getStringExtra(PackageChooserActivity.RESULT_PACKAGE_NAME));
+                }
             } else if (requestCode == 998) {
                 String pkg = data.getStringExtra("package_name");
                 verifyAndRemovePackage(pkg);
@@ -236,6 +247,32 @@ public class WhitelistAppsActivity extends AppCompatActivity {
             modifyWhitelist(packageName, true);
             loadPackagesFromWhitelist();
         }
+    }
+
+    /**
+     * Whitelisting is a shell command per package rather than a preference write, so these are
+     * issued as a batch and the list is reloaded once at the end instead of after every app.
+     */
+    public void addPackages(List<String> packageNames) {
+        List<String> added = new ArrayList<>();
+        for (String packageName : packageNames) {
+            if (packageName != null && !packageName.trim().isEmpty() && !whitelistedPackages.contains(packageName)) {
+                modifyWhitelist(packageName, false);
+                added.add(packageName);
+            }
+        }
+
+        if (added.isEmpty()) {
+            displayDialog(getString(R.string.info_text), getString(R.string.app_already_whitelisted_text));
+            return;
+        }
+
+        log("Adding " + added.size() + " app(s) to the Doze whitelist: " + added);
+        Toast.makeText(this,
+                getResources().getQuantityString(R.plurals.apps_added_to_whitelist, added.size(), added.size()),
+                Toast.LENGTH_SHORT).show();
+        // The dumpsys calls are asynchronous; give them a moment before re-reading the list back.
+        recyclerView.postDelayed(this::loadPackagesFromWhitelist, 750);
     }
 
     public void modifyWhitelist(String packageName, boolean remove) {

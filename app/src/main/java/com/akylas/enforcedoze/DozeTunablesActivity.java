@@ -240,7 +240,7 @@ public class DozeTunablesActivity extends AppCompatActivity {
                 isShizukuAvailable = shizukuHandler.isShizukuAvailable();
                 log("Shizuku mode enabled, available: " + isShizukuAvailable);
                 if (isShizukuAvailable && !Utils.isSecureSettingsPermissionGranted(getActivity())) {
-                    executeCommand("pm grant com.akylas.enforcedoze android.permission.WRITE_SECURE_SETTINGS");
+                    executeCommand("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.WRITE_SECURE_SETTINGS");
                 }
                 return;
             }
@@ -271,7 +271,7 @@ public class DozeTunablesActivity extends AppCompatActivity {
                         if (isSuAvailable) {
                             log("Phone is rooted and SU permission granted");
                             if (!Utils.isSecureSettingsPermissionGranted(getActivity())) {
-                                executeCommand("pm grant com.akylas.enforcedoze android.permission.WRITE_SECURE_SETTINGS");
+                                executeCommand("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.WRITE_SECURE_SETTINGS");
                             }
                         } else {
                             log("SU permission denied or not available");

@@ -10,7 +10,6 @@ import android.preference.PreferenceManager;
 import android.service.quicksettings.Tile;
 import android.service.quicksettings.TileService;
 import androidx.annotation.RequiresApi;
-import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 
 @RequiresApi(api = Build.VERSION_CODES.N)
@@ -61,19 +60,15 @@ public class AirplaneTileService extends TileService {
         
         log(String.format("%s airplane mode in Doze", newValue ? "Enabling" : "Disabling"));
         
-        // Save the new value
-        settings.edit().putBoolean("turnOnAirplaneInDoze", newValue).apply();
-        
+        // Save the new value. commit() rather than apply(): the tile service is torn down right
+        // after onClick() and the write has to have reached disk before the service reads it back.
+        settings.edit().putBoolean("turnOnAirplaneInDoze", newValue).commit();
+
         // Update the tile
         updateTileState(newValue);
-        
-        // Notify the service to reload settings
-        sendBroadcastToReloadSettings();
-    }
 
-    private void sendBroadcastToReloadSettings() {
-        android.content.Intent intent = new android.content.Intent("reload-settings");
-        LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
+        // Notify the service to reload settings
+        Utils.notifyServiceSettingsChanged(getApplicationContext());
     }
 
     private void updateTileState(final boolean active) {

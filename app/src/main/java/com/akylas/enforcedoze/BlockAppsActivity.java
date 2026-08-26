@@ -21,6 +21,7 @@ import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.widget.ListView;
+import android.widget.Toast;
 
 import com.afollestad.materialdialogs.MaterialDialog;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
@@ -29,6 +30,7 @@ import com.nanotasks.Completion;
 import com.nanotasks.Tasks;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 
@@ -83,10 +85,7 @@ public class BlockAppsActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (Utils.isMyServiceRunning(ForceDozeService.class, BlockAppsActivity.this)) {
-            Intent intent = new Intent("reload-app-blocklist");
-            LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
-        }
+        Utils.notifyServiceAppBlocklistChanged(getApplicationContext());
     }
 
     @Override
@@ -99,7 +98,13 @@ public class BlockAppsActivity extends AppCompatActivity {
     public boolean onOptionsItemSelected(MenuItem item) {
         int id = item.getItemId();
         if (id == R.id.action_add_app_doze_blocklist) {
-            startActivityForResult(new Intent(BlockAppsActivity.this, PackageChooserActivity.class), 505);
+            Intent chooser = new Intent(BlockAppsActivity.this, PackageChooserActivity.class);
+            chooser.putExtra(PackageChooserActivity.EXTRA_MULTI_SELECT, true);
+            // Apps already blocked come back ticked and locked, so they cannot be added twice.
+            chooser.putExtra(PackageChooserActivity.EXTRA_PRESELECTED_PACKAGES,
+                    blockedPackages.toArray(new String[0]));
+            chooser.putExtra(PackageChooserActivity.EXTRA_TITLE, getString(R.string.app_blocklist_setting_title));
+            startActivityForResult(chooser, 505);
         } else if (id == R.id.action_add_app_doze_blocklist_package) {
             showManuallyAddPackageDialog();
         } else if (id == R.id.action_remove_app_doze_blocklist_package) {
@@ -118,8 +123,13 @@ public class BlockAppsActivity extends AppCompatActivity {
         super.onActivityResult(requestCode, resultCode, data);
         if (data != null) {
             if (requestCode == 505) {
-                String pkg = data.getStringExtra("package_name");
-                verifyAndAddPackage(pkg);
+                String[] packages = data.getStringArrayExtra(PackageChooserActivity.RESULT_PACKAGE_NAMES);
+                if (packages != null) {
+                    addPackages(Arrays.asList(packages));
+                } else {
+                    // Single-select fallback, still used by the manual-entry paths.
+                    verifyAndAddPackage(data.getStringExtra(PackageChooserActivity.RESULT_PACKAGE_NAME));
+                }
             } else if (requestCode == 506) {
                 String pkg = data.getStringExtra("package_name");
                 verifyAndRemovePackage(pkg);
@@ -223,6 +233,33 @@ public class BlockAppsActivity extends AppCompatActivity {
             modifyBlockList(packageName, true);
             loadPackagesFromBlockList();
         }
+    }
+
+    /**
+     * Adds a whole selection in one write instead of one preference commit (and one full list
+     * reload) per app, which is what the old single-pick flow did.
+     */
+    public void addPackages(List<String> packageNames) {
+        List<String> added = new ArrayList<>();
+        for (String packageName : packageNames) {
+            if (packageName != null && !packageName.trim().isEmpty() && !blockedPackages.contains(packageName)) {
+                blockedPackages.add(packageName);
+                added.add(packageName);
+            }
+        }
+
+        if (added.isEmpty()) {
+            displayDialog(getString(R.string.info_text), getString(R.string.app_already_in_blocklist));
+            return;
+        }
+
+        log("Adding " + added.size() + " app(s) to the Doze app blocklist: " + added);
+        sharedPreferences.edit().putStringSet("dozeAppBlockList", new LinkedHashSet<>(blockedPackages)).apply();
+        Utils.notifyServiceAppBlocklistChanged(getApplicationContext());
+        loadPackagesFromBlockList();
+        Toast.makeText(this,
+                getResources().getQuantityString(R.plurals.apps_added_to_blocklist, added.size(), added.size()),
+                Toast.LENGTH_SHORT).show();
     }
 
     public void modifyBlockList(String packageName, boolean remove) {

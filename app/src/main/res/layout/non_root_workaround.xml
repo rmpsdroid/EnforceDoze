@@ -22,7 +22,7 @@
                 android:textIsSelectable="true"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="adb -d shell pm grant com.akylas.enforcedoze android.permission.DUMP"
+                android:text="adb -d shell pm grant com.akylas.enforcedoze.fork android.permission.DUMP"
                 android:layout_gravity="center_vertical" />
 
 
@@ -55,7 +55,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:textIsSelectable="true"
-                android:text="adb -d shell pm grant com.akylas.enforcedoze android.permission.WRITE_SECURE_SETTINGS"
+                android:text="adb -d shell pm grant com.akylas.enforcedoze.fork android.permission.WRITE_SECURE_SETTINGS"
                 android:layout_gravity="center_vertical" />
 
 

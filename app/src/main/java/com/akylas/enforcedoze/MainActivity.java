@@ -245,16 +245,16 @@ public class MainActivity extends AppCompatActivity implements CompoundButton.On
                         editor.putBoolean("isSuAvailable", true);
                         editor.apply();
                         if (!Utils.isDumpPermissionGranted(getApplicationContext())) {
-                                log("Granting android.permission.DUMP to com.akylas.enforcedoze");
-                                executeCommand("pm grant com.akylas.enforcedoze android.permission.DUMP");
+                                log("Granting android.permission.DUMP to " + BuildConfig.APPLICATION_ID);
+                                executeCommand("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.DUMP");
                         }
                         if (!Utils.isReadPhoneStatePermissionGranted(getApplicationContext())) {
-                            log("Granting android.permission.READ_PHONE_STATE to com.akylas.enforcedoze");
-                            executeCommand("pm grant com.akylas.enforcedoze android.permission.READ_PHONE_STATE");
+                            log("Granting android.permission.READ_PHONE_STATE to " + BuildConfig.APPLICATION_ID);
+                            executeCommand("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.READ_PHONE_STATE");
                         }
                         if (!Utils.isSecureSettingsPermissionGranted(getApplicationContext()) && Utils.isDeviceRunningOnN()) {
-                            log("Granting android.permission.WRITE_SECURE_SETTINGS to com.akylas.enforcedoze");
-                            executeCommand("pm grant com.akylas.enforcedoze android.permission.WRITE_SECURE_SETTINGS");
+                            log("Granting android.permission.WRITE_SECURE_SETTINGS to " + BuildConfig.APPLICATION_ID);
+                            executeCommand("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.WRITE_SECURE_SETTINGS");
                         }
                         if (serviceEnabled) {
                             toggleForceDozeSwitch.setChecked(true);
@@ -455,8 +455,8 @@ public class MainActivity extends AppCompatActivity implements CompoundButton.On
             }
             boolean useShizuku = Utils.isShizukuMode(getApplicationContext());
             if (isSuAvailable || (useShizuku && isShizukuAvailable)) {
-                executeCommand("chmod 664 /data/data/com.akylas.enforcedoze/shared_prefs/com.akylas.enforcedoze_preferences.xml");
-                executeCommand("chmod 755 /data/data/com.akylas.enforcedoze/shared_prefs");
+                executeCommand("chmod 664 /data/data/" + BuildConfig.APPLICATION_ID + "/shared_prefs/" + BuildConfig.APPLICATION_ID + "_preferences.xml");
+                executeCommand("chmod 755 /data/data/" + BuildConfig.APPLICATION_ID + "/shared_prefs");
             }
         } else {
             textViewStatus.setText(R.string.service_inactive);

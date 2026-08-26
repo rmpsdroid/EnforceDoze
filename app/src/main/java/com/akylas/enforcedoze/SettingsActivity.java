@@ -13,6 +13,8 @@ import android.os.Bundle;
 import android.provider.Settings;
 import android.app.TimePickerDialog;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.widget.Toolbar;
@@ -34,6 +36,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import android.util.Log;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.Toast;
 
 import com.afollestad.materialdialogs.MaterialDialog;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
@@ -78,10 +81,9 @@ public class SettingsActivity extends AppCompatActivity {
     }
 
     public static void reloadSettings(Context context) {
-        if (Utils.isMyServiceRunning(ForceDozeService.class, context)) {
-            Intent intent = new Intent("reload-settings");
-            LocalBroadcastManager.getInstance(context).sendBroadcast(intent);
-        }
+        // Unconditional: gating this on isMyServiceRunning() meant a settings change was thrown
+        // away whenever the running-services lookup did not see the service.
+        Utils.notifyServiceSettingsChanged(context);
     }
 
     @Override
@@ -116,6 +118,9 @@ public class SettingsActivity extends AppCompatActivity {
         boolean isSuAvailable = false;
         boolean isShizukuAvailable = false;
         private ShizukuHandler shizukuHandler;
+        private ShizukuHandler.OnAvailibilityChange shizukuAvailabilityListener;
+        private ActivityResultLauncher<String> exportSettingsLauncher;
+        private ActivityResultLauncher<String[]> importSettingsLauncher;
 
         private void removeIconSpace(PreferenceGroup group) {
             for (int i = 0; i < group.getPreferenceCount(); i++) {
@@ -172,16 +177,113 @@ public class SettingsActivity extends AppCompatActivity {
         @Override
         public void onCreate(Bundle savedInstanceState) {
             super.onCreate(savedInstanceState);
+            // Registered here because the contracts must be in place before the fragment reaches
+            // STARTED, otherwise registerForActivityResult() throws.
+            exportSettingsLauncher = registerForActivityResult(
+                    new ActivityResultContracts.CreateDocument(SettingsBackup.MIME_TYPE),
+                    uri -> {
+                        if (uri != null) {
+                            runExport(uri);
+                        }
+                    });
+            importSettingsLauncher = registerForActivityResult(
+                    new ActivityResultContracts.OpenDocument(),
+                    uri -> {
+                        if (uri != null) {
+                            confirmAndRunImport(uri);
+                        }
+                    });
+        }
+
+        private void runExport(Uri uri) {
+            final Context context = requireContext().getApplicationContext();
+            Tasks.executeInBackground(getActivity(),
+                    () -> SettingsBackup.exportTo(context, uri),
+                    new Completion<Integer>() {
+                        @Override
+                        public void onSuccess(Context c, Integer exported) {
+                            Toast.makeText(c, getString(R.string.settings_export_success, exported),
+                                    Toast.LENGTH_LONG).show();
+                        }
+
+                        @Override
+                        public void onError(Context c, Exception e) {
+                            Log.e(TAG, "Settings export failed: " + e.getMessage());
+                            Toast.makeText(c, getString(R.string.settings_export_failed, String.valueOf(e.getMessage())),
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    });
+        }
+
+        private void confirmAndRunImport(Uri uri) {
+            new MaterialAlertDialogBuilder(requireContext())
+                    .setTitle(R.string.settings_import_confirm_title)
+                    .setMessage(R.string.settings_import_confirm_text)
+                    .setNegativeButton(R.string.no_button_text, (d, w) -> d.dismiss())
+                    .setPositiveButton(R.string.yes_button_text, (d, w) -> {
+                        d.dismiss();
+                        runImport(uri);
+                    })
+                    .show();
+        }
+
+        private void runImport(Uri uri) {
+            final Context context = requireContext().getApplicationContext();
+            SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+            // Importing writes dozens of keys at once and each one would otherwise fire the change
+            // listener, which pushes a reload to the service; mute it and reload once at the end.
+            prefs.unregisterOnSharedPreferenceChangeListener(SettingsFragment.this);
+
+            Tasks.executeInBackground(getActivity(),
+                    () -> SettingsBackup.importFrom(context, uri),
+                    new Completion<Integer>() {
+                        @Override
+                        public void onSuccess(Context c, Integer imported) {
+                            Utils.notifyServiceSettingsChanged(context);
+                            Toast.makeText(c, getString(R.string.settings_import_success, imported),
+                                    Toast.LENGTH_LONG).show();
+                            // Rebuild the whole screen so every preference shows its imported value
+                            // with its listeners intact. The Toast outlives the recreation.
+                            if (getActivity() != null) {
+                                getActivity().recreate();
+                            }
+                        }
+
+                        @Override
+                        public void onError(Context c, Exception e) {
+                            Log.e(TAG, "Settings import failed: " + e.getMessage());
+                            prefs.registerOnSharedPreferenceChangeListener(SettingsFragment.this);
+                            Toast.makeText(c, getString(R.string.settings_import_failed, String.valueOf(e.getMessage())),
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    });
         }
 
         private void initializeShizuku() {
             shizukuHandler.checkShizukuAvailability();
-            shizukuHandler.setOnAvailibilityChangeListener(value -> {
-                isShizukuAvailable = value;
-                toggleRootFeatures(isShizukuAvailable || isSuAvailable);
-            });
+            if (shizukuAvailabilityListener == null) {
+                // Added, not set: the handler is a singleton shared with ForceDozeService, and
+                // replacing its single listener used to cut the service off from availability
+                // changes for as long as the app lived.
+                shizukuAvailabilityListener = value -> {
+                    isShizukuAvailable = value;
+                    toggleRootFeatures(isShizukuAvailable || isSuAvailable);
+                };
+                shizukuHandler.addOnAvailabilityChangeListener(shizukuAvailabilityListener);
+            }
             isShizukuAvailable = shizukuHandler.isShizukuAvailable();
             log("Shizuku mode enabled, available: " + isShizukuAvailable);
+        }
+
+        @Override
+        public void onDestroy() {
+            super.onDestroy();
+            if (shizukuAvailabilityListener != null) {
+                shizukuHandler.removeOnAvailabilityChangeListener(shizukuAvailabilityListener);
+                shizukuAvailabilityListener = null;
+            }
+            PreferenceManager.getDefaultSharedPreferences(requireContext())
+                    .unregisterOnSharedPreferenceChangeListener(this);
         }
 
 
@@ -202,6 +304,8 @@ public class SettingsActivity extends AppCompatActivity {
 //            PreferenceScreen preferenceScreen = (PreferenceScreen) findPreference("preferenceScreen");
 //            PreferenceCategory mainSettings = (PreferenceCategory) findPreference("mainSettings");
 //            PreferenceCategory dozeSettings = (PreferenceCategory) findPreference("dozeSettings");
+            Preference exportSettings = (Preference) findPreference("exportSettings");
+            Preference importSettings = (Preference) findPreference("importSettings");
             Preference resetForceDozePref = (Preference) findPreference("resetForceDoze");
             Preference clearDozeStats = (Preference) findPreference("resetDozeStats");
             Preference dozeDelay = (Preference) findPreference("dozeEnterDelay");
@@ -221,6 +325,27 @@ public class SettingsActivity extends AppCompatActivity {
             SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(getActivity());
             sharedPreferences.registerOnSharedPreferenceChangeListener(this);
             updateCustomDozePeriodsSummary(customDozePeriods, sharedPreferences);
+
+            exportSettings.setOnPreferenceClickListener(preference -> {
+                try {
+                    exportSettingsLauncher.launch(SettingsBackup.suggestedFileName());
+                } catch (android.content.ActivityNotFoundException e) {
+                    Toast.makeText(getActivity(), R.string.settings_backup_no_file_picker, Toast.LENGTH_LONG).show();
+                }
+                return true;
+            });
+
+            importSettings.setOnPreferenceClickListener(preference -> {
+                try {
+                    // Some file providers label JSON as text/plain or octet-stream, so accept those
+                    // too rather than greying out the user's own backup in the picker.
+                    importSettingsLauncher.launch(new String[]{
+                            SettingsBackup.MIME_TYPE, "text/plain", "application/octet-stream"});
+                } catch (android.content.ActivityNotFoundException e) {
+                    Toast.makeText(getActivity(), R.string.settings_backup_no_file_picker, Toast.LENGTH_LONG).show();
+                }
+                return true;
+            });
 
             resetForceDozePref.setOnPreferenceClickListener(preference -> {
                 MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(getActivity());
@@ -246,6 +371,11 @@ public class SettingsActivity extends AppCompatActivity {
 
 
             executionMode.setOnPreferenceChangeListener((preference, value) -> {
+                // onPreferenceChangeListener runs *before* the new value is persisted, so write it
+                // ourselves first: restarting the service any earlier made it read the old mode
+                // back and keep using the wrong backend.
+                sharedPreferences.edit().putString("executionMode", (String) value).commit();
+
                 if (value.equals("shizuku")) {
                     initializeShizuku();
                     ShizukuHandler.getInstance(getActivity()).requestShizukuPermission();
@@ -254,13 +384,10 @@ public class SettingsActivity extends AppCompatActivity {
                 } else {
                     toggleRootFeatures(isSuAvailable);
                 }
-                boolean serviceEnabled = sharedPreferences.getBoolean("serviceEnabled", false);
-                if (serviceEnabled) {
-                    Context context = getActivity();
-                    Intent intent = new Intent(context, ForceDozeService.class);
-                    context.stopService(intent);
-                    context.startService(intent);
-                }
+                // A reload is enough now that reloadSettings() re-evaluates the execution mode and
+                // re-checks Shizuku. Stopping and restarting the service raced with
+                // isMyServiceRunning() and could leave EnforceDoze switched off entirely.
+                Utils.notifyServiceSettingsChanged(getActivity().getApplicationContext());
                 return true;
             });
 
@@ -310,10 +437,7 @@ public class SettingsActivity extends AppCompatActivity {
                         }
                         if (result) {
                             log("Doze stats successfully cleared");
-                            if (Utils.isMyServiceRunning(ForceDozeService.class, context)) {
-                                Intent intent = new Intent("reload-settings");
-                                LocalBroadcastManager.getInstance(context).sendBroadcast(intent);
-                            }
+                            Utils.notifyServiceSettingsChanged(context);
                             MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(context);
                             builder.setTitle(getString(R.string.cleared_text));
                             builder.setMessage(getString(R.string.doze_battery_stats_clear_msg));
@@ -339,8 +463,8 @@ public class SettingsActivity extends AppCompatActivity {
                 } else {
                     if (isSuAvailable) {
                         log("Phone is rooted and SU permission granted");
-                        log("Granting android.permission.READ_PHONE_STATE to com.akylas.enforcedoze");
-                        executeCommand("pm grant com.akylas.enforcedoze android.permission.READ_PHONE_STATE");
+                        log("Granting android.permission.READ_PHONE_STATE to " + BuildConfig.APPLICATION_ID);
+                        executeCommand("pm grant " + BuildConfig.APPLICATION_ID + " android.permission.READ_PHONE_STATE");
                         return true;
                     } else {
                         log("SU permission denied or not available");
@@ -592,11 +716,11 @@ public class SettingsActivity extends AppCompatActivity {
             log("Resetting app preferences");
             PreferenceManager.getDefaultSharedPreferences(getActivity()).edit().clear().apply();
             log("Trying to revoke android.permission.DUMP");
-            executeCommand("pm revoke com.akylas.enforcedoze android.permission.DUMP");
-            executeCommand("pm revoke com.akylas.enforcedoze android.permission.READ_LOGS");
-            executeCommand("pm revoke com.akylas.enforcedoze android.permission.READ_PHONE_STATE");
-            executeCommand("pm revoke com.akylas.enforcedoze android.permission.WRITE_SECURE_SETTINGS");
-            executeCommand("pm revoke com.akylas.enforcedoze android.permission.WRITE_SETTINGS");
+            executeCommand("pm revoke " + BuildConfig.APPLICATION_ID + " android.permission.DUMP");
+            executeCommand("pm revoke " + BuildConfig.APPLICATION_ID + " android.permission.READ_LOGS");
+            executeCommand("pm revoke " + BuildConfig.APPLICATION_ID + " android.permission.READ_PHONE_STATE");
+            executeCommand("pm revoke " + BuildConfig.APPLICATION_ID + " android.permission.WRITE_SECURE_SETTINGS");
+            executeCommand("pm revoke " + BuildConfig.APPLICATION_ID + " android.permission.WRITE_SETTINGS");
             log("ForceDoze reset procedure complete");
             MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(getActivity());
             builder.setTitle(getString(R.string.reset_complete_dialog_title));

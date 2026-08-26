@@ -72,7 +72,7 @@
             android:enabled="true"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.akylas.enforcedoze.ENABLE_FORCEDOZE" />
+                <action android:name="${applicationId}.ENABLE_FORCEDOZE" />
             </intent-filter>
         </receiver>
         <receiver
@@ -80,7 +80,7 @@
             android:enabled="true"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.akylas.enforcedoze.DISABLE_FORCEDOZE" />
+                <action android:name="${applicationId}.DISABLE_FORCEDOZE" />
             </intent-filter>
         </receiver>
         <receiver
@@ -88,7 +88,7 @@
             android:enabled="true"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.akylas.enforcedoze.ADD_WHITELIST" />
+                <action android:name="${applicationId}.ADD_WHITELIST" />
             </intent-filter>
         </receiver>
         <receiver
@@ -96,7 +96,7 @@
             android:enabled="true"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.akylas.enforcedoze.REMOVE_WHITELIST" />
+                <action android:name="${applicationId}.REMOVE_WHITELIST" />
             </intent-filter>
         </receiver>
         <receiver
@@ -104,7 +104,7 @@
             android:enabled="true"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.akylas.enforcedoze.CHANGE_SETTING" />
+                <action android:name="${applicationId}.CHANGE_SETTING" />
             </intent-filter>
         </receiver>
         <receiver
@@ -118,7 +118,15 @@
         <service
             android:name="com.akylas.enforcedoze.ForceDozeService"
             android:enabled="true"
-            android:exported="false" android:foregroundServiceType="specialUse"/>
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <!-- Required alongside foregroundServiceType="specialUse" from API 34. -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the device in Doze while the screen is off and restores the
+                    radio/sensor state the user had before it, which requires running for the whole
+                    screen-off period." />
+        </service>
         <service
             android:name="com.akylas.enforcedoze.ForceDozeTileService"
             android:icon="@drawable/ic_power_settings_new_white_24dp"

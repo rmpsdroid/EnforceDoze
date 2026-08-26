@@ -32,17 +32,17 @@ public class TaskerBroadcastsActivity extends AppCompatActivity {
 
         listView = (ListView) findViewById(R.id.listViewBroadcasts);
         items = new ArrayList<>();
-        items.add(new TaskerBroadcastsItem("com.akylas.enforcedoze.ENABLE_FORCEDOZE",
+        items.add(new TaskerBroadcastsItem(Utils.ACTION_ENABLE_FORCEDOZE,
                 "Broadcast values required: None"));
-        items.add(new TaskerBroadcastsItem("com.akylas.enforcedoze.DISABLE_FORCEDOZE",
+        items.add(new TaskerBroadcastsItem(Utils.ACTION_DISABLE_FORCEDOZE,
                 "Broadcast values required: None"));
-        items.add(new TaskerBroadcastsItem("com.akylas.enforcedoze.ADD_WHITELIST",
+        items.add(new TaskerBroadcastsItem(Utils.ACTION_ADD_WHITELIST,
                 "Broadcast values required:\npackageName\n\npackageName has to be the full " +
                         "package name of the app you want to add to the whitelist"));
-        items.add(new TaskerBroadcastsItem("com.akylas.enforcedoze.REMOVE_WHITELIST",
+        items.add(new TaskerBroadcastsItem(Utils.ACTION_REMOVE_WHITELIST,
                 "Broadcast values required:\npackageName\n\npackageName has to be the full " +
                         "package name of the app you want to remove from the whitelist"));
-        items.add(new TaskerBroadcastsItem("com.akylas.enforcedoze.CHANGE_SETTING",
+        items.add(new TaskerBroadcastsItem(Utils.ACTION_CHANGE_SETTING,
                 "Broadcast values required:\nsettingName\nsettingValue\n\nsettingName can be one of the following:" +
                         "\n1) turnOffDataInDoze\n2) turnOffWiFiInDoze\n3) ignoreLockscreenTimeout" +
                         "\n4) dozeEnterDelay\n5) useAutoRotateAndBrightnessFix\n6) enableSensors" +

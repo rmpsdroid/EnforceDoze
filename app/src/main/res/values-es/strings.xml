@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">EnforceDoze</string>
+    <string name="app_name">EnforceDoze Pro</string>
     <string name="service_active">El servicio EnforceDoze está activo</string>
     <string name="service_inactive">El servicio EnforceDoze está inactivo</string>
     <string name="service_disabled">El servicio EnforceDoze está deshabilitado</string>
@@ -41,7 +41,7 @@
     <string name="requesting_su_access_text">Requiriendo acceso SU...</string>
     <string name="read_logcat_su_not_avail_or_denied_error_text">Permiso SU denegado o SU no disponible, por lo que no puede leer logcat.
 \n
-\nPor favor, concede el permiso READ_LOGS a través de ADB para utilizar esta función: \'adb shell pm grant com.akylas.enforcedoze android.permission.READ_LOGS\' (sin comillas)</string>
+\nPor favor, concede el permiso READ_LOGS a través de ADB para utilizar esta función: \'adb shell pm grant com.akylas.enforcedoze.fork android.permission.READ_LOGS\' (sin comillas)</string>
     <string name="loading_installed_apps_text">Cargando aplicaciones instaladas...</string>
     <string name="whitelisting_text">Lista de permitidos</string>
     <string name="whitelisted_apps_restrictions_text">"Una aplicación que está en la lista de permitidas puede utilizar la red y mantener bloqueos parciales durante Doze y App Standby. Sin embargo, se siguen aplicando otras restricciones a la aplicación de la lista de permitidas, al igual que a otras aplicaciones. Por ejemplo, las tareas y sincronizaciones de la aplicación en la lista de permitidas se aplazan, y sus alarmas normales de AlarmManager no se activan. "</string>
@@ -136,7 +136,7 @@
     <string name="doze_stats_battery_icon_meaning_dialog_title">Que significan los iconos?</string>
     <string name="doze_stats_battery_icon_meaning_dialog_text">El icono de batería con un rayo indica que la utilización de la batería durante esa sesión de Doze estuvo dentro de los límites aceptables, y el icono de batería con un signo de exclamación indica que la utilización de la batería durante esa sesión de Doze excedió los límites aceptables. Si el uso de la batería en cualquier sesión Doze se encuentra por encima de los límites aceptables, se aconseja que corrobore con GSAM o alguna otra aplicación las estadísticas de batería para investigar la causa de su drenaje</string>
     <string name="clearing_doze_stats_text">Borrando estadísticas de Doze...</string>
-    <string name="tile_label">ForceDoze</string>
+    <string name="tile_label">EnforceDoze Pro</string>
     <string name="loading_blocked_packages">Cargando paquetes bloqueados</string>
     <string name="applied_success_text">¡Aplicado exitosamente!</string>
     <string name="adb_command_text">Comando ADB</string>
@@ -172,7 +172,7 @@
     <string name="notification_channel_tips_description">Problemas de compatibilidad</string>
     <string name="notification_channel_silent_name">Servicio silencioso</string>
     <string name="notification_channel_silent_description">Notificación mínima para servicio en primer plano</string>
-    <string name="silent_notification_title">EnforceDoze está en ejecución</string>
+    <string name="silent_notification_title">EnforceDoze Pro está en ejecución</string>
     <string name="silent_notification_text">Android 12+ requiere esta notificación. Toca para personalizar u ocultarla.</string>
     <string name="notifications_permission">Permiso de notificaciones</string>
     <string name="whitelist_music_app_network_setting_summary">No apagar todas las redes si suena música</string>
@@ -209,7 +209,7 @@
     <string name="wait_unlock_setting_summary">Espere a que el dispositivo se desbloquee para salir del modo de suspensión y habilitar las funciones inhabilitadas</string>
     <string name="wait_unlock_setting_title">Espere a que se desbloquee para salir de la siesta</string>
     <string name="disable_bluetooth_setting_title">Inhabilita Bluetooth con la pantalla apagada</string>
-    <string name="airplane_tile_label">Avión EnforceDoze</string>
+    <string name="airplane_tile_label">Avión EnforceDoze Pro</string>
     <string name="tile_subtitle_on">Encendido</string>
     <string name="tile_subtitle_off">Apagado</string>
     <string name="licenses">licencias</string>

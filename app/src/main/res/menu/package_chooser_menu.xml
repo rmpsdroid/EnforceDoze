@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item
+        android:id="@+id/action_toggle_select_all"
+        android:icon="@drawable/ic_select_all_24dp"
+        android:orderInCategory="100"
+        android:title="@string/package_chooser_select_all"
+        app:iconTint="?attr/colorControlNormal"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/action_show_system_apps"
+        android:checkable="true"
+        android:orderInCategory="200"
+        android:title="@string/package_chooser_show_system_apps"
+        app:showAsAction="never" />
+</menu>

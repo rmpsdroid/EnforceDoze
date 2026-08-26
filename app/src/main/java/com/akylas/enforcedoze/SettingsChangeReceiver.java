@@ -5,7 +5,6 @@ import static com.akylas.enforcedoze.Utils.logToLogcat;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 public class SettingsChangeReceiver extends BroadcastReceiver {
 
@@ -15,7 +14,7 @@ public class SettingsChangeReceiver extends BroadcastReceiver {
 
     @Override
     public void onReceive(Context context, Intent intent) {
-        log("com.akylas.enforcedoze.CHANGE_SETTING broadcast intent received");
+        log(Utils.ACTION_CHANGE_SETTING + " broadcast intent received");
         final String settingName = intent.getStringExtra("settingName");
         final String settingValue = intent.getStringExtra("settingValue");
 
@@ -23,17 +22,15 @@ public class SettingsChangeReceiver extends BroadcastReceiver {
             if (Utils.doesSettingExist(settingName)) {
                 if (Utils.isSettingBool(settingName)) {
                     Utils.updateSettingBool(context, settingName, Boolean.valueOf(settingValue));
-                    if (Utils.isMyServiceRunning(ForceDozeService.class, context)) {
-                        Intent i = new Intent("reload-settings");
-                        LocalBroadcastManager.getInstance(context).sendBroadcast(i);
-                    }
                 } else {
-                    Utils.updateSettingInt(context, settingName, Integer.valueOf(settingValue));
-                    if (Utils.isMyServiceRunning(ForceDozeService.class, context)) {
-                        Intent i = new Intent("reload-settings");
-                        LocalBroadcastManager.getInstance(context).sendBroadcast(i);
+                    try {
+                        Utils.updateSettingInt(context, settingName, Integer.valueOf(settingValue));
+                    } catch (NumberFormatException e) {
+                        log("settingValue '" + settingValue + "' is not a number, ignoring");
+                        return;
                     }
                 }
+                Utils.notifyServiceSettingsChanged(context);
             } else {
                 log("Setting does not exist or not updatable");
             }

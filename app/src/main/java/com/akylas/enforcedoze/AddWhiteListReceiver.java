@@ -18,7 +18,7 @@ public class AddWhiteListReceiver extends BroadcastReceiver {
     }
     @Override
     public void onReceive(Context context, Intent intent) {
-        log("com.akylas.enforcedoze.ADD_WHITELIST broadcast intent received");
+        log(Utils.ACTION_ADD_WHITELIST + " broadcast intent received");
         final String packageName = intent.getStringExtra("packageName");
         log("Package name received: " + packageName);
         if (packageName != null) {

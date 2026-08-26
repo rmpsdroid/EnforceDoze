@@ -45,7 +45,7 @@
     <string name="remove_package_menu_item">パッケージを削除する</string>
     <string name="compact_view_menu_item">コンパクトビュー</string>
     <string name="doze_stats_battery_icon_meaning_dialog_title">アイコンの意味は？</string>
-    <string name="tile_label">ForceDoze</string>
+    <string name="tile_label">EnforceDoze Pro</string>
     <string name="notif_blocklist_setting_title">Doze通知ブロックリスト</string>
     <string name="app_blocklist_setting_summary">Dozeモード中にアプリ（およびそのバックグラウンドサービス）が実行されないようにする</string>
     <string name="app_already_in_blocklist">追加しようとしているアプリはすでにブロックリストに登録されています</string>
@@ -67,7 +67,7 @@
     <string name="notification_channel_tips_description">互換性の問題に関する情報</string>
     <string name="notification_channel_silent_name">サイレントサービス</string>
     <string name="notification_channel_silent_description">フォアグラウンドサービスの最小通知</string>
-    <string name="silent_notification_title">EnforceDozeが実行中です</string>
+    <string name="silent_notification_title">EnforceDoze Proが実行中です</string>
     <string name="silent_notification_text">Android 12+ではこの通知が必要です。タップしてカスタマイズまたは非表示にします。</string>
     <string name="notifications_permission">通知の権限</string>
     <string name="whitelist_music_app_network_setting_title">音楽アプリをホワイトリストに追加する</string>
@@ -80,7 +80,7 @@
     <string name="licenses">ライセンス</string>
     <string name="translations">翻訳</string>
     <string name="privacy_policy">プライバシーポリシー</string>
-    <string name="app_name">EnforceDoze</string>
+    <string name="app_name">EnforceDoze Pro</string>
     <string name="service_disabled">EnforceDoze サービスは無効化</string>
     <string name="doze_unsupported_more_info">一部のデバイスでは、OEMによってDozeモードが無効化されています。このオプションを有効にすることで、デフォルトでDozeモードが有効になっていないデバイスでも使用できるようになります。\n\n注意:このオプションは、スマートフォンを再起動するたびに再度有効にする必要があります。</string>
     <string name="copy_command_button_text">コマンドをコピー</string>
@@ -137,7 +137,7 @@
     <string name="notifications_permission_explanation">このアプリが音楽を再生しているアプリを検出するには、現在表示されている通知を読み取る必要があり、そのために権限が必要です</string>
     <string name="disable_logcat_setting_summary">ForceDozeがシステムlogcatにログを記録するのを防ぐ</string>
     <string name="usage_access_explanation">現在フォーカスしているアプリをクエリするためには、アプリに使用状況アクセス権限が必要です。この権限を有効にするには、使用状況アクセス設定を開いてください</string>
-    <string name="read_logcat_su_not_avail_or_denied_error_text">SU権限が拒否された、または利用できないため、logcatを読み取ることができません。\n\nこの機能を使用するには、ADBを使用してREAD_LOGS権限を付与してください:\'adb shell pm grant com.akylas.enforcedoze android.permission.READ_LOGS\'（引用符なしで入力してください）</string>
+    <string name="read_logcat_su_not_avail_or_denied_error_text">SU権限が拒否された、または利用できないため、logcatを読み取ることができません。\n\nこの機能を使用するには、ADBを使用してREAD_LOGS権限を付与してください:\'adb shell pm grant com.akylas.enforcedoze.fork android.permission.READ_LOGS\'（引用符なしで入力してください）</string>
     <string name="please_wait_text">しばらくお待ちください</string>
     <string name="lockscreen_timeout_dialog_text_p4">" 分が経過するまでロックされません。このため、EnforceDozeも "</string>
     <string name="root_workaround_text">SU（スーパーユーザー）権限が拒否されたか、利用できません！Root権限がない場合は、「Root回避策」を押して、Rootなしモードを有効にする方法を確認してください</string>

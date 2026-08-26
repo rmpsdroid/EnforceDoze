@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
-    <string name="app_name">EnforceDoze</string>
+    <string name="app_name">EnforceDoze Pro</string>
     <string name="service_active">EnforceDoze servizio attivo</string>
     <string name="service_inactive">EnforceDoze servizio in pausa</string>
     <string name="service_disabled">EnforceDoze service disattivato</string>
@@ -27,7 +27,7 @@
     <string name="error_text">Errore</string>
     <string name="please_wait_text">Attendere prego</string>
     <string name="requesting_su_access_text">Richiesta permessi SU…</string>
-    <string name="read_logcat_su_not_avail_or_denied_error_text">Permessi SU negati o non disponibili, quindi non posso leggere il logcat.\n\nPer favore dare il permesso READ_LOGS tramite comando ADB per usare questa funzione: \'adb shell pm grant com.akylas.enforcedoze android.permission.READ_LOGS\' (senza virgolette)</string>
+    <string name="read_logcat_su_not_avail_or_denied_error_text">Permessi SU negati o non disponibili, quindi non posso leggere il logcat.\n\nPer favore dare il permesso READ_LOGS tramite comando ADB per usare questa funzione: \'adb shell pm grant com.akylas.enforcedoze.fork android.permission.READ_LOGS\' (senza virgolette)</string>
     <string name="loading_installed_apps_text">Caricamento app installate…</string>
     <string name="whitelisting_text">Lista bianca</string>
     <string name="whitelisted_apps_restrictions_text">"Un\'app in lista bianca può usare la rete dati e wake lock parziali durante la modalità Doze e stanby dell\'app. Tuttavia, le altre restrizioni saranno applicate alle app in lista bianca, come qualunque altra app. Per esempio, ad un app in lista bianca i lavori e sincronizzazioni verranno rinviati e i regolari allarmi non eseguiti. "</string>
@@ -106,7 +106,7 @@
     <string name="doze_stats_battery_icon_meaning_dialog_title">Cosa significano le icone?</string>
     <string name="doze_stats_battery_icon_meaning_dialog_text">L\'icona della batteria con un fulmine indica che il consumo della batteria durante la sessione Doze è nei valori accettabili, invece l\'icona della batteria con un punto esclamativo indica una sessione Doze con uso della batteria maggiore dei valori accettabili. Se l\'uso della batteria in ogni sessione Doze è sopra i vaolri accettabili, si consiglia di usare app tipo GSAM o simili per indagare su cosa consumi eccessivamente la batteria</string>
     <string name="clearing_doze_stats_text">Cancellando statistiche Doze…</string>
-    <string name="tile_label">ForceDoze</string>
+    <string name="tile_label">EnforceDoze Pro</string>
     <string name="notif_blocklist_setting_summary">Evita che le notifiche vangano ricevute durante Doze</string>
     <string name="notif_blocklist_setting_title">Lista notifiche blccate in Doze</string>
     <string name="app_blocklist_setting_summary">Evita che app (e i suoi servizi in background) siano attive durante Doze</string>
@@ -151,7 +151,7 @@
     <string name="notification_channel_tips_description">Informazioni sui problemi di compatibilità</string>
     <string name="notification_channel_silent_name">Servizio silenzioso</string>
     <string name="notification_channel_silent_description">Notifica minima per il servizio in primo piano</string>
-    <string name="silent_notification_title">EnforceDoze è in esecuzione</string>
+    <string name="silent_notification_title">EnforceDoze Pro è in esecuzione</string>
     <string name="silent_notification_text">Android 12+ richiede questa notifica. Tocca per personalizzare o nasconderla.</string>
     <string name="notifications_permission">Autorizzazione alle notifiche</string>
     <string name="notifications_permission_explanation">Per rilevare le app che riproducono musica, questa app deve leggere le notifiche attualmente visualizzate e quindi necessita dell\'autorizzazione</string>
@@ -191,5 +191,5 @@
     <string name="apply">Applica</string>
     <string name="tile_subtitle_on">Acceso</string>
     <string name="tile_subtitle_off">Spento</string>
-    <string name="airplane_tile_label">EnforceDoze modalità Aerea</string>
+    <string name="airplane_tile_label">EnforceDoze Pro modalità Aerea</string>
 </resources>

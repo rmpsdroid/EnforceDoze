@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
-    <string name="app_name">EnforceDoze</string>
+    <string name="app_name">EnforceDoze Pro</string>
     <string name="service_active">EnforceDoze Hizmeti Aktif oldu</string>
     <string name="service_inactive">EnforceDoze Hizmet devre dışı</string>
     <string name="service_disabled">EnforceDoze servisi Devre dışı</string>
@@ -27,7 +27,7 @@
     <string name="error_text">Hata</string>
     <string name="please_wait_text">Lütfen Bekleyin</string>
     <string name="requesting_su_access_text">SU erişme isteği...</string>
-    <string name="read_logcat_su_not_avail_or_denied_error_text">SU izinleri reddedildi veya SU mevcut değil, bu nedenle logcat okunamıyor.\n\nBu özelliği kullanmak için lütfen ADB aracılığıyla READ_LOGS iznini verin: \'adb kabuğu pm grant com.akylas.enforcedoze android.permission.READ_LOGS\' (tırnak işaretleri olmadan)</string>
+    <string name="read_logcat_su_not_avail_or_denied_error_text">SU izinleri reddedildi veya SU mevcut değil, bu nedenle logcat okunamıyor.\n\nBu özelliği kullanmak için lütfen ADB aracılığıyla READ_LOGS iznini verin: \'adb kabuğu pm grant com.akylas.enforcedoze.fork android.permission.READ_LOGS\' (tırnak işaretleri olmadan)</string>
     <string name="loading_installed_apps_text">Yüklü Uygulamalar Yükleniyor</string>
     <string name="whitelisting_text">Beyaz Liste</string>
     <string name="whitelisted_apps_restrictions_text">"Beyaz listeye eklenen bir uygulama, Ağ\'ı kullanabilir ve Doze ve Uygulama Bekleme sırasında kısmi uyandırma kilitlerini tutabilir. Bununla birlikte, diğer uygulamalara yaptığı gibi, beyaz listedeki uygulama için de başka kısıtlamalar geçerlidir. Örneğin, beyaz listedeki uygulamanın işleri ve senkronizasyonları ertelenir ve normal AlarmManager alarmları tetiklenmez."</string>
@@ -106,7 +106,7 @@
     <string name="doze_stats_battery_icon_meaning_dialog_title">simgeler ne anlama geliyor?</string>
     <string name="doze_stats_battery_icon_meaning_dialog_text">Yıldırım simgesi bulunan pil simgesi, Doze oturumu kabul edilebilir sınırlardaysa pil kullanımını gösterir ve ünlem işaretli pil simgesi, Doze oturumu kabul edilebilir sınırların üstündeyken pil kullanımını gösterir. Herhangi bir Doze oturumunda pil kullanımı kabul edilebilir sınırların üzerindeyse, pilinizin boşaltılmasını araştırmak için GSAM\'a veya başka bir üçüncü parti pil istatistikleri uygulamasına bakmanız önerilir</string>
     <string name="clearing_doze_stats_text">Doze istasiklerini sıfırla...</string>
-    <string name="tile_label">ForceDoze</string>
+    <string name="tile_label">EnforceDoze Pro</string>
     <string name="notif_blocklist_setting_summary">Doze sırasında bildirimlerin teslim edilmesini önleme</string>
     <string name="notif_blocklist_setting_title">Doze bildirimleri engelleme listesi</string>
     <string name="app_blocklist_setting_summary">Doze sırasında uygulamaların (arka plan hizmetlerininde) çalışmasını engelleyin</string>
