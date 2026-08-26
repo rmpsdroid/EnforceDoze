@@ -453,6 +453,15 @@ public class ForceDozeService extends Service {
             return;
         }
 
+        // Unconditional, and before the "nothing to release" return below. A call can begin during
+        // the dozeEnterDelay window, when no session has been applied yet and nothing is journalled
+        // - the old ordering returned early and left the TimerTask armed, so with no screen wake to
+        // cancel it (a Bluetooth headset, watch or Android Auto answer) Doze would start in the
+        // middle of the call. Cancelling touches no journal markers.
+        cancelPendingEnterDoze();
+        boolean wakelockReleased = releaseTempWakeLock();
+        DiagnosticLogger.i("CALL", "pending_doze_cancelled wakelockReleased=" + wakelockReleased);
+
         boolean inDoze = dozeStateStore.isInDoze();
         boolean pending = dozeStateStore.hasPendingRestore()
                 || dozeStateStore.hasAppliedSuspendedPackages();
@@ -466,7 +475,6 @@ public class ForceDozeService extends Service {
                 + " inDoze=" + inDoze + " pendingStates=" + dozeStateStore.getAppliedKeys()
                 + " suspendedPackages=" + dozeStateStore.getAppliedSuspendedPackages().size());
 
-        cancelPendingEnterDoze();
         // A maintenance window cannot survive the session ending.
         maintenance = false;
         DiagnosticLogger.i("CALL", "restore_dispatched keys=" + dozeStateStore.getAppliedKeys());
@@ -1029,6 +1037,15 @@ public class ForceDozeService extends Service {
     }
 
     public void enterDoze(Context context) {
+        // Defence in depth for the delayed path: SCREEN_OFF checks for a call before scheduling,
+        // but the call may begin during the delay, and this TimerTask would otherwise apply the
+        // whole Doze setup underneath it. Checked before anything is suspended, journalled or
+        // counted, so a skip leaves no trace to unwind.
+        if (isCallActiveNow()) {
+            log("Call is active, skip entering Doze");
+            DiagnosticLogger.i("CALL", "doze_entry_skipped reason=active_call");
+            return;
+        }
         if (!Utils.isInsideCustomDozePeriod(context)) {
             log("Outside custom Doze periods, skip entering Doze");
             return;
@@ -1036,12 +1053,7 @@ public class ForceDozeService extends Service {
         if (!getDeviceIdleState().equals("IDLE") || !lastKnownState.equals("IDLE")) {
             if (!Utils.isScreenOn(context)) {
                 lastKnownState = "IDLE";
-                if (tempWakeLock != null) {
-                    if (tempWakeLock.isHeld()) {
-                        log("Releasing ForceDozeTempWakelock");
-                        tempWakeLock.release();
-                    }
-                }
+                releaseTempWakeLock();
                 if (dozeAppBlocklist.size() != 0) {
                     log("Disabling apps that are in the Doze app blocklist");
                     if (whitelistCurrentApp) {
@@ -2219,6 +2231,39 @@ public class ForceDozeService extends Service {
     }
 
     /**
+     * Releases the temporary wakelock taken to hold the CPU across a delayed Doze entry. Only that
+     * wakelock - the restore wakelock and any other are untouched.
+     *
+     * @return true when it was actually held, which is a good proxy for a delayed entry having
+     * been armed
+     */
+    private boolean releaseTempWakeLock() {
+        try {
+            if (tempWakeLock != null && tempWakeLock.isHeld()) {
+                log("Releasing ForceDozeTempWakelock");
+                tempWakeLock.release();
+                return true;
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Could not release ForceDozeTempWakelock: " + e.getMessage());
+        }
+        return false;
+    }
+
+    /**
+     * Live call check used as a guard rather than as an event source. Prefers the watcher, which
+     * already folds in the telephony and audio-mode state, and falls back to the original Utils
+     * checks for the window before the watcher is started at the end of onCreate.
+     */
+    private boolean isCallActiveNow() {
+        if (callStateWatcher != null) {
+            return callStateWatcher.isCallActive();
+        }
+        Context context = getApplicationContext();
+        return Utils.isUserInCall(context) || Utils.isUserInCommunicationCall(context);
+    }
+
+    /**
      * Cancels a delayed enterDoze if one is armed. Timer.cancel() makes the instance unusable, but
      * every scheduling site already builds a fresh Timer, so this is safe to call at any time.
      */
@@ -2276,12 +2321,7 @@ public class ForceDozeService extends Service {
         log("handleScreenOn");
         log("Last known Doze state: " + lastKnownState);
 
-        if (tempWakeLock != null) {
-            if (tempWakeLock.isHeld()) {
-                log("Releasing ForceDozeTempWakelock");
-                tempWakeLock.release();
-            }
-        }
+        releaseTempWakeLock();
 
         dozeStateStore.setInDoze(false);
         // A maintenance window cannot outlive the screen turning on
