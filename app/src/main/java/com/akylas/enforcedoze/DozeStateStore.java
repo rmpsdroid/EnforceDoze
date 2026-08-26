@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
@@ -54,6 +55,13 @@ public class DozeStateStore {
     private static final String KEY_APPLIED_AT = "appliedAt";
     private static final String KEY_IN_DOZE = "inDoze";
     private static final String KEY_APPLIED_SUSPENDED_PACKAGES = "appliedSuspendedPackages";
+    /**
+     * Monotonic id of the Doze session that owns the recorded package set. Only a genuinely fresh
+     * session allocates one; temporary lock-screen suspend/unsuspend never does. Missing on
+     * installations that predate this, which default to 0 with no migration needed.
+     */
+    private static final String KEY_APPLIED_SUSPENDED_PACKAGES_GENERATION =
+            "appliedSuspendedPackagesGeneration";
 
     private static volatile DozeStateStore instance;
 
@@ -126,40 +134,89 @@ public class DozeStateStore {
     }
 
     /**
-     * Records the exact packages this Doze session suspended, which is what the wake-up path must
-     * un-suspend. The user's configured blocklist is <em>not</em> a safe substitute: if it changes
-     * while the device is dozing, a package that was suspended but has since been removed from the
-     * list would never be brought back.
-     * <p>
-     * Written synchronously and before the suspend command is issued, so a kill between the two
-     * still leaves a recoverable record. Suspending something twice is harmless; forgetting to
-     * un-suspend is not.
+     * An atomic view of "which packages does the current Doze session own, and which session is
+     * that". Generation and set must be read together: two independent reads can straddle a
+     * beginSuspendedPackageSession() commit and produce an operation that claims the new
+     * generation while carrying the old session's packages.
      */
-    public void setAppliedSuspendedPackages(Collection<String> packages) {
-        if (packages == null || packages.isEmpty()) {
-            clearAppliedSuspendedPackages();
-            return;
+    public static final class SuspendedPackageSession {
+        public final long generation;
+        /** Unmodifiable copy - never the live SharedPreferences instance. */
+        public final Set<String> packages;
+
+        SuspendedPackageSession(long generation, Set<String> packages) {
+            this.generation = generation;
+            this.packages = packages;
         }
+
+        public boolean isEmpty() {
+            return packages.isEmpty();
+        }
+    }
+
+    /**
+     * Starts a new package session: records the exact set and allocates the next generation in a
+     * single commit, so a process kill can never leave a set owned by a stale generation.
+     * <p>
+     * Called only when a fresh Doze session captures its package set. The temporary lock-screen
+     * unsuspend and the screen-off re-suspend operate on the existing generation and never
+     * allocate a new one.
+     *
+     * @return the generation now owning the set
+     */
+    public synchronized long beginSuspendedPackageSession(Collection<String> packages) {
+        long next = prefs.getLong(KEY_APPLIED_SUSPENDED_PACKAGES_GENERATION, 0L) + 1;
         prefs.edit()
                 .putStringSet(KEY_APPLIED_SUSPENDED_PACKAGES, new LinkedHashSet<>(packages))
+                .putLong(KEY_APPLIED_SUSPENDED_PACKAGES_GENERATION, next)
                 .commit();
-        logToLogcat(TAG, "Recorded " + packages.size() + " suspended package(s) for this Doze session");
+        logToLogcat(TAG, "Began suspended-package session generation=" + next
+                + " count=" + packages.size());
+        return next;
+    }
+
+    /**
+     * One synchronized read of both fields, on the same monitor as
+     * {@link #beginSuspendedPackageSession} and
+     * {@link #clearAppliedSuspendedPackagesIfGeneration}, so no writer can interleave.
+     */
+    public synchronized SuspendedPackageSession getSuspendedPackageSession() {
+        long generation = prefs.getLong(KEY_APPLIED_SUSPENDED_PACKAGES_GENERATION, 0L);
+        // Defensive copy: SharedPreferences hands back its live cached instance.
+        Set<String> packages = new LinkedHashSet<>(
+                prefs.getStringSet(KEY_APPLIED_SUSPENDED_PACKAGES, new LinkedHashSet<String>()));
+        return new SuspendedPackageSession(generation, Collections.unmodifiableSet(packages));
     }
 
     /** A copy: SharedPreferences forbids mutating the set it hands back. */
     public Set<String> getAppliedSuspendedPackages() {
-        return new LinkedHashSet<>(
-                prefs.getStringSet(KEY_APPLIED_SUSPENDED_PACKAGES, new LinkedHashSet<String>()));
+        return getSuspendedPackageSession().packages;
     }
 
     public boolean hasAppliedSuspendedPackages() {
-        return !getAppliedSuspendedPackages().isEmpty();
+        return !getSuspendedPackageSession().isEmpty();
     }
 
-    /** Only call once the un-suspend has actually reported success. */
-    public void clearAppliedSuspendedPackages() {
+    /**
+     * Compare-and-clear. The generation is checked inside this monitor rather than by the caller,
+     * so a newer session cannot install itself between the check and the write - which is what an
+     * old session's final un-suspend callback would otherwise wipe out.
+     * <p>
+     * The generation counter is deliberately left in place: it must keep increasing so that a
+     * later comparison against a stale generation cannot accidentally match.
+     *
+     * @return true when ownership was cleared, false when the record belongs to a newer session
+     */
+    public synchronized boolean clearAppliedSuspendedPackagesIfGeneration(long expectedGeneration) {
+        long current = prefs.getLong(KEY_APPLIED_SUSPENDED_PACKAGES_GENERATION, 0L);
+        if (current != expectedGeneration) {
+            logToLogcat(TAG, "Not clearing the suspended-package record: expected generation "
+                    + expectedGeneration + " but the current owner is " + current);
+            return false;
+        }
         prefs.edit().remove(KEY_APPLIED_SUSPENDED_PACKAGES).commit();
-        logToLogcat(TAG, "Cleared the suspended-package record");
+        logToLogcat(TAG, "Cleared the suspended-package record for generation " + expectedGeneration);
+        return true;
     }
 
     /** The toggles that are still waiting to be reverted. */

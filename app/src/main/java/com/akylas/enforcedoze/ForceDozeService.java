@@ -115,10 +115,16 @@ public class ForceDozeService extends Service {
     boolean whitelistMusicAppNetwork = false;
     boolean whitelistCurrentApp = false;
     /**
-     * Guards the un-suspend batch. SCREEN_ON and USER_PRESENT can arrive milliseconds apart, and
-     * two concurrent batches over the same packages would race each other.
+     * Serialises every package suspend/un-suspend, so the newest lifecycle event decides the final
+     * physical state. Replaces the old drop-duplicates AtomicBoolean, which could not express
+     * "apply the newest instead of the one already running". Same shape as the All Sensors
+     * serializer, plus session identity: an operation belongs to one Doze generation and may never
+     * be collapsed into, or replaced by, an operation from a different one.
      */
-    private final AtomicBoolean packageRestoreInFlight = new AtomicBoolean(false);
+    private final Object packageOpLock = new Object();
+    private PackageOp inFlightPackageOp = null;
+    private boolean inFlightPackageFinal = false;
+    private PackageOp pendingPackageOp = null;
     /** Guards a device-state key while its restore command is outstanding. */
     private final Set<String> stateRestoreInFlight =
             Collections.newSetFromMap(new ConcurrentHashMap<String, Boolean>());
@@ -188,6 +194,8 @@ public class ForceDozeService extends Service {
      * for work that never ran.
      */
     private static final int SUPERSEDED_EXIT_CODE = -3;
+    /** Reported for a package operation whose Doze generation has already been replaced. */
+    private static final int STALE_GENERATION_EXIT_CODE = -4;
     private static final String SENSOR_LABEL_LOCKSCREEN_RESTORE = "lockscreen_restore";
     private static final String SENSOR_LABEL_LOCKSCREEN_REAPPLY = "lockscreen_reapply";
     private static final String SENSOR_LABEL_ENTER = "doze_enter";
@@ -1768,8 +1776,12 @@ public class ForceDozeService extends Service {
         }
         DiagnosticLogger.i("HARD_BLOCK", "suspend_intended count=" + valid.size());
         // Persist first: a kill between here and the command completing still leaves a record.
-        dozeStateStore.setAppliedSuspendedPackages(valid);
-        setPackagesState(valid, false, null);
+        // A genuinely fresh session, so this is the only place that allocates a new generation.
+        long generation = dozeStateStore.beginSuspendedPackageSession(valid);
+        DiagnosticLogger.i("HARD_BLOCK", "session_started gen=" + generation
+                + " count=" + valid.size());
+        submitPackageOp(new PackageOp(true, false, generation,
+                Collections.unmodifiableSet(new LinkedHashSet<>(valid)), "enter Doze"));
     }
 
     /**
@@ -1777,43 +1789,217 @@ public class ForceDozeService extends Service {
      * once the command reports success. Safe to call from several wake triggers - the in-flight
      * guard collapses them into one batch.
      */
+    /**
+     * One immutable package operation. The package set is snapshotted with its generation and is
+     * never re-read: an operation must never silently adopt whatever the durable record happens to
+     * hold by the time it runs, and must never consult the live blocklist.
+     */
+    private static final class PackageOp {
+        final boolean suspend;
+        final boolean finalRestore;
+        final long generation;
+        final Set<String> packages;
+        final String reason;
+
+        PackageOp(boolean suspend, boolean finalRestore, long generation,
+                  Set<String> packages, String reason) {
+            this.suspend = suspend;
+            this.finalRestore = finalRestore;
+            this.generation = generation;
+            this.packages = packages;
+            this.reason = reason;
+        }
+    }
+
+    /**
+     * FINAL un-suspend of whatever the current session owns: clears ownership on success. Used by
+     * USER_PRESENT, exitDoze, the call override, boot restore and shutdown.
+     */
     public void restoreSuspendedPackages(String reason) {
-        final Set<String> packages = dozeStateStore.getAppliedSuspendedPackages();
-        if (packages.isEmpty()) {
+        DozeStateStore.SuspendedPackageSession session = dozeStateStore.getSuspendedPackageSession();
+        if (session.isEmpty()) {
             return;
         }
-        if (!packageRestoreInFlight.compareAndSet(false, true)) {
-            log("Un-suspend already in flight, skipping duplicate request (" + reason + ")");
+        submitPackageOp(new PackageOp(false, true, session.generation, session.packages, reason));
+    }
+
+    /**
+     * Brings the packages into line with the current lifecycle, derived from durable facts so it is
+     * correct after a process death or a Shizuku reconnect. Mirrors the All Sensors policy.
+     * <p>
+     * Only a FINAL un-suspend may clear ownership; the temporary lock-screen un-suspend and the
+     * screen-off re-suspend both keep the record, which is what makes the exact session set - not
+     * the live blocklist - available for the whole session.
+     */
+    private void enforcePackageStateForLifecycle(String reason) {
+        DozeStateStore.SuspendedPackageSession session = dozeStateStore.getSuspendedPackageSession();
+        if (session.isEmpty()) {
             return;
         }
 
-        Log.i(TAG, "HARD_BLOCK_RESTORE_START reason=" + reason + " count=" + packages.size());
-        DiagnosticLogger.i("HARD_BLOCK", "HARD_BLOCK_RESTORE_START reason=" + reason
-                + " count=" + packages.size());
-        final long restoreStartedAt = SystemClock.elapsedRealtime();
-        wakeTiming("hard_unsuspend_dispatched");
-        setPackagesState(packages, true, (commandCode, exitCode, stdout, stderr) -> {
-            try {
-                if (exitCode == 0) {
-                    dozeStateStore.clearAppliedSuspendedPackages();
-                    Log.i(TAG, "HARD_BLOCK_RESTORE_COMMAND_FINISHED exit=0 count=" + packages.size());
-                    DiagnosticLogger.i("HARD_BLOCK", "HARD_BLOCK_RESTORE_COMMAND_FINISHED exit=0 count="
-                            + packages.size() + " durationMs="
-                            + (SystemClock.elapsedRealtime() - restoreStartedAt));
-                } else {
-                    // Keep the record so the next trigger - USER_PRESENT, a Shizuku reconnect or
-                    // the next service start - can try again.
-                    Log.e(TAG, "HARD_BLOCK_RESTORE_COMMAND_FINISHED exit=" + exitCode
-                            + " count=" + packages.size() + ", record kept for retry");
-                    DiagnosticLogger.e("HARD_BLOCK", "HARD_BLOCK_RESTORE_COMMAND_FINISHED exit=" + exitCode
-                            + " count=" + packages.size() + " durationMs="
-                            + (SystemClock.elapsedRealtime() - restoreStartedAt) + " recordKept=true");
-                }
-            } finally {
-                packageRestoreInFlight.set(false);
-                wakeTiming("hard_unsuspend_finished");
+        boolean suspend;
+        boolean isFinal;
+        if (isCallActiveNow()) {
+            // Packages must stay usable for the call; exitDoze() supplies the FINAL un-suspend.
+            suspend = false;
+            isFinal = false;
+        } else if (!dozeStateStore.isInDoze()) {
+            suspend = false;
+            isFinal = true;
+        } else if (Utils.isScreenOn(getApplicationContext())) {
+            boolean lockedBehindWaitForUnlock =
+                    waitForUnlock && Utils.isDeviceLocked(getApplicationContext());
+            suspend = false;
+            isFinal = !lockedBehindWaitForUnlock;
+        } else {
+            suspend = true;
+            isFinal = false;
+        }
+
+        submitPackageOp(new PackageOp(suspend, isFinal, session.generation, session.packages, reason));
+    }
+
+    /**
+     * Single pending slot, latest-wins within a generation and higher-generation-wins across them.
+     * <p>
+     * Generation ownership outranks arrival order: an operation carrying an older generation refers
+     * to a package set a newer session has already replaced, so it is rejected outright rather than
+     * being allowed to overwrite the pending slot.
+     * <p>
+     * Lock order is packageOpLock then the DozeStateStore monitor, never the reverse. DozeStateStore
+     * holds no reference to this service and cannot call back into it.
+     */
+    private void submitPackageOp(PackageOp op) {
+        PackageOp toRun = null;
+        PackageOp displaced = null;
+        boolean stale = false;
+
+        synchronized (packageOpLock) {
+            long newestKnown = dozeStateStore.getSuspendedPackageSession().generation;
+            if (inFlightPackageOp != null) {
+                newestKnown = Math.max(newestKnown, inFlightPackageOp.generation);
             }
-        });
+            if (pendingPackageOp != null) {
+                newestKnown = Math.max(newestKnown, pendingPackageOp.generation);
+            }
+
+            if (op.generation < newestKnown) {
+                stale = true;
+            } else if (inFlightPackageOp == null) {
+                displaced = pendingPackageOp;
+                pendingPackageOp = null;
+                inFlightPackageOp = op;
+                inFlightPackageFinal = op.finalRestore;
+                toRun = op;
+            } else if (isSatisfiedByInFlight(op)) {
+                // The newest lifecycle request is already being satisfied physically. Drop any
+                // older pending operation - leaving it queued would let a stale opposite target
+                // run after this one completes - and upgrade the mode if this request is FINAL.
+                displaced = pendingPackageOp;
+                pendingPackageOp = null;
+                if (op.finalRestore) {
+                    inFlightPackageFinal = true;
+                }
+            } else {
+                displaced = pendingPackageOp;
+                pendingPackageOp = op;
+            }
+        }
+
+        if (displaced != null) {
+            DiagnosticLogger.i("HARD_BLOCK", "package_op_superseded target="
+                    + (displaced.suspend ? "suspend" : "unsuspend")
+                    + " gen=" + displaced.generation + " exit=" + SUPERSEDED_EXIT_CODE);
+        }
+        if (stale) {
+            DiagnosticLogger.w("HARD_BLOCK", "package_op_stale_generation gen=" + op.generation
+                    + " target=" + (op.suspend ? "suspend" : "unsuspend")
+                    + " exit=" + STALE_GENERATION_EXIT_CODE);
+            log("Discarding a stale package operation from generation " + op.generation);
+            return;
+        }
+        if (toRun != null) {
+            dispatchPackageOp(toRun);
+        }
+    }
+
+    /** Caller must hold packageOpLock. Generation equality is required, not just direction. */
+    private boolean isSatisfiedByInFlight(PackageOp op) {
+        return inFlightPackageOp != null
+                && inFlightPackageOp.generation == op.generation
+                && inFlightPackageOp.suspend == op.suspend
+                && inFlightPackageOp.packages.equals(op.packages);
+    }
+
+    private void dispatchPackageOp(final PackageOp op) {
+        final long startedAt = SystemClock.elapsedRealtime();
+        final int count = op.packages.size();
+
+        if (op.suspend) {
+            DiagnosticLogger.i("HARD_BLOCK", "re_suspend_start count=" + count
+                    + " gen=" + op.generation);
+        } else {
+            Log.i(TAG, "HARD_BLOCK_RESTORE_START reason=" + op.reason + " count=" + count);
+            DiagnosticLogger.i("HARD_BLOCK", "HARD_BLOCK_RESTORE_START reason=" + op.reason
+                    + " count=" + count);
+            DiagnosticLogger.i("HARD_BLOCK", (op.finalRestore ? "final_unsuspend_start"
+                    : "temporary_unsuspend_start") + " count=" + count + " gen=" + op.generation);
+            wakeTiming("hard_unsuspend_dispatched");
+        }
+
+        setPackagesState(op.packages, !op.suspend, (commandCode, exitCode, stdout, stderr) ->
+                onPackageOpComplete(op, exitCode, startedAt));
+    }
+
+    private void onPackageOpComplete(PackageOp op, int exitCode, long startedAt) {
+        final PackageOp next;
+        final boolean wasFinal;
+        synchronized (packageOpLock) {
+            wasFinal = inFlightPackageFinal;
+            next = pendingPackageOp;
+            pendingPackageOp = null;
+            inFlightPackageOp = next;
+            inFlightPackageFinal = next != null && next.finalRestore;
+        }
+
+        long durationMs = SystemClock.elapsedRealtime() - startedAt;
+        int count = op.packages.size();
+
+        if (op.suspend) {
+            DiagnosticLogger.i("HARD_BLOCK", (exitCode == 0 ? "re_suspend_success"
+                    : "re_suspend_failed") + " count=" + count + " exit=" + exitCode
+                    + " durationMs=" + durationMs);
+        } else {
+            Log.i(TAG, "HARD_BLOCK_RESTORE_COMMAND_FINISHED exit=" + exitCode + " count=" + count);
+            DiagnosticLogger.i("HARD_BLOCK", "HARD_BLOCK_RESTORE_COMMAND_FINISHED exit=" + exitCode
+                    + " count=" + count + " durationMs=" + durationMs);
+            wakeTiming("hard_unsuspend_finished");
+
+            if (exitCode == 0 && wasFinal) {
+                // Two guards. isInDoze() catches a session that is currently active; the
+                // generation compare-and-clear catches a session that started and ended while this
+                // command was still outstanding, which isInDoze() alone cannot see.
+                if (dozeStateStore.isInDoze()) {
+                    DiagnosticLogger.w("HARD_BLOCK", "final_unsuspend_stale reason=active_session"
+                            + " gen=" + op.generation);
+                } else if (!dozeStateStore.clearAppliedSuspendedPackagesIfGeneration(op.generation)) {
+                    DiagnosticLogger.w("HARD_BLOCK", "final_unsuspend_stale reason=generation"
+                            + " gen=" + op.generation);
+                } else {
+                    DiagnosticLogger.i("HARD_BLOCK", "final_unsuspend_success count=" + count
+                            + " gen=" + op.generation + " durationMs=" + durationMs);
+                }
+            } else if (exitCode == 0) {
+                DiagnosticLogger.i("HARD_BLOCK", "temporary_unsuspend_success count=" + count
+                        + " gen=" + op.generation + " durationMs=" + durationMs);
+            } else {
+                Log.e(TAG, "HARD_BLOCK un-suspend failed exit=" + exitCode + ", record kept");
+            }
+        }
+
+        if (next != null) {
+            dispatchPackageOp(next);
+        }
     }
 
     public String getDeviceIdleState() {
@@ -2415,7 +2601,8 @@ public class ForceDozeService extends Service {
         if (screenOn) {
             log(logPrefix + "_PARTIAL_LOCKSCREEN: session still active behind the keyguard");
             DiagnosticLogger.i("RECOVERY", logPrefix + "_PARTIAL_LOCKSCREEN screenOn=true inDoze=true");
-            restoreSuspendedPackages(reason);
+            // Temporary, so the session keeps ownership of its exact package set.
+            enforcePackageStateForLifecycle(reason);
             restoreBiometricsForUnlock(getApplicationContext());
             enforceSensorStateForLifecycle(reason);
             return;
@@ -2425,6 +2612,9 @@ public class ForceDozeService extends Service {
                 + "pending state until the screen comes back on");
         DiagnosticLogger.i("RECOVERY", logPrefix + "_DEFERRED screenOn=false inDoze=true");
         enforceSensorStateForLifecycle(reason);
+        // Packages belong to the same still-active session: they must be suspended while the
+        // screen is off, and the record must survive.
+        enforcePackageStateForLifecycle(reason);
     }
 
     /**
@@ -2582,7 +2772,12 @@ public class ForceDozeService extends Service {
                 // looking at the launcher now; suspended apps must not stay greyed out until they
                 // happen to unlock, and biometrics must be back before the unlock is attempted.
                 cancelPendingEnterDoze();
-                restoreSuspendedPackages("screen on");
+                // Lifecycle enforcement rather than restoreSuspendedPackages(): when the keyguard
+                // is still up with waitForUnlock the un-suspend must be TEMPORARY and must keep
+                // session ownership, or the next screen-off has nothing left to re-suspend. With
+                // waitForUnlock off, or already unlocked, this resolves to the same FINAL
+                // un-suspend as before.
+                enforcePackageStateForLifecycle("screen on");
                 restoreBiometricsForUnlock(context);
                 // Lock-screen sensor access. No-ops unless the session is still owned behind the
                 // keyguard, so the waitForUnlock=false path is untouched.
@@ -2607,9 +2802,10 @@ public class ForceDozeService extends Service {
             } else if (action.equals(Intent.ACTION_SCREEN_OFF)) {
                 log("Screen OFF received");
                 DiagnosticLogger.i("DOZE", "screen_off");
-                // Re-apply the restriction if the screen went off again without an unlock. No-ops
-                // for a fresh screen-off, where nothing is marked yet.
+                // Re-apply the restrictions if the screen went off again without an unlock.
+                // Both no-op for a fresh screen-off, where nothing is owned yet.
                 enforceSensorStateForLifecycle("screen off");
+                enforcePackageStateForLifecycle("screen off");
                 if (disableWhenCharging && Utils.isConnectedToCharger(getApplicationContext())) {
                     log("Connected to charger and disableWhenCharging=true, skip entering Doze");
                 } else if (Utils.isUserInCommunicationCall(context)) {
