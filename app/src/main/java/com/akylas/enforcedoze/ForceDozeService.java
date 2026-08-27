@@ -217,6 +217,7 @@ public class ForceDozeService extends Service {
     private static final String BIOMETRIC_LABEL_LOCKSCREEN_RESTORE = "biometric_lockscreen_restore";
     private static final String BIOMETRIC_LABEL_LOCKSCREEN_REAPPLY = "biometric_lockscreen_reapply";
     private static final String BIOMETRIC_LABEL_FINAL = "biometric_final_restore";
+    private static final String BIOMETRIC_LABEL_ENTER = "biometric_doze_enter";
     /**
      * Lowest API level on which the multi-package {@code pm suspend a b c} form is trusted. Below
      * this the compatibility loop is used directly rather than probing with a batch that older
@@ -2296,7 +2297,11 @@ public class ForceDozeService extends Service {
         if (turnOffBiometricsInDoze) {
             log("Disabling Biometrics");
             dozeStateStore.markApplied(DozeStateStore.KEY_BIOMETRICS, true);
-            setBiometricsSensorState(context, false);
+            // Through the same serializer as every other biometric write. Bypassing it left the
+            // fresh disable racing an old session's final enable on independent Shizuku threads:
+            // the cross-session marker guard would correctly keep the new marker, but the stale
+            // enable could still land last and leave biometrics on for the new session.
+            requestBiometricState(false, null, BIOMETRIC_LABEL_ENTER);
         }
         if (turnOnBatterySaverInDoze && !wasBatterSaverOn) {
             log("Enabling Battery Saver");
