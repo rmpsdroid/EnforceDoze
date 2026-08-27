@@ -160,6 +160,20 @@ public class ForceDozeService extends Service {
     private String pendingSensorLabel = null;
     /** True while sensors are temporarily enabled for lock-screen use during an owned session. */
     private boolean lockscreenSensorOverrideActive = false;
+
+    /**
+     * Biometrics get their own serializer, deliberately not sharing the sensor slot: coalescing is
+     * per physical toggle, and one shared slot would let a sensor write cancel a biometric write.
+     * It became necessary once SCREEN_OFF started issuing a disable - before that only the unlock
+     * restore ever wrote biometrics, so the stateRestoreInFlight guard was enough. With two actors
+     * carrying opposite targets on independent Shizuku threads, "drop the duplicate" cannot express
+     * "apply the newest instead".
+     */
+    private final Object biometricOpLock = new Object();
+    private boolean biometricOpInFlight = false;
+    private Boolean pendingBiometricTarget = null;
+    private Shell.OnCommandResultListener2 pendingBiometricCallback = null;
+    private String pendingBiometricLabel = null;
     /**
      * Latched for the duration of one call so the telephony callback, the audio-mode callback and
      * the screen-on fallback together produce a single Doze exit rather than three.
@@ -200,6 +214,9 @@ public class ForceDozeService extends Service {
     private static final String SENSOR_LABEL_LOCKSCREEN_REAPPLY = "lockscreen_reapply";
     private static final String SENSOR_LABEL_ENTER = "doze_enter";
     private static final String SENSOR_LABEL_FINAL = "final_restore";
+    private static final String BIOMETRIC_LABEL_LOCKSCREEN_RESTORE = "biometric_lockscreen_restore";
+    private static final String BIOMETRIC_LABEL_LOCKSCREEN_REAPPLY = "biometric_lockscreen_reapply";
+    private static final String BIOMETRIC_LABEL_FINAL = "biometric_final_restore";
     /**
      * Lowest API level on which the multi-package {@code pm suspend a b c} form is trusted. Below
      * this the compatibility loop is used directly rather than probing with a batch that older
@@ -1058,6 +1075,13 @@ public class ForceDozeService extends Service {
             log("Outside custom Doze periods, skip entering Doze");
             return;
         }
+        // Defence in depth against a stale TimerTask armed before this session existed: a session
+        // already owned is continued by resumeOwnedDozeAfterLockedWake(), never re-entered here.
+        if (dozeStateStore.isInDoze()) {
+            log("A Doze session is already owned, skipping fresh entry");
+            DiagnosticLogger.i("DOZE", "fresh_entry_skipped reason=session_already_owned");
+            return;
+        }
         if (!getDeviceIdleState().equals("IDLE") || !lastKnownState.equals("IDLE")) {
             if (!Utils.isScreenOn(context)) {
                 lastKnownState = "IDLE";
@@ -1199,7 +1223,11 @@ public class ForceDozeService extends Service {
         // path as the radios instead of a one-shot timer.
         restoreDeviceStates(getApplicationContext(), "exit Doze");
 
-        if (showPersistentNotif) {
+        // timeEnterDoze > 0 means this process performed the entry. After a recreation these
+        // entry-side fields are back to 0/"Unknown", which would render a duration of roughly
+        // 29,000,000 minutes and a negative battery delta. The durable EXIT row above is written
+        // either way; only the notification is skipped.
+        if (showPersistentNotif && timeEnterDoze > 0L) {
             Timer updateNotif = new Timer();
             updateNotif.schedule(new TimerTask() {
                 @Override
@@ -1207,6 +1235,8 @@ public class ForceDozeService extends Service {
                     updatePersistentNotification(lastScreenOff, Utils.diffInMins(timeEnterDoze, timeExitDoze), (lastDozeEnterBatteryLife - lastDozeExitBatteryLife));
                 }
             }, 2000);
+        } else if (showPersistentNotif) {
+            DiagnosticLogger.i("DOZE", "stats_notification_update_skipped reason=missing_entry_context");
         }
 
     }
@@ -2387,11 +2417,12 @@ public class ForceDozeService extends Service {
     private void onRestoreFinished(String key, int exitCode) {
         try {
             if (exitCode == 0) {
-                // Cross-session guard, currently only needed for the sensor key because it is the
-                // one a temporary lock-screen command can outlive: an old session's final restore
-                // can land after a new SCREEN_OFF has already begun a new session and re-marked it.
-                // Clearing then would drop a debt the new session genuinely owes.
-                if (DozeStateStore.KEY_ALL_SENSORS.equals(key) && dozeStateStore.isInDoze()) {
+                // Cross-session guard for the two keys a temporary lock-screen command can
+                // outlive: an old session's final restore can land after a new SCREEN_OFF has
+                // already begun a new session and re-marked them. Clearing then would drop a debt
+                // the new session genuinely owes.
+                if ((DozeStateStore.KEY_ALL_SENSORS.equals(key) || DozeStateStore.KEY_BIOMETRICS.equals(key))
+                        && dozeStateStore.isInDoze()) {
                     Log.i(TAG, "RESTORE_SUPERSEDED " + key + ", a newer Doze session owns the marker");
                     DiagnosticLogger.i("STATE", "RESTORE_SUPERSEDED " + key + " newSessionOwnsMarker=true");
                     return;
@@ -2410,25 +2441,218 @@ public class ForceDozeService extends Service {
     }
 
     /**
-     * Biometrics are unlock-critical, so they are restored as early as possible on SCREEN_ON and
-     * outside the waitForUnlock branch - waiting for ACTION_USER_PRESENT to re-enable the very
-     * sensor needed to produce ACTION_USER_PRESENT would be circular.
-     * <p>
-     * The durable marker is cleared in the completion callback rather than up front. The previous
-     * code cleared it first and then issued the command, so a failed or dropped command left the
-     * user with biometric unlock disabled and no record that it still needed restoring.
+     * Ends an owned session that this process itself started, using ordinary exit semantics.
+     * exitDoze() already sets inDoze false before dispatching, so every completion callback sees a
+     * finished session and the final clears are permitted.
      */
-    private void restoreBiometricsForUnlock(Context context) {
+    private void endOwnedDozeSession(String reason) {
+        log("Ending the owned Doze session: " + reason);
+        DiagnosticLogger.i("DOZE", "owned_session_final_exit reason=" + reason);
+        cancelPendingEnterDoze();
+        releaseTempWakeLock();
+        maintenance = false;
+        exitDoze(getDeviceIdleState());
+    }
+
+    /**
+     * Ends an owned session this process did not start, after a recreation.
+     * <p>
+     * Deliberately not exitDoze(): its tail renders the statistics notification from
+     * timeEnterDoze, lastDozeEnterBatteryLife and lastScreenOff, which a fresh process has reset to
+     * 0/0/"Unknown". The durable EXIT row is still written - it is built only from the current
+     * clock and a live battery read, and it pairs correctly with the ENTER row the original process
+     * committed, so the session is preserved in the statistics.
+     */
+    private void finalizeRecoveredOwnedSession(String reason) {
+        log("Finalizing a recovered owned Doze session: " + reason);
+        DiagnosticLogger.i("DOZE", "recovered_session_final_exit reason=" + reason);
+
+        cancelPendingEnterDoze();
+        releaseTempWakeLock();
+        maintenance = false;
+
+        // Durable flag first: the package generation clear and the KEY_ALL_SENSORS/KEY_BIOMETRICS
+        // marker clears all refuse to release ownership while inDoze is true.
+        dozeStateStore.setInDoze(false);
+        lastKnownState = "ACTIVE";
+        leaveDoze();
+
+        if (!disableStats) {
+            dozeUsageData.add(Long.toString(System.currentTimeMillis()).concat(",")
+                    .concat(Float.toString(Utils.isConnectedToCharger(getApplicationContext())
+                            ? 0.0f : Utils.getBatteryLevel(getApplicationContext())))
+                    .concat(",").concat("EXIT"));
+            saveDozeDataStats();
+        }
+
+        restoreSuspendedPackages(reason);
+        reEnableBlockedNotifications();
+        restoreDeviceStates(getApplicationContext(), reason);
+    }
+
+    /**
+     * Makes sure an owned session is still physically idle, without running any fresh-entry work.
+     * Shared by the screen-off resume and by recovery Mode A, so a force-idle dropped while Shizuku
+     * was away is reissued on reconnect rather than leaving restrictions applied on a device that
+     * is not actually idle.
+     */
+    private void ensureOwnedDozePhysicalState(String reason) {
+        if (!dozeStateStore.isInDoze()) {
+            return;
+        }
+        if (Utils.isScreenOn(getApplicationContext())) {
+            return;
+        }
+        if (isCallActiveNow()) {
+            return;
+        }
+        if (disableWhenCharging && Utils.isConnectedToCharger(getApplicationContext())) {
+            return;
+        }
+        if (!Utils.isInsideCustomDozePeriod(getApplicationContext())) {
+            return;
+        }
+        if (maintenance) {
+            // A genuine maintenance window is open and its restores are asynchronous. Forcing deep
+            // idle now could make the re-entry handler recapture pre-Doze values from a partially
+            // restored state, so let Android finish the window on its own.
+            log("Owned session is inside a maintenance window, not forcing deep idle (" + reason + ")");
+            DiagnosticLogger.i("DOZE", "owned_session_waiting_for_maintenance_completion reason=" + reason);
+            return;
+        }
+        // Cheap in-process read; no dumpsys and nothing to wait on.
+        if (pm.isDeviceIdleMode()) {
+            return;
+        }
+        DiagnosticLogger.i("DOZE", "owned_session_reforce_idle reason=" + reason);
+        applyDoze();
+    }
+
+    /**
+     * The user woke the lock screen and turned it off again. That is a continuation of the session
+     * already owned, not a new one, so none of the fresh-entry work runs: no new package
+     * generation, no ENTER statistics row, no pre-Doze recapture, no second motion-sensor timer and
+     * no configured entry delay. The restrictions themselves are re-applied by the enforce* calls
+     * at the SCREEN_OFF site before this runs.
+     */
+    private void resumeOwnedDozeAfterLockedWake(String reason) {
+        if (!dozeStateStore.isInDoze()) {
+            return;
+        }
+        if (Utils.isScreenOn(getApplicationContext())) {
+            return;
+        }
+        log("Resuming the owned Doze session (" + reason + ")");
+        DiagnosticLogger.i("DOZE", "owned_session_resumed reason=" + reason);
+        cancelPendingEnterDoze();
+        releaseTempWakeLock();
+        lastKnownState = "IDLE";
+        // maintenance is deliberately left as it is: while a genuine window is open the flag is the
+        // only record that its restored states must be re-applied when deep idle resumes.
+        ensureOwnedDozePhysicalState(reason);
+    }
+
+    /**
+     * Queues a target state for the biometric keyguard toggle. Same contract as the sensor
+     * serializer: an in-flight command is never completed artificially and receives only its real
+     * callback, once; a request still queued when a newer one replaces it is completed exactly once
+     * with {@link #SUPERSEDED_EXIT_CODE}.
+     */
+    private void requestBiometricState(boolean enabled, Shell.OnCommandResultListener2 done, String label) {
+        Shell.OnCommandResultListener2 superseded;
+        boolean dispatchNow;
+        synchronized (biometricOpLock) {
+            superseded = pendingBiometricCallback;
+            pendingBiometricTarget = enabled;
+            pendingBiometricCallback = done;
+            pendingBiometricLabel = label;
+            dispatchNow = !biometricOpInFlight;
+            if (dispatchNow) {
+                biometricOpInFlight = true;
+            }
+        }
+        if (superseded != null) {
+            superseded.onCommandResult(0, SUPERSEDED_EXIT_CODE, new ArrayList<>(), new ArrayList<>());
+        }
+        if (dispatchNow) {
+            dispatchPendingBiometricOp();
+        }
+    }
+
+    private void dispatchPendingBiometricOp() {
+        final boolean target;
+        final Shell.OnCommandResultListener2 done;
+        final String label;
+        synchronized (biometricOpLock) {
+            if (pendingBiometricTarget == null) {
+                biometricOpInFlight = false;
+                return;
+            }
+            target = pendingBiometricTarget;
+            done = pendingBiometricCallback;
+            label = pendingBiometricLabel;
+            pendingBiometricTarget = null;
+            pendingBiometricCallback = null;
+            pendingBiometricLabel = null;
+            biometricOpInFlight = true;
+        }
+
+        if (BIOMETRIC_LABEL_LOCKSCREEN_RESTORE.equals(label)) {
+            DiagnosticLogger.i("LOCKSCREEN", "biometrics_restore_start");
+        } else if (BIOMETRIC_LABEL_LOCKSCREEN_REAPPLY.equals(label)) {
+            DiagnosticLogger.i("LOCKSCREEN", "biometrics_reapply_start");
+        }
+
+        setBiometricsSensorState(getApplicationContext(), target,
+                (commandCode, exitCode, stdout, stderr) -> {
+                    if (BIOMETRIC_LABEL_LOCKSCREEN_RESTORE.equals(label)) {
+                        DiagnosticLogger.i("LOCKSCREEN", (exitCode == 0 ? "biometrics_restore_success"
+                                : "biometrics_restore_failed") + " exit=" + exitCode);
+                    } else if (BIOMETRIC_LABEL_LOCKSCREEN_REAPPLY.equals(label)) {
+                        DiagnosticLogger.i("LOCKSCREEN", (exitCode == 0 ? "biometrics_reapply_success"
+                                : "biometrics_reapply_failed") + " exit=" + exitCode);
+                    }
+                    if (done != null) {
+                        done.onCommandResult(commandCode, exitCode, stdout, stderr);
+                    }
+                    dispatchPendingBiometricOp();
+                });
+    }
+
+    /**
+     * Brings biometrics into line with the current lifecycle, derived from durable facts exactly as
+     * the sensor policy is.
+     * <p>
+     * Biometrics are unlock-critical, so a locked wake restores them to their recorded pre-Doze
+     * value immediately - waiting for ACTION_USER_PRESENT to re-enable the sensor needed to produce
+     * ACTION_USER_PRESENT would be circular. That restore is TEMPORARY and keeps the marker, so the
+     * following screen-off can disable them again for the same still-owned session.
+     */
+    private void enforceBiometricStateForLifecycle(String reason) {
         if (!dozeStateStore.isApplied(DozeStateStore.KEY_BIOMETRICS)) {
             return;
         }
-        if (!stateRestoreInFlight.add(DozeStateStore.KEY_BIOMETRICS)) {
+        if (isCallActiveNow()) {
+            log("Not enforcing biometrics (" + reason + "), a call is active");
             return;
         }
-        Log.i(TAG, "RESTORE_PENDING " + DozeStateStore.KEY_BIOMETRICS + " (unlock-critical)");
-        DiagnosticLogger.i("STATE", "RESTORE_PENDING " + DozeStateStore.KEY_BIOMETRICS + " unlockCritical=true");
-        setBiometricsSensorState(context, true, (commandCode, exitCode, stdout, stderr) ->
-                onRestoreFinished(DozeStateStore.KEY_BIOMETRICS, exitCode));
+        if (!dozeStateStore.isInDoze()) {
+            // Session over; the final restore path owns the value and the marker.
+            return;
+        }
+
+        if (Utils.isScreenOn(getApplicationContext())) {
+            if (!(waitForUnlock && Utils.isDeviceLocked(getApplicationContext()))) {
+                // A full restore is running for this wake; leave it to that path.
+                return;
+            }
+            boolean preDoze = dozeStateStore.getPreDozeValue(DozeStateStore.KEY_BIOMETRICS, true);
+            log("Temporarily restoring biometrics for the lock screen (" + reason + ")");
+            requestBiometricState(preDoze, null, BIOMETRIC_LABEL_LOCKSCREEN_RESTORE);
+        } else {
+            log("Re-applying the biometric restriction (" + reason + ")");
+            requestBiometricState(false, null, BIOMETRIC_LABEL_LOCKSCREEN_REAPPLY);
+        }
     }
 
     /**
@@ -2612,12 +2836,32 @@ public class ForceDozeService extends Service {
             return;
         }
 
+        // The broadcasts that would normally end a session - SCREEN_OFF and
+        // ACTION_POWER_CONNECTED - may have been delivered while this process was dead, so policy
+        // validity is re-checked here rather than assumed.
+        if (isCallActiveNow()) {
+            log(logPrefix + "_CALL: a call owns the transition");
+            DiagnosticLogger.i("RECOVERY", logPrefix + "_CALL");
+            handleCallStarted(reason + "_recovery");
+            return;
+        }
+        if (disableWhenCharging && Utils.isConnectedToCharger(getApplicationContext())) {
+            DiagnosticLogger.i("RECOVERY", logPrefix + "_POLICY_EXIT reason=charging");
+            finalizeRecoveredOwnedSession("charging (recovered)");
+            return;
+        }
+        if (!Utils.isInsideCustomDozePeriod(getApplicationContext())) {
+            DiagnosticLogger.i("RECOVERY", logPrefix + "_POLICY_EXIT reason=outside_custom_period");
+            finalizeRecoveredOwnedSession("outside custom Doze period (recovered)");
+            return;
+        }
+
         if (screenOn) {
             log(logPrefix + "_PARTIAL_LOCKSCREEN: session still active behind the keyguard");
             DiagnosticLogger.i("RECOVERY", logPrefix + "_PARTIAL_LOCKSCREEN screenOn=true inDoze=true");
             // Temporary, so the session keeps ownership of its exact package set.
             enforcePackageStateForLifecycle(reason);
-            restoreBiometricsForUnlock(getApplicationContext());
+            enforceBiometricStateForLifecycle(reason);
             enforceSensorStateForLifecycle(reason);
             return;
         }
@@ -2629,6 +2873,10 @@ public class ForceDozeService extends Service {
         // Packages belong to the same still-active session: they must be suspended while the
         // screen is off, and the record must survive.
         enforcePackageStateForLifecycle(reason);
+        enforceBiometricStateForLifecycle(reason);
+        // Converge Android's own idle state too, so a force-idle dropped while Shizuku was away
+        // does not leave restrictions applied on a device that is not actually idle.
+        ensureOwnedDozePhysicalState(reason);
     }
 
     /**
@@ -2705,7 +2953,9 @@ public class ForceDozeService extends Service {
                 requestSensorState(dozeStateStore.getPreDozeValue(key, true), done, SENSOR_LABEL_FINAL);
                 break;
             case DozeStateStore.KEY_BIOMETRICS:
-                setBiometricsSensorState(context, dozeStateStore.getPreDozeValue(key, true), done);
+                // Through the serializer so a temporary lock-screen command can never be applied
+                // after this one and leave the user unable to unlock.
+                requestBiometricState(dozeStateStore.getPreDozeValue(key, true), done, BIOMETRIC_LABEL_FINAL);
                 break;
             case DozeStateStore.KEY_MOTION_SENSORS:
                 // The auto-rotate workaround is fire-and-forget on its own thread and must not
@@ -2792,7 +3042,7 @@ public class ForceDozeService extends Service {
                 // waitForUnlock off, or already unlocked, this resolves to the same FINAL
                 // un-suspend as before.
                 enforcePackageStateForLifecycle("screen on");
-                restoreBiometricsForUnlock(context);
+                enforceBiometricStateForLifecycle("screen on");
                 // Lock-screen sensor access. No-ops unless the session is still owned behind the
                 // keyguard, so the waitForUnlock=false path is untouched.
                 enforceSensorStateForLifecycle("screen on");
@@ -2816,16 +3066,33 @@ public class ForceDozeService extends Service {
             } else if (action.equals(Intent.ACTION_SCREEN_OFF)) {
                 log("Screen OFF received");
                 DiagnosticLogger.i("DOZE", "screen_off");
-                // Re-apply the restrictions if the screen went off again without an unlock.
-                // Both no-op for a fresh screen-off, where nothing is owned yet.
-                enforceSensorStateForLifecycle("screen off");
-                enforcePackageStateForLifecycle("screen off");
-                if (disableWhenCharging && Utils.isConnectedToCharger(getApplicationContext())) {
-                    log("Connected to charger and disableWhenCharging=true, skip entering Doze");
-                } else if (Utils.isUserInCommunicationCall(context)) {
-                    log("User is in a VOIP call or an audio/video chat, skip entering Doze");
-                } else if (Utils.isUserInCall(context)) {
-                    log("User is in a phone call, skip entering Doze");
+
+                // Conditions that END a session are decided before any restriction is re-applied,
+                // so an owned session is never re-suspended only to be restored a moment later.
+                if (isCallActiveNow()) {
+                    // Latched, so this is a no-op once the call path has already released the
+                    // session, and a guaranteed final release when the call was only ever noticed
+                    // through the audio mode.
+                    log("A call is active, letting the call path own the transition");
+                    handleCallStarted("screen_off_fallback");
+                } else if (disableWhenCharging && Utils.isConnectedToCharger(getApplicationContext())) {
+                    if (dozeStateStore.isInDoze()) {
+                        endOwnedDozeSession("charging");
+                    } else {
+                        log("Connected to charger and disableWhenCharging=true, skip entering Doze");
+                    }
+                } else if (!Utils.isInsideCustomDozePeriod(context)) {
+                    if (dozeStateStore.isInDoze()) {
+                        endOwnedDozeSession("outside custom Doze period");
+                    } else {
+                        log("Outside custom Doze periods, skip entering Doze");
+                    }
+                } else if (dozeStateStore.isInDoze()) {
+                    // Owned-session continuation after a lock-screen wake.
+                    enforcePackageStateForLifecycle("screen off");
+                    enforceSensorStateForLifecycle("screen off");
+                    enforceBiometricStateForLifecycle("screen off");
+                    resumeOwnedDozeAfterLockedWake("screen off");
                 } else {
                     log("Doze delay: " + delay + "ms");
                     if (ignoreLockscreenTimeout) {
