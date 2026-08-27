@@ -29,7 +29,6 @@ import com.nanotasks.Completion;
 import com.nanotasks.Tasks;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Set;
@@ -112,30 +111,42 @@ public class DozeBatteryStatsActivity extends AppCompatActivity {
 //            if ((sortedDozeUsageStats.size() & 1) == 0) {
                 int count = sortedDozeUsageStats.size();
                 for (int i = 0; i < count - 1; ) {
-                    String[] exit_data = sortedDozeUsageStats.get(i).split(",");
-                    log("Exit data : [" + Arrays.toString(exit_data) + "]");
-                    String[] enter_data = sortedDozeUsageStats.get(i + 1).split(",");
-                    log("Enter data: [" + Arrays.toString(enter_data) + "]");
+                    StatsEntry exitEntry = parseStatsEntry(sortedDozeUsageStats.get(i));
+                    StatsEntry enterEntry = parseStatsEntry(sortedDozeUsageStats.get(i + 1));
 
-                    if (enter_data[2].equals("ENTER") && exit_data[2].equals("EXIT")) {
+                    // A single unreadable record must not take the whole screen down with it. The
+                    // stored set is left exactly as it is; only the rendering skips past it.
+                    if (exitEntry == null || enterEntry == null) {
+                        log("Skipping malformed statistics record at index "
+                                + (exitEntry == null ? i : i + 1));
+                        i = i + 1;
+                        continue;
+                    }
+
+                    log("Exit data : [" + exitEntry + "]");
+                    log("Enter data: [" + enterEntry + "]");
+
+                    boolean isSession = enterEntry.event.equals("ENTER") && exitEntry.event.equals("EXIT");
+                    boolean isMaintenance = enterEntry.event.equals("ENTER_MAINTENANCE")
+                            && exitEntry.event.equals("EXIT_MAINTENANCE");
+
+                    if (isSession || isMaintenance) {
+                        // The list is sorted newest first, so the exit of a pair must not predate
+                        // its enter. timeSpentString() throws on a negative duration.
+                        if (exitEntry.timestamp < enterEntry.timestamp) {
+                            log("Skipping statistics pair with a negative duration at index " + i);
+                            i = i + 1;
+                            continue;
+                        }
+
+                        int batteryUsed = enterEntry.batteryLevel - exitEntry.batteryLevel;
                         DozeStatsCard card = new DozeStatsCard(
-                                "Doze Session",
-                                "Start Time: " + Utils.getDateCurrentTimeZone(Long.valueOf(enter_data[0])) +
-                                        "\nEnd Time: " + Utils.getDateCurrentTimeZone(Long.valueOf(exit_data[0])) +
-                                        "\nTime spent: " + Utils.timeSpentString(Long.valueOf(enter_data[0]), Long.valueOf(exit_data[0])) +
-                                        "\nBattery used: " + (Float.valueOf(enter_data[1]).intValue() - Float.valueOf(exit_data[1]).intValue() + "%"),
-                                returnDrawableBattery(Float.valueOf(enter_data[1]).intValue() - Float.valueOf(exit_data[1]).intValue())
-                        );
-                        adapter.addCard(card);
-                        i = i + 2;
-                    } else if (enter_data[2].equals("ENTER_MAINTENANCE") && exit_data[2].equals("EXIT_MAINTENANCE")) {
-                        DozeStatsCard card = new DozeStatsCard(
-                                "Doze Session (Maintenance)",
-                                "Start Time: " + Utils.getDateCurrentTimeZone(Long.valueOf(enter_data[0])) +
-                                        "\nEnd Time: " + Utils.getDateCurrentTimeZone(Long.valueOf(exit_data[0])) +
-                                        "\nTime spent: " + Utils.timeSpentString(Long.valueOf(enter_data[0]), Long.valueOf(exit_data[0])) +
-                                        "\nBattery used: " + (Integer.valueOf(enter_data[1]) - Integer.valueOf(exit_data[1]) + "%"),
-                                returnDrawableBattery(Float.valueOf(enter_data[1]).intValue() - Float.valueOf(exit_data[1]).intValue())
+                                isMaintenance ? "Doze Session (Maintenance)" : "Doze Session",
+                                "Start Time: " + Utils.getDateCurrentTimeZone(enterEntry.timestamp) +
+                                        "\nEnd Time: " + Utils.getDateCurrentTimeZone(exitEntry.timestamp) +
+                                        "\nTime spent: " + Utils.timeSpentString(enterEntry.timestamp, exitEntry.timestamp) +
+                                        "\nBattery used: " + batteryUsed + "%",
+                                returnDrawableBattery(batteryUsed)
                         );
                         adapter.addCard(card);
                         i = i + 2;
@@ -149,6 +160,56 @@ public class DozeBatteryStatsActivity extends AppCompatActivity {
 //                finish();
 //            }
             mListView.scrollToPosition(0);
+        }
+    }
+
+    /** One parsed "timestamp,battery,event" record. */
+    private static final class StatsEntry {
+        final long timestamp;
+        final int batteryLevel;
+        final String event;
+
+        StatsEntry(long timestamp, int batteryLevel, String event) {
+            this.timestamp = timestamp;
+            this.batteryLevel = batteryLevel;
+            this.event = event;
+        }
+
+        @Override
+        public String toString() {
+            return timestamp + "," + batteryLevel + "," + event;
+        }
+    }
+
+    /**
+     * Validates a stored record before indexing or parsing any of it.
+     * <p>
+     * Battery levels are written with Float.toString(), so every record holds a decimal such as
+     * "25.0". The maintenance branch here used to read them with Integer.valueOf(), which threw
+     * NumberFormatException and killed this activity as soon as any maintenance session existed;
+     * the ordinary-session branch beside it already parsed them as floats. Parsing is now shared,
+     * so the two cannot drift apart again.
+     *
+     * @return the parsed record, or null when it is malformed or from an older layout
+     */
+    private StatsEntry parseStatsEntry(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String[] parts = raw.split(",");
+        if (parts.length < 3) {
+            return null;
+        }
+        try {
+            long timestamp = Long.parseLong(parts[0].trim());
+            int batteryLevel = (int) Float.parseFloat(parts[1].trim());
+            String event = parts[2].trim();
+            if (event.isEmpty()) {
+                return null;
+            }
+            return new StatsEntry(timestamp, batteryLevel, event);
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 
