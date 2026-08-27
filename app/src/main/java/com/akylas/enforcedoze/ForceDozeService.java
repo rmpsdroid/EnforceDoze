@@ -658,7 +658,12 @@ public class ForceDozeService extends Service {
         boolean hasPackages = dozeStateStore.hasAppliedSuspendedPackages();
         boolean hasStates = dozeStateStore.hasPendingRestore();
 
-        if (!hasPackages && !hasStates) {
+        // A durable inDoze flag is itself something to recover, independently of any package or
+        // device-state marker. A configuration that only forces idle - no Hard Suspend blocklist
+        // and no optional radio/sensor restrictions - owns a logical session with neither marker
+        // set, and the old condition returned RECOVERY_NONE for it, so applyRecoveryPolicy and its
+        // Mode C finalization were never reached and the session was left owned with no EXIT.
+        if (!inDoze && !hasPackages && !hasStates) {
             log("RECOVERY_NONE: service recreated with nothing pending");
             return;
         }
