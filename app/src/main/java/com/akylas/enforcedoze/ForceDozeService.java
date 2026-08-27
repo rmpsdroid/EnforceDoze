@@ -59,6 +59,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -169,6 +170,20 @@ public class ForceDozeService extends Service {
      * carrying opposite targets on independent Shizuku threads, "drop the duplicate" cannot express
      * "apply the newest instead".
      */
+    /**
+     * Motion sensors get the same treatment as the other physical toggles, and for the same
+     * concrete reason. Ordering the Java dispatches is not enough: every command runs on its own
+     * thread and its own remote process, so "restrict" dispatched at entry and "enable" dispatched
+     * moments later by the wake restore can complete in either order, and the losing order leaves
+     * the sensors restricted after the session is over with the journal already clear. One slot per
+     * physical toggle, latest target wins, and an in-flight command is never completed artificially.
+     */
+    private final Object motionOpLock = new Object();
+    private boolean motionOpInFlight = false;
+    private Boolean pendingMotionRestrict = null;
+    private Shell.OnCommandResultListener2 pendingMotionCallback = null;
+    private String pendingMotionLabel = null;
+
     private final Object biometricOpLock = new Object();
     private boolean biometricOpInFlight = false;
     private Boolean pendingBiometricTarget = null;
@@ -234,6 +249,15 @@ public class ForceDozeService extends Service {
      * {@link #entryAttemptToken} under this same monitor and that is what the callback compares.
      */
     private final Object physicalEntryLock = new Object();
+
+    /**
+     * Classification of a session-scoped async result, decided under
+     * {@link #physicalEntryLock}: eligible to apply now, belonging to a session that is alive but
+     * temporarily showing its lock screen, or belonging to a session that is over.
+     */
+    private static final int WORK_ELIGIBLE = 0;
+    private static final int WORK_LOCKED_WAKE = 1;
+    private static final int WORK_STALE = 2;
     private int physicalEntryPhase = PHASE_NONE;
 
     /**
@@ -255,6 +279,33 @@ public class ForceDozeService extends Service {
      * new entry on a service that is going away.
      */
     private volatile boolean serviceStopping = false;
+
+    /**
+     * Identity of the ACTIVE logical session, deliberately separate from {@link #entryAttemptToken}.
+     * The attempt token identifies a PREPARING physical force and is invalidated by anything that
+     * merely cancels a pending entry - including a locked SCREEN_ON, which leaves the session it
+     * interrupts perfectly alive. Async work belonging to a session needs the opposite: an identity
+     * that survives a lock-screen wake and changes only when the session really ends.
+     * <p>
+     * Read from Shizuku command threads and from TimerTasks while lifecycle events write it from the
+     * main thread, so it is atomic rather than lock-guarded; using the physical-entry lock here
+     * would couple unrelated work to the entry transition for no benefit.
+     * <p>
+     * Not durable, and does not need to be: every callback and timer it guards dies with the process
+     * that created them. A process that adopts an already-durable session mints a fresh local epoch
+     * for its own async work instead.
+     */
+    private static final long EPOCH_NONE = 0L;
+    private final AtomicLong activeSessionEpoch = new AtomicLong(EPOCH_NONE);
+    private final AtomicLong sessionEpochCounter = new AtomicLong(EPOCH_NONE);
+
+    /**
+     * Epoch whose motion-sensor restriction was postponed because the lock screen came up before
+     * the two-second task fired. Applied once when that same session's screen goes off again, and
+     * discarded when the session ends. In-memory only: the task it stands in for would have died
+     * with the process anyway.
+     */
+    private final AtomicLong deferredMotionEpoch = new AtomicLong(EPOCH_NONE);
     private static final String SENSOR_LABEL_LOCKSCREEN_RESTORE = "lockscreen_restore";
     private static final String SENSOR_LABEL_LOCKSCREEN_REAPPLY = "lockscreen_reapply";
     private static final String SENSOR_LABEL_ENTER = "doze_enter";
@@ -262,6 +313,10 @@ public class ForceDozeService extends Service {
     private static final String BIOMETRIC_LABEL_LOCKSCREEN_RESTORE = "biometric_lockscreen_restore";
     private static final String BIOMETRIC_LABEL_LOCKSCREEN_REAPPLY = "biometric_lockscreen_reapply";
     private static final String BIOMETRIC_LABEL_FINAL = "biometric_final_restore";
+    private static final String MOTION_LABEL_ENTER = "motion_enter";
+    private static final String MOTION_LABEL_RESUME = "motion_resume";
+    private static final String MOTION_LABEL_FINAL = "motion_final_restore";
+    private static final String MOTION_LABEL_SERVICE_STOP = "motion_service_stop";
     private static final String BIOMETRIC_LABEL_ENTER = "biometric_doze_enter";
     /**
      * Lowest API level on which the multi-package {@code pm suspend a b c} form is trusted. Below
@@ -755,7 +810,10 @@ public class ForceDozeService extends Service {
             shizukuHandler.removeOnAvailabilityChangeListener(shizukuAvailabilityListener);
         }
         if (disableMotionSensors) {
-            executeCommand("dumpsys sensorservice enable");
+            // Kept as a safety net for the case where no session was owned and therefore no journal
+            // marker exists to drive a restore, but routed through the serializer: a direct write
+            // here could overtake, or be overtaken by, the restore dispatched a few lines below.
+            requestMotionSensorState(false, null, MOTION_LABEL_SERVICE_STOP);
         }
         // An explicit stop differs from ordinary process death only in that code still runs here:
         // the desired entry can be cancelled, and the physical undo can at least be dispatched.
@@ -1102,6 +1160,142 @@ public class ForceDozeService extends Service {
     }
 
     /**
+     * Starts a new ACTIVE logical session identity. Called once per genuinely fresh session, on
+     * both entry backends, before any session-scoped async work is spawned.
+     */
+    private long beginActiveSessionEpoch(String reason) {
+        long epoch = sessionEpochCounter.incrementAndGet();
+        activeSessionEpoch.set(epoch);
+        DiagnosticLogger.i("DOZE", "session_epoch_started epoch=" + epoch + " reason=" + reason);
+        return epoch;
+    }
+
+    /**
+     * Mints a local identity for a session this process did not start, so async work it creates has
+     * something valid to capture. Not a fresh entry: no ENTER row, no package generation and no
+     * change to anything durable - the session on disk is simply adopted as it stands.
+     */
+    private long ensureActiveSessionEpoch(String reason) {
+        // Under the barrier so adoption has exactly one winner. Two threads arriving together -
+        // service recreation recovery and a Shizuku reconnect, which is a realistic pairing - could
+        // otherwise both read NONE and mint two identities for the same durable session, after
+        // which work tagged with the losing identity would be treated as stale for ever.
+        synchronized (physicalEntryLock) {
+            if (!dozeStateStore.isInDoze()) {
+                return EPOCH_NONE;
+            }
+            long current = activeSessionEpoch.get();
+            if (current != EPOCH_NONE) {
+                return current;
+            }
+            long epoch = sessionEpochCounter.incrementAndGet();
+            activeSessionEpoch.set(epoch);
+            DiagnosticLogger.i("DOZE", "session_epoch_adopted epoch=" + epoch + " reason=" + reason);
+            return epoch;
+        }
+    }
+
+    /**
+     * Decides whether a session-scoped async result may still act. Must be called while holding
+     * {@link #physicalEntryLock}, so that the decision and the work it authorises cannot be split
+     * by a lifecycle event - an unsynchronised check would only narrow the stale-callback window
+     * rather than close it.
+     * <p>
+     * A wake is not automatically the end of the session. With waitForUnlock the keyguard can come
+     * up mid-entry and go away again with the session still owned throughout, so that case is
+     * reported separately instead of being collapsed into "stale": dropping it would silently lose
+     * the entry work for the rest of that session.
+     */
+    private int classifySessionEntryWork(long capturedEpoch) {
+        Context context = getApplicationContext();
+        if (serviceStopping) {
+            // Teardown is already running; establishing new entry work now would race the restores
+            // onDestroy is in the middle of dispatching.
+            return WORK_STALE;
+        }
+        if (!isActiveSessionEpoch(capturedEpoch)) {
+            return WORK_STALE;
+        }
+        if (isCallActiveNow()) {
+            return WORK_STALE;
+        }
+        if (disableWhenCharging && Utils.isConnectedToCharger(context)) {
+            return WORK_STALE;
+        }
+        if (!Utils.isInsideCustomDozePeriod(context)) {
+            return WORK_STALE;
+        }
+        if (!Utils.isScreenOn(context)) {
+            return WORK_ELIGIBLE;
+        }
+        // Screen on: only a keyguard this session is expected to outlive keeps it alive.
+        return (waitForUnlock && Utils.isDeviceLocked(context)) ? WORK_LOCKED_WAKE : WORK_STALE;
+    }
+
+    private void logDeferredAsyncWork(String type) {
+        log("Deferring asynchronous Doze entry work until the screen goes off again (" + type + ")");
+        DiagnosticLogger.i("DOZE", "async_session_work_deferred type=" + type + " reason=locked_wake");
+    }
+
+    /** The motion restriction itself, shared by the entry task and the deferred resume. */
+    private void applyMotionSensorRestriction(String label) {
+        requestMotionSensorState(true, null, label);
+    }
+
+    /**
+     * Applies a motion restriction that was postponed by a lock-screen wake, once, when that same
+     * session's screen goes off again. No new two-second timer is armed for a continuation: the
+     * delay exists to let the screen finish turning off on a fresh entry, and re-arming it on every
+     * lock-screen cycle would be a different feature.
+     */
+    private void applyDeferredMotionRestrictionIfDue(String reason) {
+        synchronized (physicalEntryLock) {
+            long deferred = deferredMotionEpoch.get();
+            if (deferred == EPOCH_NONE) {
+                return;
+            }
+            if (classifySessionEntryWork(deferred) != WORK_ELIGIBLE) {
+                return;
+            }
+            deferredMotionEpoch.set(EPOCH_NONE);
+            DiagnosticLogger.i("DOZE", "async_session_work_resumed type=motion reason=" + reason);
+            applyMotionSensorRestriction(MOTION_LABEL_RESUME);
+        }
+    }
+
+    /**
+     * Ends the local session identity. Only for a real session end, never for a lock-screen wake
+     * that leaves the session owned.
+     * <p>
+     * The durable inDoze flag alone would already make a stale callback refuse, but only until the
+     * next session begins: without this, an old callback holding epoch 10 would start passing again
+     * the moment a later session set inDoze back to true. Retiring the epoch is what makes the
+     * refusal permanent.
+     */
+    private void endActiveSessionEpoch(String reason) {
+        deferredMotionEpoch.set(EPOCH_NONE);
+        long previous = activeSessionEpoch.getAndSet(EPOCH_NONE);
+        if (previous != EPOCH_NONE) {
+            DiagnosticLogger.i("DOZE", "session_epoch_ended epoch=" + previous + " reason=" + reason);
+        }
+    }
+
+    /**
+     * The common guard for session-scoped async work: the session must still be owned on disk, and
+     * it must be the same session that spawned the work.
+     */
+    private boolean isActiveSessionEpoch(long capturedEpoch) {
+        return capturedEpoch != EPOCH_NONE
+                && activeSessionEpoch.get() == capturedEpoch
+                && dozeStateStore.isInDoze();
+    }
+
+    private void logStaleAsyncWork(String type) {
+        log("Skipping asynchronous Doze entry work from a finished session (" + type + ")");
+        DiagnosticLogger.i("DOZE", "async_session_work_skipped reason=stale_session type=" + type);
+    }
+
+    /**
      * Kept as a no-argument overload so callers that do not care about the outcome - including the
      * unreachable legacy {@code PendingIntentDozeReceiver}, which is left in place for a separate
      * cleanup commit - continue to compile and behave exactly as before.
@@ -1216,24 +1410,51 @@ public class ForceDozeService extends Service {
 
         // Unprivileged tunable fallback. It writes device_idle constants rather than performing an
         // immediate force-idle transition, so there is no single result to verify and nothing that
-        // could be left forced across a process death. Its ordering is deliberately identical to
-        // what it has always been.
+        // could be left forced across a process death.
         lastKnownState = "IDLE";
         releaseTempWakeLock();
-        applyEntryPackageAndNotificationBlocking(context);
-        timeEnterDoze = System.currentTimeMillis();
-        if (Utils.isConnectedToCharger(getApplicationContext())) {
-            lastDozeEnterBatteryLife = 0;
-        } else {
-            lastDozeEnterBatteryLife = Utils.getBatteryLevel(getApplicationContext());
+        // The whole ownership claim and initial setup run under the barrier, for the same reason
+        // the privileged commit does. This path can be reached from a delayed TimerTask, so a wake
+        // can arrive in the middle of it; without the barrier the wake could observe the freshly
+        // set flag, run a full exit with all its restores, and leave this thread to carry on
+        // blocking notifications, writing an ENTER row and applying restrictions afterwards.
+        final long fallbackEpoch;
+        synchronized (physicalEntryLock) {
+            // Re-checked before ownership is claimed rather than trusted from the caller: the
+            // policy may have changed during the entry delay. isFreshEntryStillWanted() carries the
+            // conditional charging predicate and the !inDoze test.
+            if (!isFreshEntryStillWanted(context) || dozeStateStore.isEntryPending()) {
+                log("Policy changed before the fallback entry could claim the session, skipping");
+                DiagnosticLogger.i("DOZE", "entry_aborted reason=policy_changed_before_commit"
+                        + " mode=tunable_fallback");
+                return;
+            }
+            // One ordering change against the original: the durable flag is set before the entry
+            // work rather than after it. The session-scoped guard requires an owned session, so
+            // leaving setInDoze() below the package block would let a fast getFocusedApps callback
+            // be rejected as stale and silently skip the whole blocklist. Setting it first is also
+            // the safer of the two crash windows - an owned session with no packages is what
+            // recovery is built for, whereas suspended packages with no session is the case that
+            // leaves apps greyed out.
+            dozeStateStore.setInDoze(true);
+            // The fallback owns a logical session exactly as the privileged path does, so its async
+            // entry work needs the same cross-session protection even though it has no PREPARING
+            // state.
+            fallbackEpoch = beginActiveSessionEpoch("fresh entry (tunable fallback)");
+            applyEntryPackageAndNotificationBlocking(context, fallbackEpoch);
+            timeEnterDoze = System.currentTimeMillis();
+            if (Utils.isConnectedToCharger(getApplicationContext())) {
+                lastDozeEnterBatteryLife = 0;
+            } else {
+                lastDozeEnterBatteryLife = Utils.getBatteryLevel(getApplicationContext());
+            }
+            log("Entering Doze");
+            DiagnosticLogger.i("DOZE", "enter_doze_start mode=tunable_fallback");
+            applyDoze();
+            lastScreenOff = Utils.getDateCurrentTimeZone(System.currentTimeMillis());
+            recordDozeEnterStats();
+            applyEntryMotionAndNetwork(context, fallbackEpoch);
         }
-        log("Entering Doze");
-        DiagnosticLogger.i("DOZE", "enter_doze_start mode=tunable_fallback");
-        dozeStateStore.setInDoze(true);
-        applyDoze();
-        lastScreenOff = Utils.getDateCurrentTimeZone(System.currentTimeMillis());
-        recordDozeEnterStats();
-        applyEntryMotionAndNetwork(context);
     }
 
     /**
@@ -1453,8 +1674,9 @@ public class ForceDozeService extends Service {
         // better than the ENTER rows a failed force used to leave behind for ever. A crash later
         // leaves partial journal markers, which is exactly what the journal exists to repair.
         recordDozeEnterStats();
-        applyEntryPackageAndNotificationBlocking(context);
-        applyEntryMotionAndNetwork(context);
+        long epoch = beginActiveSessionEpoch("fresh entry (privileged)");
+        applyEntryPackageAndNotificationBlocking(context, epoch);
+        applyEntryMotionAndNetwork(context, epoch);
     }
 
     /**
@@ -1688,7 +1910,7 @@ public class ForceDozeService extends Service {
     }
 
     /** Unchanged entry work, factored out so both backends run exactly the same code. */
-    private void applyEntryPackageAndNotificationBlocking(Context context) {
+    private void applyEntryPackageAndNotificationBlocking(Context context, long sessionEpoch) {
             if (dozeAppBlocklist.size() != 0) {
                 log("Disabling apps that are in the Doze app blocklist");
                 if (whitelistCurrentApp) {
@@ -1698,13 +1920,40 @@ public class ForceDozeService extends Service {
                     if (isSuAvailable || isShizukuAvailable) {
                         try {
                             getFocusedApps((HashSet<String> packageNames) -> {
-                                List<String> toBlock = new ArrayList<>();
-                                for (String pkg : dozeAppBlocklist) {
-                                    if (!packageNames.contains(pkg)) {
-                                        toBlock.add(pkg);
+                                // This callback allocates a durable package generation and suspends
+                                // apps, so it is the most damaging of the three to run late: a
+                                // result arriving after the wake would re-suspend the blocklist
+                                // with nothing left to restore it, and one arriving during a later
+                                // session would overwrite that session's generation. Classification
+                                // and the journal write share the barrier, so a wake cannot slip
+                                // between them.
+                                synchronized (physicalEntryLock) {
+                                    int state = classifySessionEntryWork(sessionEpoch);
+                                    if (state == WORK_STALE) {
+                                        logStaleAsyncWork("focused_apps");
+                                        return;
                                     }
+                                    List<String> toBlock = new ArrayList<>();
+                                    for (String pkg : dozeAppBlocklist) {
+                                        if (!packageNames.contains(pkg)) {
+                                            toBlock.add(pkg);
+                                        }
+                                    }
+                                    if (state == WORK_LOCKED_WAKE) {
+                                        // The session is alive but its lock screen is up, so the
+                                        // apps must stay usable. Only the record is written: the
+                                        // generation and its exact set become this session's
+                                        // property, and the SCREEN_OFF enforcement suspends that
+                                        // stored generation without allocating a second one.
+                                        // Dropping the result instead would leave the session with
+                                        // no package ownership at all and no blocklist for the rest
+                                        // of the night.
+                                        logDeferredAsyncWork("focused_apps");
+                                        suspendPackagesForDoze(toBlock, false);
+                                        return;
+                                    }
+                                    suspendPackagesForDoze(toBlock, true);
                                 }
-                                suspendPackagesForDoze(toBlock);
                             });
                         } catch (Exception e) {
                             e.printStackTrace();
@@ -1738,27 +1987,40 @@ public class ForceDozeService extends Service {
     }
 
     /** Unchanged entry work, factored out so both backends run exactly the same code. */
-    private void applyEntryMotionAndNetwork(Context context) {
+    private void applyEntryMotionAndNetwork(Context context, long sessionEpoch) {
             if (disableMotionSensors) {
                 dozeStateStore.markApplied(DozeStateStore.KEY_MOTION_SENSORS, true);
                 disableSensorsTimer = new Timer();
                 disableSensorsTimer.schedule(new TimerTask() {
                     @Override
                     public void run() {
-                        log("Disabling motion sensors");
-                        if (sensorWhitelistPackage.equals("")) {
-                            executeCommand("dumpsys sensorservice restrict");
-                        } else {
-                            log("Package " + sensorWhitelistPackage + " is whitelisted from sensorservice");
-                            log("Note: Packages that get whitelisted are supposed to request sensor access again, if the app doesn't work, email the dev of that app!");
-                            executeCommand("dumpsys sensorservice restrict " + sensorWhitelistPackage);
+                        // Two seconds is long enough for the whole session to end. The restore runs
+                        // "sensorservice enable" on the way out, and this task would then restrict
+                        // the sensors again behind it, with the journal already clear and nobody
+                        // left to undo it.
+                        synchronized (physicalEntryLock) {
+                            int state = classifySessionEntryWork(sessionEpoch);
+                            if (state == WORK_STALE) {
+                                logStaleAsyncWork("motion");
+                                return;
+                            }
+                            if (state == WORK_LOCKED_WAKE) {
+                                // Same session, lock screen up. Dropping it would lose the motion
+                                // restriction for the rest of the session, because no further timer
+                                // is armed for a continuation; it is remembered against this epoch
+                                // and applied when the screen goes off again.
+                                deferredMotionEpoch.set(sessionEpoch);
+                                logDeferredAsyncWork("motion");
+                                return;
+                            }
+                            applyMotionSensorRestriction(MOTION_LABEL_ENTER);
                         }
                     }
                 }, 2000);
             } else {
                 log("Not disabling motion sensors because disableMotionSensors=false");
             }
-        enterDozeHandleNetwork(context);
+        enterDozeHandleNetwork(context, sessionEpoch);
     }
 
     /**
@@ -1788,7 +2050,14 @@ public class ForceDozeService extends Service {
             lastDozeExitBatteryLife = Utils.getBatteryLevel(getApplicationContext());
         }
         lastKnownState = "ACTIVE";
-        dozeStateStore.setInDoze(false);
+        // Ownership is dropped under the barrier so that a session-scoped callback either completes
+        // its journal and dispatch entirely before this point - in which case the restores below
+        // find it and undo it - or observes a finished session and refuses. There is no ordering in
+        // which entry work lands after the restore.
+        synchronized (physicalEntryLock) {
+            dozeStateStore.setInDoze(false);
+            endActiveSessionEpoch("exit doze");
+        }
         leaveDoze();
 
         log("exitDoze current Doze state: " + newDeviceIdleState);
@@ -2378,6 +2647,18 @@ public class ForceDozeService extends Service {
      * on, before the command goes out.
      */
     private void suspendPackagesForDoze(Collection<String> packageNames) {
+        suspendPackagesForDoze(packageNames, true);
+    }
+
+    /**
+     * @param dispatchSuspend false to claim the generation without physically suspending anything.
+     *                        Used when the session is alive but its lock screen is up: the record
+     *                        must exist so the next screen-off suspends this exact set in this exact
+     *                        generation, while the apps stay usable in the meantime. An unlock
+     *                        before that screen-off reaches the ordinary final un-suspend, which
+     *                        finds an already-unsuspended set and clears the generation.
+     */
+    private void suspendPackagesForDoze(Collection<String> packageNames, boolean dispatchSuspend) {
         List<String> valid = new ArrayList<>();
         for (String packageName : packageNames) {
             if (Utils.isValidPackageName(packageName)) {
@@ -2396,6 +2677,10 @@ public class ForceDozeService extends Service {
                 dozeStateStore.beginSuspendedPackageSession(valid);
         DiagnosticLogger.i("HARD_BLOCK", "session_started gen=" + session.generation
                 + " owned=" + session.packages.size() + " intended=" + valid.size());
+        if (!dispatchSuspend) {
+            DiagnosticLogger.i("HARD_BLOCK", "session_journalled_only gen=" + session.generation);
+            return;
+        }
         // Submitted from the returned snapshot verbatim: rebuilding the union here would reopen
         // the split read/write the atomic call exists to close.
         submitPackageOp(new PackageOp(true, false, session.generation, session.packages, "enter Doze"));
@@ -2922,13 +3207,33 @@ public class ForceDozeService extends Service {
         }
     }
 
+    /**
+     * Entry point for work that belongs to whichever session is owned right now - currently the
+     * return from a maintenance window. It adopts the current identity rather than starting one:
+     * maintenance is a continuation, so no new ENTER row, no package generation and no new epoch.
+     */
     public void enterDozeHandleNetwork(Context context) {
+        enterDozeHandleNetwork(context, ensureActiveSessionEpoch("network entry"));
+    }
+
+    private void enterDozeHandleNetwork(Context context, long sessionEpoch) {
         if (whitelistMusicAppNetwork) {
             try {
                 NotificationService notifService = NotificationService.Companion.getInstance();
                 if (notifService != null) {
                     notifService.getPlayingPackageName((String packageName) -> {
-                        actualEnterDozeHandleNetwork(context, packageName);
+                        // The only asynchronous route into the radio work, and the one with the
+                        // widest window: a full ACTION_SCREEN_ON leaves inDoze set until
+                        // handleScreenOn clears it, so an epoch check alone would still pass during
+                        // wake restoration and capture "pre-Doze" values from an already restored
+                        // device. The wake predicate inside the classification is what excludes it.
+                        synchronized (physicalEntryLock) {
+                            if (classifySessionEntryWork(sessionEpoch) == WORK_STALE) {
+                                logStaleAsyncWork("network");
+                                return null;
+                            }
+                            actualEnterDozeHandleNetwork(context, packageName);
+                        }
                         return null;
                     });
                     return;
@@ -2938,7 +3243,17 @@ public class ForceDozeService extends Service {
                 e.printStackTrace();
             }
         }
-        actualEnterDozeHandleNetwork(context, null);
+        // Synchronous route. Usually reached inside the transition that established the session,
+        // where the barrier is already held and the check is a formality - but not always: the
+        // tunable fallback and the maintenance re-entry both arrive here at other moments, so it is
+        // validated on the same terms rather than assumed safe.
+        synchronized (physicalEntryLock) {
+            if (classifySessionEntryWork(sessionEpoch) == WORK_STALE) {
+                logStaleAsyncWork("network");
+                return;
+            }
+            actualEnterDozeHandleNetwork(context, null);
+        }
     }
 
     /**
@@ -3004,11 +3319,15 @@ public class ForceDozeService extends Service {
     private void onRestoreFinished(String key, int exitCode) {
         try {
             if (exitCode == 0) {
-                // Cross-session guard for the two keys a temporary lock-screen command can
-                // outlive: an old session's final restore can land after a new SCREEN_OFF has
-                // already begun a new session and re-marked them. Clearing then would drop a debt
-                // the new session genuinely owes.
-                if ((DozeStateStore.KEY_ALL_SENSORS.equals(key) || DozeStateStore.KEY_BIOMETRICS.equals(key))
+                // Cross-session guard for the keys whose commands a later session can outlive: an
+                // old session's final restore can land after a new SCREEN_OFF has already begun a
+                // new session and re-marked them. Clearing then would drop a debt the new session
+                // genuinely owes. Motion joins the list because its ENABLE is now serialized and can
+                // therefore be held behind an in-flight command for longer than the gap between two
+                // sessions.
+                if ((DozeStateStore.KEY_ALL_SENSORS.equals(key)
+                        || DozeStateStore.KEY_BIOMETRICS.equals(key)
+                        || DozeStateStore.KEY_MOTION_SENSORS.equals(key))
                         && dozeStateStore.isInDoze()) {
                     Log.i(TAG, "RESTORE_SUPERSEDED " + key + ", a newer Doze session owns the marker");
                     DiagnosticLogger.i("STATE", "RESTORE_SUPERSEDED " + key + " newSessionOwnsMarker=true");
@@ -3060,7 +3379,10 @@ public class ForceDozeService extends Service {
 
         // Durable flag first: the package generation clear and the KEY_ALL_SENSORS/KEY_BIOMETRICS
         // marker clears all refuse to release ownership while inDoze is true.
-        dozeStateStore.setInDoze(false);
+        synchronized (physicalEntryLock) {
+            dozeStateStore.setInDoze(false);
+            endActiveSessionEpoch("recovered session finalized");
+        }
         lastKnownState = "ACTIVE";
         leaveDoze();
 
@@ -3153,9 +3475,82 @@ public class ForceDozeService extends Service {
         cancelPendingEnterDoze();
         releaseTempWakeLock();
         lastKnownState = "IDLE";
+        // A motion restriction postponed by the lock-screen wake belongs to this same session and
+        // is applied now, once.
+        applyDeferredMotionRestrictionIfDue(reason);
         // maintenance is deliberately left as it is: while a genuine window is open the flag is the
         // only record that its restored states must be re-applied when deep idle resumes.
         ensureOwnedDozePhysicalState(reason);
+    }
+
+    /**
+     * Queues a target state for the motion-sensor toggle. Same contract as the other physical
+     * serializers: a request still queued when a newer one replaces it is completed exactly once
+     * with {@link #SUPERSEDED_EXIT_CODE}, which is non-zero and therefore leaves any durable marker
+     * it was carrying uncleared - the newer target owns the outcome.
+     *
+     * @param restrict true to restrict, false to enable
+     */
+    private void requestMotionSensorState(boolean restrict, Shell.OnCommandResultListener2 done,
+                                          String label) {
+        Shell.OnCommandResultListener2 superseded;
+        boolean dispatchNow;
+        synchronized (motionOpLock) {
+            superseded = pendingMotionCallback;
+            pendingMotionRestrict = restrict;
+            pendingMotionCallback = done;
+            pendingMotionLabel = label;
+            dispatchNow = !motionOpInFlight;
+            if (dispatchNow) {
+                motionOpInFlight = true;
+            }
+        }
+        if (superseded != null) {
+            superseded.onCommandResult(0, SUPERSEDED_EXIT_CODE, new ArrayList<>(), new ArrayList<>());
+        }
+        if (dispatchNow) {
+            dispatchPendingMotionOp();
+        }
+    }
+
+    private void dispatchPendingMotionOp() {
+        final boolean restrict;
+        final Shell.OnCommandResultListener2 done;
+        final String label;
+        synchronized (motionOpLock) {
+            if (pendingMotionRestrict == null) {
+                motionOpInFlight = false;
+                return;
+            }
+            restrict = pendingMotionRestrict;
+            done = pendingMotionCallback;
+            label = pendingMotionLabel;
+            pendingMotionRestrict = null;
+            pendingMotionCallback = null;
+            pendingMotionLabel = null;
+            motionOpInFlight = true;
+        }
+
+        final String command;
+        if (!restrict) {
+            command = "dumpsys sensorservice enable";
+        } else if (sensorWhitelistPackage.equals("")) {
+            command = "dumpsys sensorservice restrict";
+        } else {
+            log("Package " + sensorWhitelistPackage + " is whitelisted from sensorservice");
+            log("Note: Packages that get whitelisted are supposed to request sensor access again, if the app doesn't work, email the dev of that app!");
+            command = "dumpsys sensorservice restrict " + sensorWhitelistPackage;
+        }
+        log(restrict ? "Disabling motion sensors" : "Enabling motion sensors");
+
+        executeCommand(command, (commandCode, exitCode, stdout, stderr) -> {
+            DiagnosticLogger.i("MOTION", (restrict ? "restrict" : "enable")
+                    + " label=" + label + " exit=" + exitCode);
+            if (done != null) {
+                done.onCommandResult(commandCode, exitCode, stdout, stderr);
+            }
+            dispatchPendingMotionOp();
+        }, false);
     }
 
     /**
@@ -3481,6 +3876,11 @@ public class ForceDozeService extends Service {
             return;
         }
 
+        // From here on the session is being continued rather than ended, and this process may not
+        // be the one that started it. Adopting an identity now gives any async work it creates -
+        // the maintenance network re-entry in particular - something valid to capture.
+        ensureActiveSessionEpoch(reason);
+
         if (screenOn) {
             log(logPrefix + "_PARTIAL_LOCKSCREEN: session still active behind the keyguard");
             DiagnosticLogger.i("RECOVERY", logPrefix + "_PARTIAL_LOCKSCREEN screenOn=true inDoze=true");
@@ -3588,9 +3988,13 @@ public class ForceDozeService extends Service {
                 requestBiometricState(dozeStateStore.getPreDozeValue(key, true), done, BIOMETRIC_LABEL_FINAL);
                 break;
             case DozeStateStore.KEY_MOTION_SENSORS:
+                // Through the serializer so an entry-side restrict cannot physically land after
+                // this restore. The done callback belongs to the real ENABLE: if a newer target
+                // supersedes it before it runs, it completes with a non-zero code and the durable
+                // marker stays, because the debt has not actually been paid.
                 // The auto-rotate workaround is fire-and-forget on its own thread and must not
                 // decide whether the sensor marker can be cleared.
-                executeCommand("dumpsys sensorservice enable", done, false);
+                requestMotionSensorState(false, done, MOTION_LABEL_FINAL);
                 autoRotateBrightnessFix();
                 break;
             default:
@@ -3735,7 +4139,22 @@ public class ForceDozeService extends Service {
                     }
                 } else if (dozeStateStore.isInDoze()) {
                     // Owned-session continuation after a lock-screen wake.
-                    enforcePackageStateForLifecycle("screen off");
+                    //
+                    // Under the barrier because it races the focused-app callback for the package
+                    // journal. That callback, when it lands during a locked wake, claims the
+                    // generation without suspending anything and relies on this call to do the
+                    // physical work. Unsynchronised, this could read an empty session a moment
+                    // before the callback wrote one, return, and leave the blocklist unsuspended for
+                    // the rest of the session with nothing scheduled to notice. Serialised, one of
+                    // two things happens: the callback journals first and this suspends that exact
+                    // generation, or this runs first and the callback then classifies as eligible
+                    // and does the journal and the suspend itself. Either way one generation, one
+                    // blocklist snapshot, and no suspension while the lock screen is up.
+                    synchronized (physicalEntryLock) {
+                        enforcePackageStateForLifecycle("screen off");
+                    }
+                    // Left outside: these are driven by their own serializers and durable markers
+                    // that the entry callbacks do not write, so they have no equivalent race.
                     enforceSensorStateForLifecycle("screen off");
                     enforceBiometricStateForLifecycle("screen off");
                     resumeOwnedDozeAfterLockedWake("screen off");
