@@ -58,6 +58,23 @@ public class BootCompleteReceiver extends BroadcastReceiver {
             DiagnosticLogger.e("RECOVERY", "boot_entry_pending_clear_failed");
         }
 
+        // An owned-session reforce marker means the same thing after a reboot as a PREPARING one:
+        // nothing. DeviceIdleController went down with the rest of the system, so the mForceIdle the
+        // marker stands for no longer exists and there is nothing to unforce. Clearing it is the
+        // whole of the recovery, and no ENTER or EXIT is written for a transaction that never was a
+        // session boundary.
+        // Only when a marker actually exists. finishOwnedReforceAttempt() restores TRUE if its
+        // clearing commit fails, because it assumes it is protecting a real debt; calling it with
+        // nothing outstanding could therefore manufacture one out of a storage failure and block
+        // Doze entry for a transaction that never happened.
+        if (store.isOwnedReforcePending() && !store.finishOwnedReforceAttempt()) {
+            // Deliberately not a reason to start the service on its own. A stuck marker only blocks
+            // fresh Doze entry, and with EnforceDoze disabled there is no entry to block; the next
+            // ordinary service start resolves it, and on a freshly booted device the corrective
+            // unforce it issues is a no-op.
+            DiagnosticLogger.e("RECOVERY", "boot_owned_reforce_clear_failed");
+        }
+
         // Two independent kinds of pending recovery, deliberately tested separately rather than
         // folded into hasPendingRestore(): that method means "device-state toggles" everywhere
         // else, and widening it here would change behaviour at call sites this commit is not

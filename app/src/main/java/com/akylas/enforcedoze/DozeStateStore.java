@@ -55,6 +55,7 @@ public class DozeStateStore {
     private static final String KEY_APPLIED_AT = "appliedAt";
     private static final String KEY_IN_DOZE = "inDoze";
     private static final String KEY_ENTRY_PENDING = "entryPending";
+    private static final String KEY_OWNED_REFORCE_PENDING = "ownedReforcePending";
     private static final String KEY_APPLIED_SUSPENDED_PACKAGES = "appliedSuspendedPackages";
     /**
      * Monotonic id of the Doze session that owns the recorded package set. Only a genuinely fresh
@@ -340,6 +341,62 @@ public class DozeStateStore {
                 .putBoolean(KEY_ENTRY_PENDING, true)
                 .commit();
         return false;
+    }
+
+    /**
+     * Marks that a privileged force-idle has been dispatched on behalf of a session that is already
+     * ACTIVE - the lock-screen resume and recovery Mode A - and that its physical outcome is not yet
+     * settled.
+     * <p>
+     * Deliberately a separate key from {@link #KEY_ENTRY_PENDING} rather than a reuse of it. That
+     * one carries PREPARING semantics and is defined over exactly three combinations, in which
+     * entryPending and inDoze are never both true. An owned reforce happens precisely when inDoze
+     * IS true, so overloading would produce that forbidden fourth combination - and the recovery
+     * path tests entryPending first and answers it by unforcing, which would tear deep idle out
+     * from under a live session.
+     * <p>
+     * This key is therefore a second, orthogonal axis: it may be true with inDoze either true (a
+     * reforce for a session still owned) or false (a debt left behind by a session that has ended).
+     * The three-state contract over the other two keys is untouched.
+     * <p>
+     * It exists for the same reason the PREPARING marker does. A force that succeeds leaves
+     * mForceIdle=true inside DeviceIdleController, and the resume path is otherwise markerless, so
+     * a process death after the force landed would leave the device forced with nothing on disk
+     * recording that an undo is owed. Nothing else can be relied on to remove it: screen-on clearing
+     * a forced device is an assumption about framework internals that has never been demonstrated
+     * here, and the only demonstrated remedy is an explicit unforce.
+     * <p>
+     * Absent means false, so no migration is needed.
+     */
+    public boolean beginOwnedReforceAttempt() {
+        if (prefs.edit().putBoolean(KEY_OWNED_REFORCE_PENDING, true).commit()) {
+            return true;
+        }
+        // Nothing reached disk. commit() still updated the in-memory map, so put the local view
+        // back to "no debt": believing in a marker no recovery could find would block fresh entry
+        // for a transaction that is about to be abandoned. The caller must not dispatch the force.
+        prefs.edit().putBoolean(KEY_OWNED_REFORCE_PENDING, false).commit();
+        return false;
+    }
+
+    /**
+     * Settles an owned reforce: either its outcome left nothing physical to undo, or the corrective
+     * unforce has actually completed. Never call it in anticipation - while this bit is set it is
+     * the only record that the device may still be forced.
+     */
+    public boolean finishOwnedReforceAttempt() {
+        if (prefs.edit().putBoolean(KEY_OWNED_REFORCE_PENDING, false).commit()) {
+            return true;
+        }
+        // The debt is still on disk, so the local view has to keep saying so. Reading false here
+        // would let this process start a fresh session on top of an unresolved physical force and
+        // would hide the debt from the recovery meant to settle it.
+        prefs.edit().putBoolean(KEY_OWNED_REFORCE_PENDING, true).commit();
+        return false;
+    }
+
+    public boolean isOwnedReforcePending() {
+        return prefs.getBoolean(KEY_OWNED_REFORCE_PENDING, false);
     }
 
     /** Drops every pending revert. Only for a full reset - normal flow clears keys one by one. */
