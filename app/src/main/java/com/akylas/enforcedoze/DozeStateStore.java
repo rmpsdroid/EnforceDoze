@@ -54,6 +54,7 @@ public class DozeStateStore {
     private static final String PREFIX_APPLIED = "applied.";
     private static final String KEY_APPLIED_AT = "appliedAt";
     private static final String KEY_IN_DOZE = "inDoze";
+    private static final String KEY_ENTRY_PENDING = "entryPending";
     private static final String KEY_APPLIED_SUSPENDED_PACKAGES = "appliedSuspendedPackages";
     /**
      * Monotonic id of the Doze session that owns the recorded package set. Only a genuinely fresh
@@ -266,6 +267,79 @@ public class DozeStateStore {
 
     public boolean isInDoze() {
         return prefs.getBoolean(KEY_IN_DOZE, false);
+    }
+
+    /**
+     * Marks that a privileged {@code dumpsys deviceidle force-idle deep} has been dispatched and
+     * its outcome is not yet known.
+     * <p>
+     * A successful force is itself physical state - it leaves {@code mForceIdle=true} inside
+     * DeviceIdleController - so an attempt interrupted by process death can leave the device forced
+     * with nobody left who knows it. That is the one part of entry no in-memory flag can cover,
+     * which is why this single bit is durable.
+     * <p>
+     * Together with {@link #KEY_IN_DOZE} it forms three states, and only three:
+     * <pre>
+     * NONE      entryPending=false inDoze=false
+     * PREPARING entryPending=true  inDoze=false
+     * ACTIVE    entryPending=false inDoze=true
+     * </pre>
+     * The fourth combination cannot occur on disk because {@link #commitDozeSession()} writes both
+     * keys in one commit. Absent means false, so no migration is needed.
+     */
+    public boolean beginForceIdleAttempt() {
+        if (prefs.edit().putBoolean(KEY_ENTRY_PENDING, true).commit()) {
+            return true;
+        }
+        // commit() updates the in-memory map before it reports a persistence failure, so this
+        // process would otherwise go on believing in a marker that no recovery could ever find -
+        // and refuse fresh entries because of it. Put the local view back to NONE; best effort,
+        // and if this write fails too the map still ends up reading false, which is the point.
+        prefs.edit().putBoolean(KEY_ENTRY_PENDING, false).commit();
+        return false;
+    }
+
+    /**
+     * Ends a PREPARING attempt without a session: either the force was rejected, or a successful
+     * but unwanted force has been physically undone. Never call this before the unforce has
+     * actually completed - the bit is the only record of that debt.
+     */
+    public boolean abortForceIdleAttempt() {
+        if (prefs.edit().putBoolean(KEY_ENTRY_PENDING, false).commit()) {
+            return true;
+        }
+        // The debt is still on disk, so the local view must keep saying so. Leaving it reading
+        // false would let this process start a fresh force while a stale marker still exists, and
+        // would hide the debt from the recovery that is meant to settle it.
+        prefs.edit().putBoolean(KEY_ENTRY_PENDING, true).commit();
+        return false;
+    }
+
+    public boolean isEntryPending() {
+        return prefs.getBoolean(KEY_ENTRY_PENDING, false);
+    }
+
+    /**
+     * PREPARING to ACTIVE in a single synchronous commit, so a crash can never be observed with
+     * both bits set. SharedPreferences writes one XML file, so the two puts land together or not
+     * at all.
+     */
+    public boolean commitDozeSession() {
+        if (prefs.edit()
+                .putBoolean(KEY_IN_DOZE, true)
+                .putBoolean(KEY_ENTRY_PENDING, false)
+                .commit()) {
+            return true;
+        }
+        // Nothing reached disk, so the durable state is still the PREPARING record written before
+        // the force was dispatched. Rewriting exactly those values restores the local view to match
+        // it and cannot destroy the record, since it is what the file should already hold. The
+        // caller must not treat the session as owned.
+        prefs.edit()
+                .putBoolean(KEY_IN_DOZE, false)
+                .putBoolean(KEY_ENTRY_PENDING, true)
+                .commit();
+        return false;
     }
 
     /** Drops every pending revert. Only for a full reset - normal flow clears keys one by one. */

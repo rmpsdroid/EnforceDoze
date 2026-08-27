@@ -46,6 +46,18 @@ public class BootCompleteReceiver extends BroadcastReceiver {
         // A reboot always ends the Doze session, whatever the flag said when we went down.
         store.setInDoze(false);
 
+        // The same applies to an interrupted force-idle attempt, and more strongly: the reboot took
+        // DeviceIdleController down with everything else, so the mForceIdle the marker stands for no
+        // longer exists anywhere. Clearing it synchronously is therefore the whole of the recovery -
+        // an unforce would be aimed at nothing, and could only confuse a natural post-boot idle.
+        // No ENTER and no EXIT: PREPARING never became a session. Package and device-state recovery
+        // below is decided independently and is untouched by this.
+        if (!store.abortForceIdleAttempt()) {
+            // Self-correcting rather than fatal: the marker survives, the service sees it on start
+            // and issues an unforce that a freshly booted device treats as a no-op, then clears it.
+            DiagnosticLogger.e("RECOVERY", "boot_entry_pending_clear_failed");
+        }
+
         // Two independent kinds of pending recovery, deliberately tested separately rather than
         // folded into hasPendingRestore(): that method means "device-state toggles" everywhere
         // else, and widening it here would change behaviour at call sites this commit is not

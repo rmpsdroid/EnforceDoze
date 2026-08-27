@@ -210,6 +210,51 @@ public class ForceDozeService extends Service {
     private static final int SUPERSEDED_EXIT_CODE = -3;
     /** Reported for a package operation whose Doze generation has already been replaced. */
     private static final int STALE_GENERATION_EXIT_CODE = -4;
+
+    /**
+     * Phase of the privileged physical Doze entry, i.e. of an actual
+     * {@code dumpsys deviceidle force-idle deep} transaction. Only ever meaningful for the
+     * root/Shizuku backend; the unprivileged tunable fallback performs no immediate physical
+     * transition and never leaves this at anything but {@link #PHASE_NONE}.
+     */
+    private static final int PHASE_NONE = 0;
+    private static final int PHASE_ATTEMPTING = 1;
+    private static final int PHASE_CLEANING_UP = 2;
+
+    /**
+     * Serializes the four things that must not interleave: lifecycle invalidation of a pending
+     * entry, the force callback's stale/current decision, the durable PREPARING to ACTIVE commit,
+     * and every phase transition.
+     * <p>
+     * Without it the callback could verify success, find itself current, and only then be overtaken
+     * by SCREEN_ON - committing inDoze=true after the wake had already been processed. Nothing that
+     * blocks is done while holding it: verification and the "still wanted" re-check run before it
+     * is taken, and every shell command is dispatched after it is released. Correctness does not
+     * depend on those pre-checks, because {@link #invalidateDesiredEntry(String)} bumps
+     * {@link #entryAttemptToken} under this same monitor and that is what the callback compares.
+     */
+    private final Object physicalEntryLock = new Object();
+    private int physicalEntryPhase = PHASE_NONE;
+
+    /**
+     * Identifies one privileged fresh force attempt. Deliberately separate from the ACTIVE logical
+     * session identity: a locked SCREEN_ON with waitForUnlock invalidates any pending fresh entry
+     * while the session already owned continues to live.
+     */
+    private int entryAttemptToken = 0;
+
+    /**
+     * Whether the attempt currently outstanding is allowed to trigger the single post-cleanup
+     * policy re-evaluation. False for an attempt that was itself started by one, so a re-entry can
+     * never chain into another. Guarded by {@link #physicalEntryLock}.
+     */
+    private boolean entryAttemptAllowsReentry = true;
+
+    /**
+     * Set once onDestroy() begins, so a cleanup callback that lands during teardown cannot start a
+     * new entry on a service that is going away.
+     */
+    private volatile boolean serviceStopping = false;
     private static final String SENSOR_LABEL_LOCKSCREEN_RESTORE = "lockscreen_restore";
     private static final String SENSOR_LABEL_LOCKSCREEN_REAPPLY = "lockscreen_reapply";
     private static final String SENSOR_LABEL_ENTER = "doze_enter";
@@ -657,18 +702,23 @@ public class ForceDozeService extends Service {
         boolean inDoze = dozeStateStore.isInDoze();
         boolean hasPackages = dozeStateStore.hasAppliedSuspendedPackages();
         boolean hasStates = dozeStateStore.hasPendingRestore();
+        boolean entryPending = dozeStateStore.isEntryPending();
 
         // A durable inDoze flag is itself something to recover, independently of any package or
         // device-state marker. A configuration that only forces idle - no Hard Suspend blocklist
         // and no optional radio/sensor restrictions - owns a logical session with neither marker
         // set, and the old condition returned RECOVERY_NONE for it, so applyRecoveryPolicy and its
         // Mode C finalization were never reached and the session was left owned with no EXIT.
-        if (!inDoze && !hasPackages && !hasStates) {
+        // entryPending is a fourth independent reason to recover: an interrupted force-idle owns no
+        // session and no marker, so without this term the one state that can leave the device
+        // physically forced would return RECOVERY_NONE and never be resolved.
+        if (!inDoze && !hasPackages && !hasStates && !entryPending) {
             log("RECOVERY_NONE: service recreated with nothing pending");
             return;
         }
 
         DiagnosticLogger.i("RECOVERY", "RECOVERY_CHECK screenOn=" + screenOn + " inDoze=" + inDoze
+                + " entryPending=" + entryPending
                 + " pendingPackages=" + (hasPackages ? dozeStateStore.getAppliedSuspendedPackages().size() : 0)
                 + " pendingStates=" + dozeStateStore.getAppliedKeys());
         log("RECOVERY_CHECK screenOn=" + screenOn + " inDoze=" + inDoze
@@ -687,6 +737,9 @@ public class ForceDozeService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        // Before anything below can dispatch a command whose callback might want to start a new
+        // entry on a service that is going away.
+        serviceStopping = true;
         log("Stopping service and enabling sensors");
         DiagnosticLogger.i("APP", "onDestroy");
         unregisterReceiverQuietly(localDozeReceiver);
@@ -704,6 +757,18 @@ public class ForceDozeService extends Service {
         if (disableMotionSensors) {
             executeCommand("dumpsys sensorservice enable");
         }
+        // An explicit stop differs from ordinary process death only in that code still runs here:
+        // the desired entry can be cancelled, and the physical undo can at least be dispatched.
+        // entryPending is deliberately NOT cleared - the shell backends are torn down a few lines
+        // below and the unforce may never complete, so the durable marker has to survive as the
+        // record of that debt. The next service start resolves it through applyRecoveryPolicy().
+        // Nothing here blocks the main thread waiting for it, and no ENTER or EXIT row is written
+        // for an attempt that never became a session.
+        invalidateDesiredEntry("service destroyed");
+        if (dozeStateStore.isEntryPending()) {
+            cleanupPendingPhysicalForce("service destroyed");
+        }
+
         // Put back everything we changed for Doze; without this a service stopped while dozing
         // would leave airplane mode on and the sensors off with nobody left to revert them.
         restoreSuspendedPackages("service destroyed");
@@ -1036,14 +1101,34 @@ public class ForceDozeService extends Service {
         }
     }
 
+    /**
+     * Kept as a no-argument overload so callers that do not care about the outcome - including the
+     * unreachable legacy {@code PendingIntentDozeReceiver}, which is left in place for a separate
+     * cleanup commit - continue to compile and behave exactly as before.
+     */
     public void applyDoze() {
+        applyDoze(null);
+    }
+
+    /**
+     * @param onForceResult invoked with the raw shell result of the privileged force-idle command,
+     *                      or never at all on the unprivileged tunable path, which performs no
+     *                      single physical transaction whose result could be reported. Callers must
+     *                      therefore only pass a listener after checking
+     *                      {@link #isPrivilegedForceIdleBackend()}.
+     */
+    public void applyDoze(Shell.OnCommandResultListener2 onForceResult) {
         if (Utils.isDeviceRunningOnN()) {
             if (isSuAvailable || isShizukuAvailable) {
                 // printOutput stays true so the existing logcat echo is unchanged; the callback
                 // only adds the exit code to the diagnostic file.
                 executeCommandWithRoot("dumpsys deviceidle force-idle deep",
-                        (commandCode, exitCode, stdout, stderr) ->
-                                DiagnosticLogger.i("DOZE", "force_idle_deep exit=" + exitCode), true);
+                        (commandCode, exitCode, stdout, stderr) -> {
+                            DiagnosticLogger.i("DOZE", "force_idle_deep exit=" + exitCode);
+                            if (onForceResult != null) {
+                                onForceResult.onCommandResult(commandCode, exitCode, stdout, stderr);
+                            }
+                        }, true);
             } else {
                 DozeTunableHandler handler = DozeTunableHandler.getInstance();
                 log("Unrooted device, putting custom values in device_idle_constants...");
@@ -1084,6 +1169,15 @@ public class ForceDozeService extends Service {
     }
 
     public void enterDoze(Context context) {
+        enterDoze(context, true);
+    }
+
+    /**
+     * @param allowPostCleanupReentry false when this entry is itself the single re-evaluation that
+     *                                follows a physical cleanup, so one re-entry can never chain
+     *                                into another
+     */
+    private void enterDoze(Context context, boolean allowPostCleanupReentry) {
         // Defence in depth for the delayed path: SCREEN_OFF checks for a call before scheduling,
         // but the call may begin during the delay, and this TimerTask would otherwise apply the
         // whole Doze setup underneath it. Checked before anything is suspended, journalled or
@@ -1104,100 +1198,567 @@ public class ForceDozeService extends Service {
             DiagnosticLogger.i("DOZE", "fresh_entry_skipped reason=session_already_owned");
             return;
         }
-        if (!getDeviceIdleState().equals("IDLE") || !lastKnownState.equals("IDLE")) {
-            if (!Utils.isScreenOn(context)) {
-                lastKnownState = "IDLE";
-                releaseTempWakeLock();
-                if (dozeAppBlocklist.size() != 0) {
-                    log("Disabling apps that are in the Doze app blocklist");
-                    if (whitelistCurrentApp) {
-                        // when root is not available we use UsageStatsManager
-                        // but i am not sure i can trust it as it does not really returns the front
-                        // app but last one used (what about apps running in the background?)
-                        if (isSuAvailable || isShizukuAvailable) {
-                            try {
-                                getFocusedApps((HashSet<String> packageNames) -> {
-                                    List<String> toBlock = new ArrayList<>();
-                                    for (String pkg : dozeAppBlocklist) {
-                                        if (!packageNames.contains(pkg)) {
-                                            toBlock.add(pkg);
-                                        }
-                                    }
-                                    suspendPackagesForDoze(toBlock);
-                                });
-                            } catch (Exception e) {
-                                e.printStackTrace();
-                            }
+        if (getDeviceIdleState().equals("IDLE") && lastKnownState.equals("IDLE")) {
+            log("enterDoze() received but skipping because device is already Dozing");
+            return;
+        }
+        if (Utils.isScreenOn(context)) {
+            log("Screen is on, skip entering Doze");
+            return;
+        }
+
+        if (isPrivilegedForceIdleBackend()) {
+            // The force is a real transaction whose success has to be established before anything
+            // is suspended or journalled, so the whole entry moves behind its callback.
+            beginPrivilegedFreshEntry(context, allowPostCleanupReentry);
+            return;
+        }
+
+        // Unprivileged tunable fallback. It writes device_idle constants rather than performing an
+        // immediate force-idle transition, so there is no single result to verify and nothing that
+        // could be left forced across a process death. Its ordering is deliberately identical to
+        // what it has always been.
+        lastKnownState = "IDLE";
+        releaseTempWakeLock();
+        applyEntryPackageAndNotificationBlocking(context);
+        timeEnterDoze = System.currentTimeMillis();
+        if (Utils.isConnectedToCharger(getApplicationContext())) {
+            lastDozeEnterBatteryLife = 0;
+        } else {
+            lastDozeEnterBatteryLife = Utils.getBatteryLevel(getApplicationContext());
+        }
+        log("Entering Doze");
+        DiagnosticLogger.i("DOZE", "enter_doze_start mode=tunable_fallback");
+        dozeStateStore.setInDoze(true);
+        applyDoze();
+        lastScreenOff = Utils.getDateCurrentTimeZone(System.currentTimeMillis());
+        recordDozeEnterStats();
+        applyEntryMotionAndNetwork(context);
+    }
+
+    /**
+     * True when Doze entry goes through a real privileged force-idle transaction, as opposed to the
+     * unprivileged tunable path or the pre-N command. Only this backend gets the
+     * NONE/PREPARING/ACTIVE protocol.
+     */
+    private boolean isPrivilegedForceIdleBackend() {
+        return Utils.isDeviceRunningOnN() && (isSuAvailable || isShizukuAvailable);
+    }
+
+    /**
+     * Claims the physical-entry slot, records the durable PREPARING marker and dispatches the
+     * force. Nothing is suspended, journalled or counted here: on this device
+     * "dumpsys deviceidle force-idle deep" answers "Unable to go deep idle; stopped at INACTIVE"
+     * with shell exit code 0 whenever an alarm falls inside min_time_to_alarm, and the old code
+     * took that for success - starting a whole session, and its statistics, on a device that never
+     * left INACTIVE.
+     */
+    private void beginPrivilegedFreshEntry(Context context, boolean allowPostCleanupReentry) {
+        final int token;
+        synchronized (physicalEntryLock) {
+            if (physicalEntryPhase != PHASE_NONE) {
+                log("A physical Doze entry is already outstanding, skipping fresh entry");
+                DiagnosticLogger.i("DOZE", "entry_refused reason=attempt_in_flight phase="
+                        + phaseName(physicalEntryPhase));
+                return;
+            }
+            // The durable bit gates fresh entry too, not just the in-memory phase: a recreated
+            // process starts at PHASE_NONE while a force from the previous process may still be in
+            // effect and unaccounted for.
+            if (dozeStateStore.isEntryPending()) {
+                log("A previous force-idle attempt is still unresolved, skipping fresh entry");
+                DiagnosticLogger.i("DOZE", "entry_refused reason=entry_pending_unresolved");
+                return;
+            }
+            if (dozeStateStore.isInDoze()) {
+                DiagnosticLogger.i("DOZE", "entry_refused reason=session_already_owned");
+                return;
+            }
+            // The durable record is written before the phase is claimed and before anything is
+            // dispatched. An external physical force with no owner on disk is the one outcome this
+            // protocol exists to prevent, so a journal failure stops the entry outright rather than
+            // proceeding unrecorded. Nothing has been changed yet, so there is nothing to unwind:
+            // the phase is still NONE and no token has been consumed.
+            if (!dozeStateStore.beginForceIdleAttempt()) {
+                log("Could not record the pending force-idle attempt, not entering Doze");
+                DiagnosticLogger.e("DOZE", "entry_aborted reason=preparing_journal_write_failed");
+                return;
+            }
+            token = ++entryAttemptToken;
+            physicalEntryPhase = PHASE_ATTEMPTING;
+            entryAttemptAllowsReentry = allowPostCleanupReentry;
+        }
+
+        releaseTempWakeLock();
+        log("Entering Doze");
+        DiagnosticLogger.i("DOZE", "force_idle_attempt_start mode=fresh token=" + token);
+        applyDoze((commandCode, exitCode, stdout, stderr) ->
+                onFreshForceIdleResult(context, token, exitCode, stdout, stderr));
+    }
+
+    /**
+     * Decides what a finished fresh force attempt means. The ordering here is deliberate: physical
+     * success is established first and is never short-circuited by staleness, because a force that
+     * succeeded has left mForceIdle=true behind and owes an unforce even when nobody wants the
+     * session any more.
+     */
+    private void onFreshForceIdleResult(Context context, int token, int exitCode,
+                                        List<String> stdout, List<String> stderr) {
+        // Both reads happen before the lock is taken: they are binder calls, and correctness rests
+        // on the token comparison below rather than on them.
+        boolean physicallyIdle = verifyPhysicalDozeEntered();
+        boolean commandCompleted = (exitCode == 0);
+        boolean stillWanted = isFreshEntryStillWanted(context);
+
+        // Exit code 0 is necessary but not sufficient. The device probe established one direction
+        // only - exit 0 with the device not idle is a semantic refusal - and says nothing about
+        // what a non-zero result means. ShizukuHandler reports -1 both when the command could not
+        // be started at all and when runCommandOnce threw partway through, so a non-zero result
+        // with the device idle cannot be read as a force this app owns, nor safely as one it does
+        // not. Those two cases are therefore separated below rather than collapsed into "success".
+        String verdict;
+        if (commandCompleted && physicallyIdle) {
+            verdict = "verified_success";
+        } else if (commandCompleted) {
+            verdict = "semantic_rejection";
+        } else if (!physicallyIdle) {
+            verdict = "transport_failure";
+        } else {
+            verdict = "ambiguous_idle_after_command_failure";
+        }
+        DiagnosticLogger.i("DOZE", "force_idle_result mode=fresh verdict=" + verdict
+                + " exit=" + exitCode + " idleMode=" + physicallyIdle
+                + " verifiedBy=exit_code+idle_mode");
+        if ("semantic_rejection".equals(verdict)) {
+            // The only case with output worth reporting. Never an input to the decision.
+            DiagnosticLogger.i("DOZE", "force_idle_rejected stoppedAt="
+                    + describeForceIdleFailure(stdout, stderr));
+        }
+
+        boolean cleanup = false;
+        boolean cleanupAllowsReentry = true;
+        boolean abort = false;
+        boolean abortJournalClearFailed = false;
+        boolean commitFailed = false;
+        String abortReason = verdict;
+        synchronized (physicalEntryLock) {
+            if (physicalEntryPhase == PHASE_CLEANING_UP) {
+                // A recovery or shutdown cleanup already owns the debt and has its own unforce out;
+                // issuing a second one here would race it for the durable bit.
+                DiagnosticLogger.i("DOZE", "entry_result_ignored reason=cleanup_in_flight success="
+                        + physicallyIdle);
+            } else if (!physicallyIdle) {
+                // Semantic rejection or transport failure. Either way the device is not idle, so
+                // Android is holding nothing on this app's behalf and there is nothing to undo.
+                // The durable bit is cleared inside the lock, before the phase is released, so a
+                // fresh entry can never find PHASE_NONE while entryPending is still set and refuse
+                // itself for a reason that has already stopped being true.
+                abortJournalClearFailed = !dozeStateStore.abortForceIdleAttempt();
+                abort = true;
+                physicalEntryPhase = PHASE_NONE;
+            } else if (!commandCompleted) {
+                // Ambiguous: the command did not report completion, yet the device is idle. That
+                // idle state may be this app's doing or may not, and it is not a basis for claiming
+                // a session. Treated as a possibly-owned physical force and conservatively undone -
+                // an unforce on an idle device this app did not force clears a flag that was
+                // already false, so the cautious choice is also the cheap one.
+                cleanup = true;
+                cleanupAllowsReentry = entryAttemptAllowsReentry;
+                physicalEntryPhase = PHASE_CLEANING_UP;
+            } else if (token != entryAttemptToken || physicalEntryPhase != PHASE_ATTEMPTING
+                    || !stillWanted) {
+                // Verified success that nobody wants any more. Never dropped: the device really is
+                // forced, and only this branch will take it back out.
+                cleanup = true;
+                cleanupAllowsReentry = entryAttemptAllowsReentry;
+                physicalEntryPhase = PHASE_CLEANING_UP;
+            } else if (!dozeStateStore.commitDozeSession()) {
+                // The force succeeded but the ownership transition did not reach disk, so this is
+                // not an ACTIVE session and none of the session work may run: an ENTER row,
+                // suspended packages or disabled radios recorded against a session no recovery
+                // would find is worse than no session at all. The store has put the local view back
+                // to PREPARING, which is what the file still holds, so the device converges the
+                // same way an invalidated attempt does - unforce, and leave the marker to be
+                // cleared only when that completes. Persistence is not retried here.
+                commitFailed = true;
+                physicalEntryPhase = PHASE_CLEANING_UP;
+            } else {
+                physicalEntryPhase = PHASE_NONE;
+                DiagnosticLogger.i("DOZE", "entry_committed token=" + token);
+                // Deliberately inside the lock. Committing and then setting the session up outside
+                // it left a window where SCREEN_ON could see inDoze=true, run a complete owned exit
+                // with all its restores, and only then have this thread apply the ENTER row, the
+                // package suspension and the notification blocking on top of an already-finished
+                // session. A session-epoch check cannot close that: this work is synchronous and
+                // the epoch it would compare against is the one just committed.
+                //
+                // Every path that ends a session calls invalidateDesiredEntry() - directly or via
+                // cancelPendingEnterDoze() - before it reads the durable inDoze flag, and that
+                // acquires this same monitor. So a lifecycle event either arrives first, in which
+                // case the token has moved and this branch is not reached at all, or it waits here
+                // and then observes a session that is fully established and restores all of it.
+                //
+                // Only dispatch happens under the lock; no shell command is waited on. The package
+                // and sensor serializers never acquire this monitor, so there is no lock ordering
+                // to invert.
+                commitFreshDozeSession(context);
+            }
+        }
+
+        if (abort) {
+            // A clean end. Deliberately no retry: an entry refused because a user alarm falls
+            // inside min_time_to_alarm must stay refused until the next genuine lifecycle event.
+            DiagnosticLogger.i("DOZE", "entry_aborted reason=" + abortReason + " token=" + token);
+            if (abortJournalClearFailed) {
+                // Nothing was forced, so the phone is in the right state; only the marker is stale.
+                // A later recovery will unforce a device that is not forced, which is a no-op.
+                DiagnosticLogger.e("DOZE", "entry_cleanup_journal_clear_failed phase=abort");
+            }
+            return;
+        }
+        if (commitFailed) {
+            DiagnosticLogger.e("DOZE", "entry_commit_failed action=physical_cleanup token=" + token);
+            // No automatic re-entry: the storage that just failed is the same storage the next
+            // attempt would depend on.
+            dispatchPhysicalForceCleanup(false);
+            return;
+        }
+        if (cleanup) {
+            String detail = !commandCompleted ? "ambiguous_result"
+                    : (stillWanted ? "attempt_superseded" : "precondition_changed");
+            DiagnosticLogger.i("DOZE", "entry_cleanup_started reason=possible_owned_force detail="
+                    + detail + " token=" + token);
+            dispatchPhysicalForceCleanup(cleanupAllowsReentry);
+        }
+    }
+
+    /**
+     * Everything the session owes once, and only once, Android is confirmed to be in deep idle and
+     * the durable ACTIVE state is written.
+     */
+    private void commitFreshDozeSession(Context context) {
+        lastKnownState = "IDLE";
+        timeEnterDoze = System.currentTimeMillis();
+        if (Utils.isConnectedToCharger(getApplicationContext())) {
+            lastDozeEnterBatteryLife = 0;
+        } else {
+            lastDozeEnterBatteryLife = Utils.getBatteryLevel(getApplicationContext());
+        }
+        lastScreenOff = Utils.getDateCurrentTimeZone(System.currentTimeMillis());
+        DiagnosticLogger.i("DOZE", "enter_doze_start mode=privileged");
+
+        // The remaining writes are not transactional with the commit above, and are not claimed to
+        // be. A crash between the commit and the ENTER row leaves an owned session whose eventual
+        // EXIT row has no partner, which the statistics screen skips; that is cosmetic, and strictly
+        // better than the ENTER rows a failed force used to leave behind for ever. A crash later
+        // leaves partial journal markers, which is exactly what the journal exists to repair.
+        recordDozeEnterStats();
+        applyEntryPackageAndNotificationBlocking(context);
+        applyEntryMotionAndNetwork(context);
+    }
+
+    /**
+     * The second of the two conditions a fresh entry must satisfy, not the only one. The device
+     * probe confirms that by the time the shell command returns successfully the device is already
+     * at mState=IDLE with mForceIdle=true, so one in-process read is enough and nothing is polled.
+     * <p>
+     * A zero exit code is necessary but not sufficient - it is 0 for a semantic refusal too - and
+     * this read is what separates those. It is not sufficient on its own either: paired with a
+     * non-zero exit code it means the device is idle for reasons this app cannot attribute to
+     * itself, which {@link #onFreshForceIdleResult} treats as ambiguous rather than as success.
+     */
+    private boolean verifyPhysicalDozeEntered() {
+        try {
+            return pm != null && pm.isDeviceIdleMode();
+        } catch (Exception e) {
+            Log.e(TAG, "Could not read device idle mode: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Diagnostic only - never an input to the success decision. Reports the state the controller
+     * stopped at when it refuses, which is the one genuinely useful detail in the output.
+     */
+    private String describeForceIdleFailure(List<String> stdout, List<String> stderr) {
+        List<String> lines = new ArrayList<>();
+        if (stdout != null) {
+            lines.addAll(stdout);
+        }
+        if (stderr != null) {
+            lines.addAll(stderr);
+        }
+        for (String line : lines) {
+            if (line == null) {
+                continue;
+            }
+            int at = line.indexOf("stopped at ");
+            if (at >= 0) {
+                return line.substring(at + "stopped at ".length()).trim();
+            }
+        }
+        return "unknown";
+    }
+
+    /**
+     * Re-checks the policy that made this entry desirable. Charging is deliberately conditional:
+     * with "Disable when charging" off, dozing while on USB power is intentional and must keep
+     * working.
+     */
+    private boolean isFreshEntryStillWanted(Context context) {
+        if (Utils.isScreenOn(context)) {
+            return false;
+        }
+        if (isCallActiveNow()) {
+            return false;
+        }
+        if (disableWhenCharging && Utils.isConnectedToCharger(getApplicationContext())) {
+            return false;
+        }
+        if (!Utils.isInsideCustomDozePeriod(context)) {
+            return false;
+        }
+        return !dozeStateStore.isInDoze();
+    }
+
+    /**
+     * Cancels any fresh entry this process still intends or has outstanding, so a force callback
+     * that has not yet run can no longer commit a session. Called from every path that ends or
+     * supersedes a session, always before that path reads the durable inDoze flag - which is what
+     * makes both orderings safe: either this wins and the callback finds itself stale, or the
+     * callback commits first and the caller then sees inDoze=true and performs its ordinary
+     * owned-session exit.
+     * <p>
+     * It deliberately touches only the fresh-entry identity. An ACTIVE session that continues
+     * across a locked wake is not affected.
+     */
+    private void invalidateDesiredEntry(String reason) {
+        synchronized (physicalEntryLock) {
+            entryAttemptToken++;
+            if (physicalEntryPhase == PHASE_ATTEMPTING) {
+                DiagnosticLogger.i("DOZE", "entry_invalidated reason=" + reason);
+            }
+        }
+    }
+
+    /**
+     * The narrow physical undo for a PREPARING marker. Deliberately not leaveDoze(): that method
+     * falls back to resetting device_idle tunables when no privileged backend is present, and a
+     * tunable reset is not an unforce - clearing the marker after one would abandon a device that
+     * is still forced.
+     */
+    private void cleanupPendingPhysicalForce(String reason) {
+        synchronized (physicalEntryLock) {
+            if (physicalEntryPhase == PHASE_CLEANING_UP) {
+                DiagnosticLogger.i("DOZE", "entry_cleanup_skipped reason=already_cleaning_up");
+                return;
+            }
+            if (physicalEntryPhase == PHASE_ATTEMPTING) {
+                // An unforce must never run alongside a force that is still executing. Every
+                // command gets its own thread and its own remote process, so the two would race:
+                // the unforce could finish first, clear entryPending, and then the force could
+                // land and put the device into deep idle with the marker already gone - the exact
+                // ownership the durable bit exists to prevent.
+                //
+                // The attempt's own callback is the only safe place to resolve this, and it always
+                // arrives: ShizukuHandler invokes the listener even when the binder is unavailable,
+                // reporting exit -1, so this cannot wait forever. The token bump means that
+                // callback will find itself stale, and it will then either abort (force refused,
+                // nothing forced) or run the unforce itself (force succeeded).
+                entryAttemptToken++;
+                log("A force-idle attempt is still running, deferring its undo to its own result");
+                DiagnosticLogger.i("DOZE", "entry_cleanup_deferred reason=waiting_for_attempt_result");
+                return;
+            }
+            if (!isPrivilegedForceIdleBackend()) {
+                // The debt stays on disk. Shizuku coming back runs the shared recovery path again,
+                // which retries this.
+                log("No privileged backend available to undo a pending force-idle, deferring");
+                DiagnosticLogger.i("DOZE", "entry_cleanup_deferred reason=no_privileged_backend");
+                physicalEntryPhase = PHASE_NONE;
+                return;
+            }
+            // PHASE_NONE with entryPending set: an orphan marker, left by a process that died
+            // before its force callback ran. Shizuku documents that the process it hands out is
+            // killed when its caller dies, so no force from that process can still be executing and
+            // the unforce is safe to issue.
+            //
+            // NOTE: the same path also serves root mode through libsuperuser Shell.Interactive,
+            // and that guarantee has NOT been established there - a root child could in principle
+            // outlive the app process. Root mode is untested for this scenario and is recorded here
+            // as an open item for a separate root-mode audit; it is not a reason to change the
+            // Shizuku path.
+            entryAttemptToken++;
+            physicalEntryPhase = PHASE_CLEANING_UP;
+        }
+        DiagnosticLogger.i("DOZE", "entry_cleanup_started reason=" + reason);
+        // Recovery and shutdown cleanups always allow the one-shot re-evaluation: recovering a
+        // marker left by a dead process is exactly the case where no further SCREEN_OFF is coming.
+        dispatchPhysicalForceCleanup(true);
+    }
+
+    /**
+     * Runs the unforce and clears the durable marker only once it has actually completed. The exit
+     * code is the acceptance condition here, unlike for force-idle: unforce has no "unable to"
+     * outcome, and idle state cannot be used because with the screen off a device that was naturally
+     * idle stays idle after the force flag is dropped.
+     */
+    private void dispatchPhysicalForceCleanup(boolean allowReentry) {
+        executeCommandWithRoot("dumpsys deviceidle unforce",
+                (commandCode, exitCode, stdout, stderr) -> {
+                    boolean unforced = exitCode == 0;
+                    boolean cleared = false;
+                    if (unforced) {
+                        cleared = dozeStateStore.abortForceIdleAttempt();
+                        if (cleared) {
+                            DiagnosticLogger.i("DOZE", "entry_cleanup_complete exit=" + exitCode);
                         } else {
-                            String currentlyFocused = getNonRootFocusedPackageName();
-                            List<String> toBlock = new ArrayList<>();
-                            for (String pkg : dozeAppBlocklist) {
-                                if (!pkg.equals(currentlyFocused)) {
-                                    toBlock.add(pkg);
-                                }
-                            }
-                            suspendPackagesForDoze(toBlock);
+                            // The physical undo did happen, so the device itself is safe; only the
+                            // record of the debt could not be cleared. It must not be reported as
+                            // settled, and no re-entry may follow, because a later recovery will
+                            // legitimately act on the marker it can still see. Unforcing a device
+                            // that is no longer forced is a no-op, so that repeat is harmless, and
+                            // it invents neither an ENTER nor an EXIT.
+                            DiagnosticLogger.e("DOZE", "entry_cleanup_journal_clear_failed exit="
+                                    + exitCode);
                         }
                     } else {
-                        suspendPackagesForDoze(dozeAppBlocklist);
+                        // Marker retained: the next recovery opportunity retries it.
+                        DiagnosticLogger.i("DOZE", "entry_cleanup_failed exit=" + exitCode);
                     }
+                    synchronized (physicalEntryLock) {
+                        physicalEntryPhase = PHASE_NONE;
+                    }
+                    if (cleared && allowReentry) {
+                        reevaluateEntryAfterCleanup();
+                    }
+                }, false);
+    }
 
-                }
+    /**
+     * One policy re-evaluation after a physical cleanup has actually completed - never a loop, and
+     * never after a plain rejection.
+     * <p>
+     * Cleanup is asynchronous, and while it is outstanding every fresh entry is refused because
+     * entryPending is still set. Two real cases end there with nothing left to restart them: a
+     * process recreated with the screen off, where onStartCommand's entry is refused and no further
+     * SCREEN_OFF is coming; and a call that ends while the cleanup for its invalidated attempt is
+     * still running, which would silently lose the existing re-entry-after-call behaviour. Both are
+     * covered by asking the ordinary policy once, here, at the only moment the answer can have
+     * changed.
+     * <p>
+     * The attempt this starts carries allowPostCleanupReentry=false, so if it is itself invalidated
+     * and cleaned up the chain stops. If Android simply refuses it, that is an abort and no retry
+     * follows.
+     */
+    private void reevaluateEntryAfterCleanup() {
+        if (serviceStopping) {
+            DiagnosticLogger.i("DOZE", "entry_reevaluation_skipped reason=service_stopping");
+            return;
+        }
+        Context context = getApplicationContext();
+        if (dozeStateStore.isEntryPending() || dozeStateStore.isInDoze()) {
+            DiagnosticLogger.i("DOZE", "entry_reevaluation_skipped reason=state_changed");
+            return;
+        }
+        if (!isFreshEntryStillWanted(context)) {
+            DiagnosticLogger.i("DOZE", "entry_reevaluation_skipped reason=policy_not_met");
+            return;
+        }
+        DiagnosticLogger.i("DOZE", "entry_reevaluated_after_cleanup");
+        enterDoze(context, false);
+    }
 
-                if (dozeNotificationBlocklist.size() != 0) {
-                    log("Disabling notifications for apps in the Notification blocklist");
-                    List<String> toBlock = new ArrayList<>();
-                    for (String pkg : dozeNotificationBlocklist) {
-                        if (!dozeAppBlocklist.contains(pkg)) {
-                            toBlock.add(pkg);
+    private static String phaseName(int phase) {
+        switch (phase) {
+            case PHASE_ATTEMPTING:
+                return "ATTEMPTING";
+            case PHASE_CLEANING_UP:
+                return "CLEANING_UP";
+            default:
+                return "NONE";
+        }
+    }
+
+    private void recordDozeEnterStats() {
+        if (!disableStats) {
+            dozeUsageData.add(Long.toString(System.currentTimeMillis()).concat(",").concat(Float.toString(Utils.isConnectedToCharger(getApplicationContext()) ? 0.0f : Utils.getBatteryLevel(getApplicationContext()))).concat(",").concat("ENTER"));
+            saveDozeDataStats();
+        }
+    }
+
+    /** Unchanged entry work, factored out so both backends run exactly the same code. */
+    private void applyEntryPackageAndNotificationBlocking(Context context) {
+            if (dozeAppBlocklist.size() != 0) {
+                log("Disabling apps that are in the Doze app blocklist");
+                if (whitelistCurrentApp) {
+                    // when root is not available we use UsageStatsManager
+                    // but i am not sure i can trust it as it does not really returns the front
+                    // app but last one used (what about apps running in the background?)
+                    if (isSuAvailable || isShizukuAvailable) {
+                        try {
+                            getFocusedApps((HashSet<String> packageNames) -> {
+                                List<String> toBlock = new ArrayList<>();
+                                for (String pkg : dozeAppBlocklist) {
+                                    if (!packageNames.contains(pkg)) {
+                                        toBlock.add(pkg);
+                                    }
+                                }
+                                suspendPackagesForDoze(toBlock);
+                            });
+                        } catch (Exception e) {
+                            e.printStackTrace();
                         }
-                    }
-                    setNotificationsEnabledForPackages(toBlock, false);
-                }
-                timeEnterDoze = System.currentTimeMillis();
-                if (Utils.isConnectedToCharger(getApplicationContext())) {
-                    lastDozeEnterBatteryLife = 0;
-                } else {
-                    lastDozeEnterBatteryLife = Utils.getBatteryLevel(getApplicationContext());
-                }
-                log("Entering Doze");
-                DiagnosticLogger.i("DOZE", "enter_doze_start");
-                dozeStateStore.setInDoze(true);
-                applyDoze();
-                lastScreenOff = Utils.getDateCurrentTimeZone(System.currentTimeMillis());
-
-                if (!disableStats) {
-                    dozeUsageData.add(Long.toString(System.currentTimeMillis()).concat(",").concat(Float.toString(Utils.isConnectedToCharger(getApplicationContext()) ? 0.0f : Utils.getBatteryLevel(getApplicationContext()))).concat(",").concat("ENTER"));
-                    saveDozeDataStats();
-                }
-
-                if (disableMotionSensors) {
-                    dozeStateStore.markApplied(DozeStateStore.KEY_MOTION_SENSORS, true);
-                    disableSensorsTimer = new Timer();
-                    disableSensorsTimer.schedule(new TimerTask() {
-                        @Override
-                        public void run() {
-                            log("Disabling motion sensors");
-                            if (sensorWhitelistPackage.equals("")) {
-                                executeCommand("dumpsys sensorservice restrict");
-                            } else {
-                                log("Package " + sensorWhitelistPackage + " is whitelisted from sensorservice");
-                                log("Note: Packages that get whitelisted are supposed to request sensor access again, if the app doesn't work, email the dev of that app!");
-                                executeCommand("dumpsys sensorservice restrict " + sensorWhitelistPackage);
+                    } else {
+                        String currentlyFocused = getNonRootFocusedPackageName();
+                        List<String> toBlock = new ArrayList<>();
+                        for (String pkg : dozeAppBlocklist) {
+                            if (!pkg.equals(currentlyFocused)) {
+                                toBlock.add(pkg);
                             }
                         }
-                    }, 2000);
+                        suspendPackagesForDoze(toBlock);
+                    }
                 } else {
-                    log("Not disabling motion sensors because disableMotionSensors=false");
+                    suspendPackagesForDoze(dozeAppBlocklist);
                 }
-                enterDozeHandleNetwork(context);
 
-            } else {
-                log("Screen is on, skip entering Doze");
             }
-        } else {
-            log("enterDoze() received but skipping because device is already Dozing");
-        }
+
+            if (dozeNotificationBlocklist.size() != 0) {
+                log("Disabling notifications for apps in the Notification blocklist");
+                List<String> toBlock = new ArrayList<>();
+                for (String pkg : dozeNotificationBlocklist) {
+                    if (!dozeAppBlocklist.contains(pkg)) {
+                        toBlock.add(pkg);
+                    }
+                }
+                setNotificationsEnabledForPackages(toBlock, false);
+            }
+    }
+
+    /** Unchanged entry work, factored out so both backends run exactly the same code. */
+    private void applyEntryMotionAndNetwork(Context context) {
+            if (disableMotionSensors) {
+                dozeStateStore.markApplied(DozeStateStore.KEY_MOTION_SENSORS, true);
+                disableSensorsTimer = new Timer();
+                disableSensorsTimer.schedule(new TimerTask() {
+                    @Override
+                    public void run() {
+                        log("Disabling motion sensors");
+                        if (sensorWhitelistPackage.equals("")) {
+                            executeCommand("dumpsys sensorservice restrict");
+                        } else {
+                            log("Package " + sensorWhitelistPackage + " is whitelisted from sensorservice");
+                            log("Note: Packages that get whitelisted are supposed to request sensor access again, if the app doesn't work, email the dev of that app!");
+                            executeCommand("dumpsys sensorservice restrict " + sensorWhitelistPackage);
+                        }
+                    }
+                }, 2000);
+            } else {
+                log("Not disabling motion sensors because disableMotionSensors=false");
+            }
+        enterDozeHandleNetwork(context);
     }
 
     /**
@@ -2551,7 +3112,26 @@ public class ForceDozeService extends Service {
             return;
         }
         DiagnosticLogger.i("DOZE", "owned_session_reforce_idle reason=" + reason);
-        applyDoze();
+        // A resume carries no PREPARING marker and never cleans up: the logical session is already
+        // owned and committed, so a successful re-force is exactly what is wanted and a rejected one
+        // changes nothing except what the diagnostics have to say honestly.
+        DiagnosticLogger.i("DOZE", "force_idle_attempt_start mode=resume");
+        if (isPrivilegedForceIdleBackend()) {
+            applyDoze((commandCode, exitCode, stdout, stderr) -> {
+                boolean physicallyIdle = verifyPhysicalDozeEntered();
+                DiagnosticLogger.i("DOZE", "force_idle_result mode=resume success=" + physicallyIdle
+                        + " exit=" + exitCode + " verifiedBy=idle_mode");
+                if (!physicallyIdle) {
+                    // The session stays owned. No ENTER, no new generation, and no EXIT: nothing
+                    // about the logical session has ended just because Android declined to re-force
+                    // deep idle right now.
+                    DiagnosticLogger.i("DOZE", "owned_session_reforce_failed stoppedAt="
+                            + describeForceIdleFailure(stdout, stderr));
+                }
+            });
+        } else {
+            applyDoze();
+        }
     }
 
     /**
@@ -2843,6 +3423,20 @@ public class ForceDozeService extends Service {
         boolean screenOn = Utils.isScreenOn(getApplicationContext());
         boolean inDoze = dozeStateStore.isInDoze();
 
+        // Highest priority, ahead of every ownership mode. A PREPARING marker means a privileged
+        // force-idle was dispatched and its outcome was never recorded, so the device may be held
+        // in deep idle by this app with no session to account for it. It must be resolved before
+        // anything else reasons about ownership, and it lives here rather than in
+        // recoverAfterServiceRecreation() because onShizukuBecameAvailable() enters through this
+        // method directly - which is also what retries a cleanup that had to be deferred.
+        if (dozeStateStore.isEntryPending()) {
+            log(logPrefix + "_PREPARING: an interrupted force-idle attempt is unresolved");
+            DiagnosticLogger.i("RECOVERY", "RECOVERY_PREPARING prefix=" + logPrefix);
+            // No ENTER, no EXIT and no statistics of any kind: PREPARING never became a session.
+            cleanupPendingPhysicalForce(reason + " (preparing recovery)");
+            return;
+        }
+
         if (isDozeSessionOver()) {
             log(logPrefix + "_RUNNING screenOn=" + screenOn + " inDoze=" + inDoze);
             DiagnosticLogger.i("RECOVERY", logPrefix + "_RUNNING screenOn=" + screenOn + " inDoze=" + inDoze);
@@ -2948,6 +3542,11 @@ public class ForceDozeService extends Service {
      * every scheduling site already builds a fresh Timer, so this is safe to call at any time.
      */
     private void cancelPendingEnterDoze() {
+        // A fresh entry can be outstanding as a physical force-idle transaction as well as an armed
+        // TimerTask, and both mean the same thing: this process still intends to start a session.
+        // Cancelling one without the other would let a force callback commit a session moments
+        // after the event that cancelled it.
+        invalidateDesiredEntry("pending entry cancelled");
         try {
             if (enterDozeTimer != null) {
                 enterDozeTimer.cancel();
@@ -3006,6 +3605,11 @@ public class ForceDozeService extends Service {
         log("Last known Doze state: " + lastKnownState);
 
         releaseTempWakeLock();
+
+        // Before the durable flag is read, so a force callback still in flight can no longer
+        // commit. Every caller already cancels the pending entry first; doing it here as well keeps
+        // the property local to this method rather than dependent on the caller.
+        invalidateDesiredEntry("screen on");
 
         // Captured BEFORE the durable flag is cleared. This is the once-only token for the
         // logical session: whether EnforceDoze owned a Doze session, which is independent of
@@ -3194,7 +3798,20 @@ public class ForceDozeService extends Service {
                     boolean inDeepIdle = pm.isDeviceIdleMode();
                     lastKnownState = getDeviceIdleState();
                     log("Current (Deep) state: " + lastKnownState + ", deep idle: " + inDeepIdle);
-                    if (!inDeepIdle) {
+                    // Maintenance is a property of a session this app owns, so it needs durable
+                    // ownership and not merely a physical transition with the screen off. A
+                    // PREPARING attempt makes the device enter and leave deep idle before any
+                    // session exists - a force that succeeds and is then invalidated by a call or a
+                    // charger is unforced while the screen is still off - and the resulting
+                    // broadcast used to be read as a maintenance window: an EXIT_MAINTENANCE row,
+                    // maintenance=true, and device states restored for a session that never
+                    // started. The next physical IDLE would then write ENTER_MAINTENANCE and run
+                    // the network entry work on top of nothing. The physical state above is still
+                    // recorded; only the bookkeeping is gated.
+                    if (!dozeStateStore.isInDoze()) {
+                        DiagnosticLogger.i("DOZE", "device_idle_mode_changed_ignored"
+                                + " reason=no_owned_session deepIdle=" + inDeepIdle);
+                    } else if (!inDeepIdle) {
                         if (!maintenance) {
                             log("Device exited Doze for maintenance");
                             DiagnosticLogger.i("DOZE", "maintenance_enter");
