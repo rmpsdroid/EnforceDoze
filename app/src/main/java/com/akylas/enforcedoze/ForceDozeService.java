@@ -281,6 +281,22 @@ public class ForceDozeService extends Service {
     private volatile boolean serviceStopping = false;
 
     /**
+     * "A fresh entry became due, and the selected Shizuku backend was not there."
+     * <p>
+     * Armed in exactly one place: the backend decision inside enterDoze(), which is only ever
+     * reached once the configured entry delay has already elapsed and every ordinary entry guard
+     * has passed. That is what keeps dozeEnterDelay intact - a Shizuku binder arriving while the
+     * delayed task is still waiting finds this false and does nothing, because no entry has become
+     * due yet. It also means an unrelated reconnect can never start a session that was never asked
+     * for.
+     * <p>
+     * In-memory: it describes an intent this process formed, and a process that dies forms it again
+     * from the next screen-off. Cleared by {@link #invalidateDesiredEntry(String)} along with the
+     * rest of the pending-entry state, so every path that cancels a fresh entry cancels this too.
+     */
+    private final AtomicBoolean shizukuFreshEntryDeferred = new AtomicBoolean(false);
+
+    /**
      * Identity of the ACTIVE logical session, deliberately separate from {@link #entryAttemptToken}.
      * The attempt token identifies a PREPARING physical force and is invalidated by anything that
      * merely cancels a pending entry - including a locked SCREEN_ON, which leaves the session it
@@ -741,6 +757,117 @@ public class ForceDozeService extends Service {
      */
     private void onShizukuBecameAvailable() {
         applyRecoveryPolicy("SHIZUKU_RECOVERY", "Shizuku became available");
+        maybeRetryDeferredShizukuEntry("shizuku_available");
+    }
+
+    /**
+     * Liveness for the deferral above. Without it, a screen-off that was declined because Shizuku
+     * was missing would wait for the next screen-off - which, overnight, may be hours away or may
+     * never come.
+     * <p>
+     * Recovery has already run by the time this is reached, and it has priority: while any restore
+     * debt is still outstanding, a fresh session must not be started on top of it. That is the same
+     * rule handleCallEnded() applies, and for the same reason - a new entry would allocate a new
+     * package generation and lose whatever the unfinished restore still owes.
+     * <p>
+     * Nothing here re-implements entry. It asks the ordinary predicates and then calls the ordinary
+     * enterDoze(), so the existing barrier, PREPARING protocol and physical verification all apply
+     * unchanged. That is also what settles the race against a simultaneous SCREEN_ON: if the wake
+     * wins, enterDoze() finds the screen on and skips; if it arrives after the force is dispatched,
+     * the attempt token is bumped and the result is cleaned up rather than committed. A session can
+     * never appear after a wake has been processed.
+     */
+    /**
+     * Arms the deferred fresh-entry intent, but only if the entry is still due at the moment the
+     * intent is recorded.
+     * <p>
+     * Under the same monitor as {@link #invalidateDesiredEntry(String)}, because the two race
+     * directly. A delayed entry task passes its screen-off check, is overtaken by SCREEN_ON - which
+     * cancels every pending entry, this intent included - and then carries on to discover the
+     * backend is missing. Arming unconditionally there would attach the old screen-off's intent to
+     * a device that is now awake, and a later screen-off plus a Shizuku reconnect could consume it
+     * and enter while that new screen-off's configured delay was still running. Every fact is
+     * therefore re-read here rather than inherited from the caller: if the wake takes the monitor
+     * first nothing is armed, and if the deferral takes it first the wake's invalidation clears it
+     * immediately afterwards.
+     * <p>
+     * Dispatches nothing, so it is safe to call from a caller already holding the monitor.
+     */
+    private void armDeferredShizukuEntryIfStillWanted(Context context, String stage) {
+        synchronized (physicalEntryLock) {
+            if (serviceStopping
+                    || !Utils.isShizukuMode(context)
+                    || isShizukuAvailable
+                    || dozeStateStore.isEntryPending()
+                    // Carries screen-off, no call, the conditional charging predicate, the custom
+                    // period and !inDoze.
+                    || !isFreshEntryStillWanted(context)) {
+                log("Not deferring Doze entry, it is no longer due");
+                DiagnosticLogger.i("DOZE", "entry_deferral_not_armed stage=" + stage);
+                return;
+            }
+            shizukuFreshEntryDeferred.set(true);
+            log("Shizuku mode is selected but Shizuku is not available, deferring Doze entry");
+            DiagnosticLogger.i("DOZE", "entry_deferred reason=shizuku_unavailable stage=" + stage);
+        }
+    }
+
+    private void maybeRetryDeferredShizukuEntry(String reason) {
+        // Cheapest possible no-op for the overwhelmingly common case: nothing was ever deferred.
+        // This is what makes it safe to call from restore-completion callbacks.
+        if (!shizukuFreshEntryDeferred.get()) {
+            return;
+        }
+        Context context = getApplicationContext();
+        if (serviceStopping) {
+            shizukuFreshEntryDeferred.set(false);
+            return;
+        }
+        // The configured mode is the trigger, not availability. If the user has moved away from
+        // Shizuku the intent is meaningless and is dropped; the newly selected mode takes over at
+        // the next screen-off.
+        if (!Utils.isShizukuMode(context)) {
+            shizukuFreshEntryDeferred.set(false);
+            DiagnosticLogger.i("DOZE", "entry_deferral_cancelled reason=execution_mode_changed");
+            return;
+        }
+        // Still waiting for the backend. Intent stays armed.
+        if (!isShizukuAvailable) {
+            return;
+        }
+        // PREPARING owns the transition and has its own post-cleanup re-evaluation; duplicating it
+        // here would be a second entry protocol. Intent stays armed.
+        if (dozeStateStore.isEntryPending()) {
+            DiagnosticLogger.i("DOZE", "entry_retry_skipped reason=entry_pending");
+            return;
+        }
+        // Recovery keeps priority. A fresh session started over an unfinished restore would
+        // allocate a new package generation and lose whatever that restore still owes, so the
+        // intent stays armed and the completion of the last debt tries again.
+        if (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasPendingRestore()) {
+            DiagnosticLogger.i("DOZE", "entry_retry_skipped reason=pending_restore"
+                    + " pendingStates=" + dozeStateStore.getAppliedKeys().size()
+                    + " suspendedPackages=" + dozeStateStore.getAppliedSuspendedPackages().size());
+            return;
+        }
+        // Carries the screen-off, call, conditional-charging, custom-period and !inDoze tests. A
+        // failure here is not a wait: the reason the entry was wanted has gone, so the intent is
+        // consumed and the ordinary lifecycle takes over. !inDoze is what stops an owned session -
+        // including one being re-forced by recovery Mode A - from ever growing a second session.
+        if (!isFreshEntryStillWanted(context)) {
+            shizukuFreshEntryDeferred.set(false);
+            DiagnosticLogger.i("DOZE", "entry_deferral_cancelled reason=policy_not_met");
+            return;
+        }
+        // Exactly one caller consumes the intent, so duplicate availability callbacks and a restore
+        // completion landing together cannot produce two attempts.
+        if (!shizukuFreshEntryDeferred.compareAndSet(true, false)) {
+            return;
+        }
+        log("Starting the Doze entry that was deferred while Shizuku was unavailable");
+        DiagnosticLogger.i("SHIZUKU", "backend_available_reentry");
+        DiagnosticLogger.i("DOZE", "entry_retried reason=" + reason);
+        enterDoze(context);
     }
 
     /**
@@ -958,6 +1085,9 @@ public class ForceDozeService extends Service {
             isShizukuAvailable = shizukuHandler.isShizukuAvailable();
         } else {
             isShizukuAvailable = false;
+        }
+        if (!useShizuku && shizukuFreshEntryDeferred.getAndSet(false)) {
+            DiagnosticLogger.i("DOZE", "entry_deferral_cancelled reason=execution_mode_changed");
         }
         log("executionMode: " + (useShizuku ? "shizuku" : "root") + ", Shizuku available: " + isShizukuAvailable);
         isSuAvailable = getDefaultSharedPreferences(getApplicationContext()).getBoolean("isSuAvailable", false);
@@ -1401,10 +1531,39 @@ public class ForceDozeService extends Service {
             return;
         }
 
+        // The configured mode is asked first, and answers on its own. isPrivilegedForceIdleBackend()
+        // is an availability test - isSuAvailable || isShizukuAvailable - so consulting it first
+        // would let a device with Shizuku selected and stopped, but a stale isSuAvailable=true, take
+        // the privileged path anyway: writing PREPARING and dispatching a force command through a
+        // backend the user did not choose. Selected Shizuku decides its own outcome, and never
+        // borrows root.
+        if (Utils.isDeviceRunningOnN() && Utils.isShizukuMode(context)) {
+            if (!isShizukuAvailable) {
+                // A deferral, never a downgrade. The tunable fallback is the behaviour of a device
+                // that was never configured for a privileged backend; it is not a substitute for
+                // the one the user chose, and claiming a session with it would produce restrictions
+                // that cannot be applied and journal debt that cannot be paid. Nothing is claimed
+                // and nothing is written.
+                armDeferredShizukuEntryIfStillWanted(context, "fresh_entry");
+                return;
+            }
+            beginPrivilegedFreshEntry(context, allowPostCleanupReentry);
+            return;
+        }
+
+        // Root and non-Shizuku modes keep their original backend decision untouched.
         if (isPrivilegedForceIdleBackend()) {
             // The force is a real transaction whose success has to be established before anything
             // is suspended or journalled, so the whole entry moves behind its callback.
             beginPrivilegedFreshEntry(context, allowPostCleanupReentry);
+            return;
+        }
+
+        // Reachable for a configured-Shizuku device only below API N, where there is no
+        // force-idle deep to defer to; the rule that the fallback must not stand in for a chosen
+        // privileged backend still applies.
+        if (isShizukuModeButUnavailable(context)) {
+            armDeferredShizukuEntryIfStillWanted(context, "fresh_entry_pre_n");
             return;
         }
 
@@ -1427,6 +1586,28 @@ public class ForceDozeService extends Service {
                 log("Policy changed before the fallback entry could claim the session, skipping");
                 DiagnosticLogger.i("DOZE", "entry_aborted reason=policy_changed_before_commit"
                         + " mode=tunable_fallback");
+                return;
+            }
+            // Re-checked inside the barrier on the CONFIGURED MODE, not merely on availability.
+            // The mode can be switched between the decision at the top of enterDoze() and this
+            // point, and the dangerous direction is the one an unavailability test misses: a
+            // fallback invocation chosen while no privileged backend existed, arriving here after
+            // the user has selected Shizuku and Shizuku has become available. Ownership must never
+            // be claimed by the fallback for a configuration that asked for a privileged backend,
+            // whether or not that backend is currently present.
+            if (Utils.isShizukuMode(context)) {
+                if (!isShizukuAvailable) {
+                    // Re-entrant on the monitor already held here, and it dispatches nothing, so
+                    // the lock ordering is unchanged.
+                    armDeferredShizukuEntryIfStillWanted(context, "fallback_commit");
+                } else {
+                    // This invocation is stale. No attempt is made to switch backends from inside
+                    // the barrier; the next screen-off, or the settings reload that changed the
+                    // mode, starts a correct entry.
+                    log("Execution mode changed to Shizuku before the fallback could commit, aborting");
+                    DiagnosticLogger.i("DOZE", "entry_aborted reason=execution_mode_changed"
+                            + " mode=tunable_fallback");
+                }
                 return;
             }
             // One ordering change against the original: the durable flag is set before the entry
@@ -1467,6 +1648,23 @@ public class ForceDozeService extends Service {
     }
 
     /**
+     * True when Shizuku is the configured execution mode but its binder is not there right now.
+     * <p>
+     * Configured mode and current availability are different questions, and conflating them is what
+     * produced the bug this guards: with Shizuku selected and stopped, every privileged predicate
+     * read false, fresh entry fell through to the unprivileged tunable branch, and the service
+     * started a whole logical session - epoch, package generation, ENTER row, notification blocking
+     * - whose commands were then all dropped with "command_dropped reason=unavailable". A fake
+     * session with no way to enforce anything, and durable markers owed by nobody.
+     * <p>
+     * Read live rather than cached: the user can switch execution mode while the service runs, and
+     * reloadSettings() re-evaluates availability on the same basis.
+     */
+    private boolean isShizukuModeButUnavailable(Context context) {
+        return Utils.isShizukuMode(context) && !isShizukuAvailable;
+    }
+
+    /**
      * Claims the physical-entry slot, records the durable PREPARING marker and dispatches the
      * force. Nothing is suspended, journalled or counted here: on this device
      * "dumpsys deviceidle force-idle deep" answers "Unable to go deep idle; stopped at INACTIVE"
@@ -1495,6 +1693,17 @@ public class ForceDozeService extends Service {
                 DiagnosticLogger.i("DOZE", "entry_refused reason=session_already_owned");
                 return;
             }
+            // A real attempt is taking over, so the intent "entry is due but the backend is
+            // absent" has stopped describing anything and must not survive as a second retry
+            // mechanism running alongside it. Consumed here, inside the critical section that
+            // claims the attempt and ahead of the journal write, so it is already false whatever
+            // the attempt goes on to do - commit, semantic rejection, transport failure, or the
+            // journal failure handled immediately below. From this point the physical-entry
+            // protocol owns every decision about whether anything is retried.
+            if (shizukuFreshEntryDeferred.getAndSet(false)) {
+                DiagnosticLogger.i("DOZE", "entry_deferral_consumed reason=fresh_attempt_started");
+            }
+
             // The durable record is written before the phase is claimed and before anything is
             // dispatched. An external physical force with no owner on disk is the one outcome this
             // protocol exists to prevent, so a journal failure stops the entry outright rather than
@@ -1757,6 +1966,12 @@ public class ForceDozeService extends Service {
     private void invalidateDesiredEntry(String reason) {
         synchronized (physicalEntryLock) {
             entryAttemptToken++;
+            // A deferred fresh entry is pending-entry state like any other: the screen coming on, a
+            // call taking over, the charger policy or the custom period ending, a session ending and
+            // teardown all reach here, and all of them make the intent obsolete.
+            if (shizukuFreshEntryDeferred.getAndSet(false)) {
+                DiagnosticLogger.i("DOZE", "entry_deferral_cancelled reason=" + reason);
+            }
             if (physicalEntryPhase == PHASE_ATTEMPTING) {
                 DiagnosticLogger.i("DOZE", "entry_invalidated reason=" + reason);
             }
@@ -2902,6 +3117,9 @@ public class ForceDozeService extends Service {
         if (next != null) {
             dispatchPackageOp(next);
         }
+        // The other half of the debt: a final un-suspend that clears the generation can be the last
+        // thing standing between a deferred entry and its retry.
+        maybeRetryDeferredShizukuEntry("package_debt_cleared");
     }
 
     public String getDeviceIdleState() {
@@ -3344,6 +3562,12 @@ public class ForceDozeService extends Service {
             stateRestoreInFlight.remove(key);
             wakeTiming("device_state_restore_finished:" + key);
         }
+        // After the marker and the in-flight record have both settled, so the debt test below sees
+        // the state this restore just produced. Recovery outranks a deferred entry, and recovery is
+        // asynchronous: without a hook at the point the last debt actually clears, an entry deferred
+        // while Shizuku was away could sit armed for ever, with no further screen-off or
+        // availability callback coming to release it.
+        maybeRetryDeferredShizukuEntry("restore_debt_cleared");
     }
 
     /**
@@ -3431,6 +3655,17 @@ public class ForceDozeService extends Service {
         }
         // Cheap in-process read; no dumpsys and nothing to wait on.
         if (pm.isDeviceIdleMode()) {
+            return;
+        }
+        // The same rule as fresh entry, for the same reason. Without this the resume path would
+        // fall through to applyDoze()'s tunable branch and start writing device_idle constants on
+        // a device configured for Shizuku - converting an owned privileged session to the fallback
+        // backend mid-flight. The session itself is untouched: it stays owned, its markers stay
+        // journalled, and the re-force is simply retried the next time the screen goes off or
+        // Shizuku returns.
+        if (isShizukuModeButUnavailable(getApplicationContext())) {
+            log("Shizuku mode is selected but Shizuku is not available, not re-forcing deep idle");
+            DiagnosticLogger.i("DOZE", "owned_session_reforce_deferred reason=shizuku_unavailable");
             return;
         }
         DiagnosticLogger.i("DOZE", "owned_session_reforce_idle reason=" + reason);
