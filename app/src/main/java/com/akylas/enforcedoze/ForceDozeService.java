@@ -2842,18 +2842,23 @@ public class ForceDozeService extends Service {
             log(logPrefix + "_RUNNING screenOn=" + screenOn + " inDoze=" + inDoze);
             DiagnosticLogger.i("RECOVERY", logPrefix + "_RUNNING screenOn=" + screenOn + " inDoze=" + inDoze);
             if (inDoze) {
-                // Mode C has already concluded the session is over, so the durable flag must say so
-                // before any completion callback can read it. Both final-clear guards - the package
-                // generation clear and the KEY_ALL_SENSORS marker clear - refuse to release
-                // ownership while inDoze is true, so leaving it set here meant a Mode C restore
-                // could succeed and still never hand ownership back.
-                log(logPrefix + "_RUNNING: ending the durable session before restoring");
-                DiagnosticLogger.i("RECOVERY", logPrefix + "_SESSION_ENDED");
-                dozeStateStore.setInDoze(false);
+                // A logical session was still owned, so this is a session END, not just a restore.
+                // Clearing inDoze and restoring - what this branch used to do - left out
+                // leaveDoze() and the EXIT statistics row, so the session's ENTER row stayed
+                // unmatched and the statistics screen skipped it: the recovered equivalent of the
+                // live handleScreenOn bug. finalizeRecoveredOwnedSession() owns the whole
+                // transition, including clearing inDoze before its callbacks can observe it, so
+                // nothing may pre-clear the flag here.
+                log(logPrefix + "_RUNNING: finalizing the recovered owned session");
+                DiagnosticLogger.i("RECOVERY", logPrefix + "_SESSION_ENDED recoveredOwned=true");
+                finalizeRecoveredOwnedSession(reason);
+            } else {
+                // Nothing was owned; retry whatever an earlier restore failed to complete, but do
+                // not invent a session boundary in the statistics.
+                restoreSuspendedPackages(reason);
+                reEnableBlockedNotifications();
+                restoreDeviceStates(getApplicationContext(), reason);
             }
-            restoreSuspendedPackages(reason);
-            reEnableBlockedNotifications();
-            restoreDeviceStates(getApplicationContext(), reason);
             return;
         }
 
