@@ -528,7 +528,17 @@ public class ForceDozeService extends Service {
         // A maintenance window cannot survive the session ending.
         maintenance = false;
         DiagnosticLogger.i("CALL", "restore_dispatched keys=" + dozeStateStore.getAppliedKeys());
-        exitDoze(getDeviceIdleState());
+
+        if (inDoze) {
+            exitDoze(getDeviceIdleState());
+        } else {
+            // Reached with pending markers but no owned session, i.e. an earlier restore failed.
+            // Release them, but do not invent a session boundary in the statistics.
+            DiagnosticLogger.i("CALL", "pending_release_without_exit_row");
+            restoreSuspendedPackages("call started");
+            reEnableBlockedNotifications();
+            restoreDeviceStates(getApplicationContext(), "call started");
+        }
     }
 
     /**
@@ -694,7 +704,13 @@ public class ForceDozeService extends Service {
         restoreSuspendedPackages("service destroyed");
         restoreDeviceStates(getApplicationContext(), "service destroyed");
         //ensure we exit doze if stopped from background
-        exitDoze(getDeviceIdleState());
+        if (dozeStateStore.isInDoze()) {
+            exitDoze(getDeviceIdleState());
+        } else {
+            // No session was owned, so stopping the service must not append an EXIT row that
+            // pairs with somebody else's ENTER. The restores above already ran.
+            log("Service destroyed without an owned Doze session, no EXIT recorded");
+        }
         if (rootSession != null) {
             rootSession.close();
             rootSession = null;
@@ -2981,6 +2997,11 @@ public class ForceDozeService extends Service {
 
         releaseTempWakeLock();
 
+        // Captured BEFORE the durable flag is cleared. This is the once-only token for the
+        // logical session: whether EnforceDoze owned a Doze session, which is independent of
+        // whether Android has already moved its own device-idle state to ACTIVE.
+        boolean ownedSession = dozeStateStore.isInDoze();
+
         dozeStateStore.setInDoze(false);
         // A maintenance window cannot outlive the screen turning on
         maintenance = false;
@@ -2995,18 +3016,24 @@ public class ForceDozeService extends Service {
         reEnableBlockedNotifications();
         restoreDeviceStates(context, "screen on");
 
+        // Physical state is read for the log only. It must not decide whether a logical
+        // EnforceDoze session existed: Android frequently leaves deep idle before
+        // ACTION_USER_PRESENT arrives, and the old condition
+        //     !newDeviceIdleState.equals("ACTIVE") || !lastKnownState.equals("ACTIVE")
+        // then skipped exitDoze() entirely. The restores still ran, so the device behaved
+        // correctly, but no EXIT row was written and the session's ENTER row stayed unmatched -
+        // which the statistics parser skips, so whole sessions vanished from the UI.
         String newDeviceIdleState = getDeviceIdleState();
-        if (!newDeviceIdleState.equals("ACTIVE") || !lastKnownState.equals("ACTIVE")) {
-            log("Exiting Doze");
+        if (ownedSession) {
+            log("Exiting Doze (owned session), physical state: " + newDeviceIdleState);
             exitDoze(newDeviceIdleState);
         } else {
-            if (ignoreLockscreenTimeout) {
-                log("Cancelling enterDoze() because user turned on screen and " + (delay) + "ms has not passed OR disableWhenCharging=true");
-            } else {
-                log("Cancelling enterDoze() because user turned on screen and " + (time) + "ms has not passed OR disableWhenCharging=true");
-            }
-            // Ensure apps in dozeAppBlocklist are re-enabled even when device is already ACTIVE
-            restoreSuspendedPackages("handleScreenOn/active");
+            // Nothing was owned, so no session boundary is invented. Note the old condition
+            // would have written an EXIT row here whenever Android happened to report IDLE.
+            log("No EnforceDoze session was owned on wake, physical state: " + newDeviceIdleState);
+            DiagnosticLogger.i("DOZE", "no_owned_session_on_wake physicalState=" + newDeviceIdleState);
+            // Belt and braces for markers left by an earlier failed restore.
+            restoreSuspendedPackages("handleScreenOn/unowned");
             reEnableBlockedNotifications();
         }
     }
@@ -3135,11 +3162,17 @@ public class ForceDozeService extends Service {
 
                 }
             } else if (action.equals(Intent.ACTION_POWER_CONNECTED)) {
-                String newDeviceIdleState = getDeviceIdleState();
-                if (disableWhenCharging && (newDeviceIdleState.equals("IDLE") || !Utils.isScreenOn(context)) ) {
-                    log("Charger connected, exiting Doze mode");
-                    enterDozeTimer.cancel();
-                    exitDoze(newDeviceIdleState);
+                if (disableWhenCharging) {
+                    // Any pending fresh entry is dropped whether or not a session is owned.
+                    cancelPendingEnterDoze();
+                    // Gated on ownership rather than on Android's physical idle state, for the
+                    // same reason as handleScreenOn: the old "IDLE || screen off" test could both
+                    // miss a real owned session and invent an EXIT row for a natural system Doze
+                    // that EnforceDoze never started.
+                    if (dozeStateStore.isInDoze()) {
+                        log("Charger connected, exiting the owned Doze session");
+                        endOwnedDozeSession("charger connected");
+                    }
                 }
             } else if (action.equals(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)) {
                 if (!Utils.isScreenOn(context)) {
