@@ -64,6 +64,26 @@ public class DozeStateStore {
     private static final String KEY_IN_DOZE = "inDoze";
     private static final String KEY_ENTRY_PENDING = "entryPending";
     private static final String KEY_OWNED_REFORCE_PENDING = "ownedReforcePending";
+    private static final String KEY_SESSION_PHYSICAL_MODE = "sessionPhysicalMode";
+
+    /**
+     * Physical ownership semantics of the ACTIVE session: does ending it owe an explicit unforce?
+     * <p>
+     * Meaningful only while {@link #KEY_IN_DOZE} is true. A stale value left behind with inDoze
+     * false must never create work by itself; the next session commit overwrites it.
+     * <pre>
+     * UNKNOWN  absent, and the meaning of a session persisted by a build that never recorded this
+     * TUNABLE  not currently known to own an explicit privileged force-idle
+     * FORCED   may own one, so final exit must conservatively unforce
+     * </pre>
+     * FORCED is monotonic for the life of the session: a temporary locked-wake unforce does not
+     * downgrade it, because the session can be re-forced at the next screen-off and the exit still
+     * owes the undo. Absent means UNKNOWN, so no migration framework is needed - but the ambiguity
+     * is real and is resolved conservatively at finalization rather than guessed at here.
+     */
+    public static final int SESSION_PHYSICAL_UNKNOWN = 0;
+    public static final int SESSION_PHYSICAL_TUNABLE = 1;
+    public static final int SESSION_PHYSICAL_FORCED = 2;
     private static final String KEY_APPLIED_SUSPENDED_PACKAGES = "appliedSuspendedPackages";
     /**
      * Monotonic id of the Doze session that owns the recorded package set. Only a genuinely fresh
@@ -412,6 +432,7 @@ public class DozeStateStore {
         if (prefs.edit()
                 .putBoolean(KEY_IN_DOZE, true)
                 .putBoolean(KEY_ENTRY_PENDING, false)
+                .putInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_FORCED)
                 .commit()) {
             return true;
         }
@@ -422,6 +443,96 @@ public class DozeStateStore {
         prefs.edit()
                 .putBoolean(KEY_IN_DOZE, false)
                 .putBoolean(KEY_ENTRY_PENDING, true)
+                .putInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_UNKNOWN)
+                .commit();
+        return false;
+    }
+
+    public int getSessionPhysicalMode() {
+        return prefs.getInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_UNKNOWN);
+    }
+
+    /**
+     * Claims an ACTIVE session that entered through the unprivileged tunable path, in one commit so
+     * a session can never exist without its physical semantics recorded beside it.
+     */
+    public synchronized boolean beginTunableDozeSession() {
+        if (prefs.edit()
+                .putBoolean(KEY_IN_DOZE, true)
+                .putInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_TUNABLE)
+                .commit()) {
+            return true;
+        }
+        // Nothing reached disk, but commit() has already updated the in-memory map. Put the local
+        // view back to "no session" so the caller cannot go on to apply restrictions and write an
+        // ENTER row for ownership that no recovery could ever find.
+        prefs.edit()
+                .putBoolean(KEY_IN_DOZE, false)
+                .putInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_UNKNOWN)
+                .commit();
+        return false;
+    }
+
+    /**
+     * Ends an ACTIVE session and records any physical debt that ending it creates, in ONE commit.
+     * <p>
+     * This is the whole point of the change: previously ownership was dropped and the unforce was
+     * dispatched separately, so a Shizuku death - or a process death - between them left the device
+     * at mForceIdle=true with every durable flag clear and nothing able to notice. Committing the
+     * marker and the ownership clear together makes that state unrepresentable.
+     *
+     * @param claimUnforceDebt true when this session may own an explicit force-idle
+     * @return false when nothing reached disk, in which case the session is still owned and the
+     * caller must not end the epoch, write an EXIT row or dispatch physical cleanup
+     */
+    public synchronized boolean endDozeSession(boolean claimUnforceDebt) {
+        boolean previousInDoze = prefs.getBoolean(KEY_IN_DOZE, false);
+        int previousMode = prefs.getInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_UNKNOWN);
+        boolean previousDebt = prefs.getBoolean(KEY_OWNED_REFORCE_PENDING, false);
+
+        // Never written false. A locked-wake release or a reforce cleanup may already own the
+        // shared marker, and a tunable finalization has no business discharging their debt.
+        boolean debt = previousDebt || claimUnforceDebt;
+
+        if (prefs.edit()
+                .putBoolean(KEY_IN_DOZE, false)
+                .putInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_UNKNOWN)
+                .putBoolean(KEY_OWNED_REFORCE_PENDING, debt)
+                .commit()) {
+            return true;
+        }
+        // Restore exactly what was there, not what was expected to be there: an unrelated
+        // transaction's debt must survive a failed finalization as faithfully as ownership does.
+        prefs.edit()
+                .putBoolean(KEY_IN_DOZE, previousInDoze)
+                .putInt(KEY_SESSION_PHYSICAL_MODE, previousMode)
+                .putBoolean(KEY_OWNED_REFORCE_PENDING, previousDebt)
+                .commit();
+        return false;
+    }
+
+    /**
+     * Settles a successful owned reforce and records that the session now owns a physical force, in
+     * ONE commit.
+     * <p>
+     * Clearing the marker and writing the mode separately would leave a window in which a force
+     * that has just landed is owned by nobody: the marker says settled, the mode still says
+     * tunable, and the eventual exit would owe no unforce.
+     *
+     * @return false when nothing reached disk, in which case the transaction stays unresolved and
+     * the conservative resolver owns it
+     */
+    public synchronized boolean settleOwnedReforceAsForced() {
+        int previousMode = prefs.getInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_UNKNOWN);
+        if (prefs.edit()
+                .putBoolean(KEY_OWNED_REFORCE_PENDING, false)
+                .putInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_FORCED)
+                .commit()) {
+            return true;
+        }
+        prefs.edit()
+                .putBoolean(KEY_OWNED_REFORCE_PENDING, true)
+                .putInt(KEY_SESSION_PHYSICAL_MODE, previousMode)
                 .commit();
         return false;
     }

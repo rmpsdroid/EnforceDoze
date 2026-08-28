@@ -1768,27 +1768,38 @@ public class ForceDozeService extends Service {
             DiagnosticLogger.i("DOZE", "lockscreen_release_result exit=" + exitCode
                     + " idleMode=" + physicallyIdle + " lifecycle=" + sessionWorkStateName(state));
 
-            cleared = dozeStateStore.finishOwnedReforceAttempt();
-            if (!cleared) {
-                // The physical command may well have worked, but nothing durable says so. It is not
-                // reported as settled and no force may follow it; the ordinary conservative resolver
-                // owns it from here - unforce, clear, then re-evaluate policy - which is safe
-                // because unforcing an already-unforced device is a no-op.
+            if (exitCode != 0) {
+                // The unforce did not run, so the device may still be forced and the debt is real.
+                // Clearing the shared marker here - which this path used to do unconditionally -
+                // erased the only record of it. Only the in-memory release ownership is released,
+                // so the resolver can pick the debt up immediately.
+                cleared = false;
+                DiagnosticLogger.e("DOZE", "lockscreen_release_failed exit=" + exitCode
+                        + " markerKept=true");
+            } else if (dozeStateStore.finishOwnedReforceAttempt()) {
+                cleared = true;
+                if (state == WORK_ELIGIBLE) {
+                    // The screen went off again while this was outstanding, so the session wants
+                    // deep idle back. Exactly one ordinary re-evaluation, through the existing
+                    // reforce machinery: same epoch, no ENTER, no EXIT, no new generation.
+                    reevaluate = true;
+                }
+            } else {
+                // The physical command worked, but nothing durable says so. It is not reported as
+                // settled and no force may follow it; the ordinary conservative resolver owns it
+                // from here - unforce, clear, then re-evaluate policy - which is safe because
+                // unforcing an already-unforced device is a no-op.
+                cleared = false;
                 DiagnosticLogger.e("DOZE", "lockscreen_release_journal_clear_failed");
-            } else if (state == WORK_ELIGIBLE) {
-                // The screen went off again while this was outstanding, so the session wants deep
-                // idle back. Exactly one ordinary re-evaluation, through the existing reforce
-                // machinery: same epoch, no ENTER, no EXIT, no new generation. This also covers a
-                // failed unforce, where the re-evaluation simply finds the device still idle and
-                // does nothing.
-                reevaluate = true;
             }
+            // A successful temporary release never downgrades sessionPhysicalMode: the session can
+            // be re-forced at the next screen-off and its exit still owes the undo.
             // WORK_LOCKED_WAKE: still behind the keyguard, stay released.
             // WORK_STALE: the session ended; never reforce it.
         }
 
         if (!cleared) {
-            maybeResolveOwnedReforceDebt("locked-wake release journal clear failed");
+            maybeResolveOwnedReforceDebt("locked-wake release unresolved");
             return;
         }
         // The shared marker gates fresh entry, so while this release held it a legitimate new
@@ -2092,8 +2103,8 @@ public class ForceDozeService extends Service {
         // unfinished restore has not yet given back. The intent survives so the completion of that
         // debt gets the chance instead.
         if (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasPendingRestore()) {
-            DiagnosticLogger.i("DOZE", "owned_reforce_settled_continuation=skipped"
-                    + " reason=pending_restore");
+            DiagnosticLogger.i("DOZE", "owned_reforce_settled_continuation=recover_pending_restore");
+            applyRecoveryPolicy("OWNED_REFORCE_RECOVERY", "owned reforce debt settled");
             return;
         }
         if (debtFreshEntryDeferred.compareAndSet(true, false)) {
@@ -2184,7 +2195,12 @@ public class ForceDozeService extends Service {
         log("Unrooted device, putting custom values in device_idle_constants...");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             ArrayList<String> commands = handler.getCommandsList();
-            commands.forEach(this::executeCommand);
+            // Fixed to the ordinary unprivileged shell rather than executeCommand(), which re-reads
+            // the CURRENT execution mode. A tunable session must be created - and later cleaned up -
+            // on the same shell regardless of what the user selects afterwards, and this is also
+            // what makes dispatchOwnedReforce(REFORCE_PLAN_TUNABLE) genuinely honour its captured
+            // plan rather than only claiming to.
+            commands.forEach(this::executeOnNonRootShell);
         } else {
             Settings.Global.putString(getContentResolver(), "device_idle_constants", handler.getTunableString());
         }
@@ -2324,6 +2340,98 @@ public class ForceDozeService extends Service {
                         });
             }
         });
+    }
+
+    /**
+     * How an ACTIVE session must be finalized, decided from its durable semantics rather than from
+     * whatever backend happens to be configured or reachable at exit.
+     */
+    private static final int FINAL_EXIT_TUNABLE = 0;
+    private static final int FINAL_EXIT_FORCED = 1;
+    private static final int FINAL_EXIT_DEFER_AMBIGUOUS = 2;
+
+    private static String finalExitPlanName(int plan) {
+        switch (plan) {
+            case FINAL_EXIT_FORCED:
+                return "forced";
+            case FINAL_EXIT_DEFER_AMBIGUOUS:
+                return "legacy_unknown_deferred";
+            default:
+                return "tunable";
+        }
+    }
+
+    /**
+     * Classifies the physical work a final exit owes. Must be called while holding
+     * {@link #physicalEntryLock}.
+     * <p>
+     * A session recorded as FORCED or TUNABLE answers for itself. UNKNOWN can only come from a
+     * build that never recorded the mode, and is resolved conservatively - never by guessing from
+     * the current execution mode or backend availability, which can both have changed since the
+     * session began.
+     */
+    private int classifyFinalExitPlan() {
+        // Shared physical debt outranks the recorded session mode, and is therefore tested first.
+        // A session recorded TUNABLE can still have a privileged owned-session transaction against
+        // it - a reforce forcing, a cleanup pending or in flight, a locked-wake release, or a
+        // durable marker that survived process recreation. Answering "tunable" there would let the
+        // finalization discharge somebody else's obligation and leave a real force with no owner.
+        // isOwnedReforceUnresolved() already covers both the in-memory phases and the durable
+        // marker. FORCED here only means "preserve/claim the marker and hand it to the resolver" -
+        // the resolver's own phase guards decide whether any command may actually be dispatched, so
+        // this never produces a duplicate unforce.
+        if (isOwnedReforceUnresolved() || lockedWakeReleasePhase != RELEASE_NONE) {
+            return FINAL_EXIT_FORCED;
+        }
+        int mode = dozeStateStore.getSessionPhysicalMode();
+        if (mode == DozeStateStore.SESSION_PHYSICAL_FORCED) {
+            return FINAL_EXIT_FORCED;
+        }
+        if (mode == DozeStateStore.SESSION_PHYSICAL_TUNABLE) {
+            return FINAL_EXIT_TUNABLE;
+        }
+        // Legacy UNKNOWN from an upgraded install.
+        if (hasPrivilegedCleanupBackend()) {
+            // A pointless unforce is harmless and settles immediately, so err toward claiming.
+            return FINAL_EXIT_FORCED;
+        }
+        if (Utils.isShizukuMode(getApplicationContext())) {
+            // Configured privileged backend, temporarily gone. The debt is claimed and the existing
+            // Shizuku false->true recovery retries it.
+            return FINAL_EXIT_FORCED;
+        }
+        if (!pm.isDeviceIdleMode()) {
+            // No privileged backend, not configured for one, and nothing is holding deep idle:
+            // this legacy session can only have been tunable.
+            return FINAL_EXIT_TUNABLE;
+        }
+        // Deep idle with no way to undo it and no proof we caused it - natural idle looks the same.
+        // Claiming here would write a marker nothing on this device could ever clear, permanently
+        // blocking Doze. Ownership is left alone instead and finalization is deferred.
+        return FINAL_EXIT_DEFER_AMBIGUOUS;
+    }
+
+    /**
+     * The tunable cleanup, dispatched exactly as the tunable session was created.
+     * <p>
+     * Deliberately not through executeCommand(): that re-reads the CURRENT execution mode, so a
+     * session that entered tunable and then saw the user select Shizuku would have its cleanup
+     * routed to a privileged backend it never used. The durable mode already decided this is a
+     * tunable exit, so the dispatch must be decided the same way.
+     */
+    private void dispatchTunableSessionCleanup() {
+        DiagnosticLogger.i("DOZE", "session_cleanup mode=tunable");
+        if (!Utils.isDeviceRunningOnN()) {
+            // Pre-N legacy behaviour, unchanged and out of scope for the physical-mode protocol.
+            executeCommand("dumpsys deviceidle step");
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            executeOnNonRootShell("device_config reset trusted_defaults device_idle");
+            executeOnNonRootShell("dumpsys deviceidle step");
+        } else {
+            Settings.Global.putString(getContentResolver(), "device_idle_constants", null);
+        }
     }
 
     public void leaveDoze() {
@@ -2499,7 +2607,16 @@ public class ForceDozeService extends Service {
             // the safer of the two crash windows - an owned session with no packages is what
             // recovery is built for, whereas suspended packages with no session is the case that
             // leaves apps greyed out.
-            dozeStateStore.setInDoze(true);
+            // One commit, so a session can never be owned without its physical semantics recorded
+            // beside it. A failure aborts the entry outright: applying restrictions and writing an
+            // ENTER row for ownership no recovery could find is worse than not entering.
+            if (!dozeStateStore.beginTunableDozeSession()) {
+                log("Could not record the tunable Doze session, not entering Doze");
+                DiagnosticLogger.e("DOZE", "entry_aborted reason=session_claim_journal_failed"
+                        + " mode=tunable_fallback");
+                return;
+            }
+            DiagnosticLogger.i("DOZE", "session_claimed mode=tunable");
             // The fallback owns a logical session exactly as the privileged path does, so its async
             // entry work needs the same cross-session protection even though it has no PREPARING
             // state.
@@ -2513,7 +2630,11 @@ public class ForceDozeService extends Service {
             }
             log("Entering Doze");
             DiagnosticLogger.i("DOZE", "enter_doze_start mode=tunable_fallback");
-            applyDoze();
+            // Exactly the tunable operation, never applyDoze(): that re-reads availability after
+            // the durable mode has already been committed, so a backend appearing between the two
+            // would issue a real force-idle for a session recorded as TUNABLE - whose exit would
+            // then owe no unforce.
+            applyDozeTunableConstants();
             lastScreenOff = Utils.getDateCurrentTimeZone(System.currentTimeMillis());
             recordDozeEnterStats();
             applyEntryMotionAndNetwork(context, fallbackEpoch);
@@ -3409,11 +3530,55 @@ public class ForceDozeService extends Service {
         // its journal and dispatch entirely before this point - in which case the restores below
         // find it and undo it - or observes a finished session and refuses. There is no ordering in
         // which entry work lands after the restore.
+        //
+        // Ownership and the physical debt it creates now move in ONE durable commit. Previously the
+        // flag was cleared and the unforce dispatched separately, so a Shizuku death between them
+        // left the device at mForceIdle=true with every durable flag clear and nothing able to
+        // notice - which is exactly what was reproduced on device.
+        final int plan;
+        final boolean finalized;
         synchronized (physicalEntryLock) {
-            dozeStateStore.setInDoze(false);
-            endActiveSessionEpoch("exit doze");
+            plan = classifyFinalExitPlan();
+            if (plan == FINAL_EXIT_DEFER_AMBIGUOUS) {
+                finalized = false;
+            } else {
+                finalized = dozeStateStore.endDozeSession(plan == FINAL_EXIT_FORCED);
+                if (finalized) {
+                    endActiveSessionEpoch("exit doze");
+                }
+            }
         }
-        leaveDoze();
+
+        if (!finalized) {
+            // The session is still owned, so it has not ended: no epoch end, no EXIT row, no
+            // physical cleanup. The restrictions are still lifted, because those are journal-driven
+            // and the user must not be left restricted by a storage failure. The ordinary lifecycle
+            // retries the finalization at the next event; nothing is polled.
+            if (plan == FINAL_EXIT_DEFER_AMBIGUOUS) {
+                log("Legacy session physical ownership is ambiguous, deferring finalization");
+                DiagnosticLogger.w("DOZE", "session_finalize_deferred reason=legacy_unknown_ambiguous");
+            } else {
+                log("Could not persist the session finalization, session stays owned");
+                DiagnosticLogger.e("DOZE", "session_finalize_journal_failed plan="
+                        + finalExitPlanName(plan));
+            }
+            restoreSuspendedPackages("exit Doze");
+            reEnableBlockedNotifications();
+            restoreDeviceStates(getApplicationContext(), "exit Doze");
+            return;
+        }
+
+        DiagnosticLogger.i("DOZE", "session_finalized plan=" + finalExitPlanName(plan));
+        if (plan == FINAL_EXIT_FORCED) {
+            // The durable marker is already set by the finalization commit, so the resolver owns
+            // the physical undo from here: it never duplicates an unforce that another shared-marker
+            // transaction is already running, defers when no privileged backend is available, is
+            // retried by Shizuku coming back, and clears the marker only after a real success.
+            DiagnosticLogger.i("DOZE", "final_unforce_debt_claimed reason=session_exit");
+            maybeResolveOwnedReforceDebt("session exit");
+        } else {
+            dispatchTunableSessionCleanup();
+        }
 
         log("exitDoze current Doze state: " + newDeviceIdleState);
         DiagnosticLogger.i("DOZE", "exit_doze state=" + newDeviceIdleState);
@@ -3467,6 +3632,20 @@ public class ForceDozeService extends Service {
             return;
         }
 
+        executeOnNonRootShell(command, onResult, printOutput);
+    }
+
+    /**
+     * The ordinary unprivileged shell, addressed directly rather than through executeCommand()'s
+     * live execution-mode lookup. Used by tunable session cleanup, which must run on the same shell
+     * the tunable session was created with even if the configured mode has changed since.
+     */
+    private void executeOnNonRootShell(final String command) {
+        executeOnNonRootShell(command, null, false);
+    }
+
+    private void executeOnNonRootShell(final String command, Shell.OnCommandResultListener2 onResult,
+                                       Boolean printOutput) {
         rootShellExecutor.execute(() -> {
             if (nonRootSession != null) {
                 nonRootSession.addCommand(command, 0, (Shell.OnCommandResultListener2) (commandCode, exitCode, STDOUT, STDERR) -> {
@@ -4885,13 +5064,44 @@ public class ForceDozeService extends Service {
         maintenance = false;
 
         // Durable flag first: the package generation clear and the KEY_ALL_SENSORS/KEY_BIOMETRICS
-        // marker clears all refuse to release ownership while inDoze is true.
+        // marker clears all refuse to release ownership while inDoze is true. Ownership and the
+        // physical debt move in one commit here for the same reason they do in exitDoze().
+        final int plan;
+        final boolean finalized;
         synchronized (physicalEntryLock) {
-            dozeStateStore.setInDoze(false);
-            endActiveSessionEpoch("recovered session finalized");
+            plan = classifyFinalExitPlan();
+            if (plan == FINAL_EXIT_DEFER_AMBIGUOUS) {
+                finalized = false;
+            } else {
+                finalized = dozeStateStore.endDozeSession(plan == FINAL_EXIT_FORCED);
+                if (finalized) {
+                    endActiveSessionEpoch("recovered session finalized");
+                }
+            }
         }
         lastKnownState = "ACTIVE";
-        leaveDoze();
+
+        if (!finalized) {
+            if (plan == FINAL_EXIT_DEFER_AMBIGUOUS) {
+                log("Legacy recovered session physical ownership is ambiguous, deferring");
+                DiagnosticLogger.w("RECOVERY", "session_finalize_deferred reason=legacy_unknown_ambiguous");
+            } else {
+                DiagnosticLogger.e("RECOVERY", "session_finalize_journal_failed plan="
+                        + finalExitPlanName(plan));
+            }
+            restoreSuspendedPackages(reason);
+            reEnableBlockedNotifications();
+            restoreDeviceStates(getApplicationContext(), reason);
+            return;
+        }
+
+        DiagnosticLogger.i("RECOVERY", "session_finalized plan=" + finalExitPlanName(plan));
+        if (plan == FINAL_EXIT_FORCED) {
+            DiagnosticLogger.i("DOZE", "final_unforce_debt_claimed reason=recovered_session_exit");
+            maybeResolveOwnedReforceDebt("recovered session exit");
+        } else {
+            dispatchTunableSessionCleanup();
+        }
 
         if (!disableStats) {
             dozeUsageData.add(Long.toString(System.currentTimeMillis()).concat(",")
@@ -5080,17 +5290,44 @@ public class ForceDozeService extends Service {
                 resolveDebt = true;
                 DiagnosticLogger.i("DOZE", "owned_reforce_stale_force detected=true lifecycle="
                         + sessionWorkStateName(state));
+            } else if (state == WORK_STALE) {
+                // The force did not land, but the session has ended while this reforce was
+                // outstanding, so the shared marker may now carry final-exit debt as well as this
+                // transaction. A stale callback cannot tell those obligations apart, so it must
+                // never clear the marker - not even here, where this particular force demonstrably
+                // failed, because the marker it would clear may not be describing this force at
+                // all. Handing it to the resolver is conservative in the only direction that is
+                // safe: an unnecessary unforce is harmless, discharging a final-exit obligation is
+                // not, and fresh entry stays blocked until it settles.
+                ownedReforcePhase = REFORCE_CLEANUP_PENDING;
+                resolveDebt = true;
+                DiagnosticLogger.i("DOZE", "owned_reforce_stale_session_debt_retained"
+                        + " idleMode=" + physicallyIdle);
             } else {
-                // Either the force is wanted where it landed, or nothing was left forced. Both
-                // settle by clearing the durable marker; neither is a session boundary, so no
-                // ENTER, no EXIT and no generation.
+                // Either the force is wanted where it landed, or nothing was left forced and the
+                // session still exists, so this callback knows the marker is its own. Both settle
+                // by clearing it; neither is a session boundary, so no ENTER, no EXIT and no
+                // generation.
                 if (state == WORK_ELIGIBLE && !physicallyIdle) {
                     DiagnosticLogger.i("DOZE", "owned_session_reforce_failed stoppedAt="
                             + describeForceIdleFailure(stdout, stderr));
                 }
-                if (dozeStateStore.finishOwnedReforceAttempt()) {
+                // A reforce that actually landed on a still-eligible session means this session
+                // now owns an explicit force, whatever it owned before - a session can begin
+                // TUNABLE or legacy UNKNOWN and be promoted here. Settling the marker and recording
+                // that ownership must be ONE commit: doing them separately would leave a window in
+                // which the force has landed, the marker says settled and the mode still says the
+                // exit owes nothing, orphaning it.
+                boolean promote = physicallyIdle && state == WORK_ELIGIBLE;
+                boolean settledDurably = promote
+                        ? dozeStateStore.settleOwnedReforceAsForced()
+                        : dozeStateStore.finishOwnedReforceAttempt();
+                if (settledDurably) {
                     ownedReforcePhase = REFORCE_NONE;
                     settled = true;
+                    if (promote) {
+                        DiagnosticLogger.i("DOZE", "session_mode_promoted=forced reason=owned_reforce_landed");
+                    }
                 } else {
                     // The marker could not be cleared, so as far as anything durable is concerned
                     // the transaction is still unresolved. It is not forgotten: it drops to the
@@ -5098,7 +5335,9 @@ public class ForceDozeService extends Service {
                     // unresolved debt.
                     ownedReforcePhase = REFORCE_NONE;
                     resolveDebt = true;
-                    DiagnosticLogger.e("DOZE", "owned_reforce_journal_clear_failed stage=result");
+                    DiagnosticLogger.e("DOZE", promote
+                            ? "session_mode_promotion_journal_failed"
+                            : "owned_reforce_journal_clear_failed stage=result");
                 }
             }
         }
@@ -5724,19 +5963,16 @@ public class ForceDozeService extends Service {
         // whether Android has already moved its own device-idle state to ACTIVE.
         boolean ownedSession = dozeStateStore.isInDoze();
 
-        dozeStateStore.setInDoze(false);
+        // Deliberately NOT cleared here. Clearing ownership before exitDoze() could record the
+        // physical debt left a crash window in which the only durable record of the session was
+        // gone and no unforce was owed - the device stayed forced with every flag clear. exitDoze()
+        // now owns the whole durable transition in one commit.
         // A maintenance window cannot outlive the screen turning on
         maintenance = false;
         // Always drop a delayed enterDoze: it used to be cancelled only when the device was found
         // ACTIVE, so turning the screen on during the delay could still let Doze fire afterwards.
         cancelPendingEnterDoze();
 
-        // Packages were already dispatched straight from ACTION_SCREEN_ON; this call is the
-        // recovery path for the routes that reach handleScreenOn without one (USER_PRESENT with
-        // waitForUnlock, charger connect) and no-ops when the record is already clear.
-        restoreSuspendedPackages("handleScreenOn");
-        reEnableBlockedNotifications();
-        restoreDeviceStates(context, "screen on");
 
         // Physical state is read for the log only. It must not decide whether a logical
         // EnforceDoze session existed: Android frequently leaves deep idle before
@@ -5747,6 +5983,9 @@ public class ForceDozeService extends Service {
         // which the statistics parser skips, so whole sessions vanished from the UI.
         String newDeviceIdleState = getDeviceIdleState();
         if (ownedSession) {
+            // exitDoze() finalizes ownership atomically and then runs the same final restores this
+            // method used to dispatch beforehand. ACTION_SCREEN_ON has already dispatched the
+            // lifecycle restores for the routes that come through it, so nothing is delayed.
             log("Exiting Doze (owned session), physical state: " + newDeviceIdleState);
             exitDoze(newDeviceIdleState);
         } else {
@@ -5754,9 +5993,13 @@ public class ForceDozeService extends Service {
             // would have written an EXIT row here whenever Android happened to report IDLE.
             log("No EnforceDoze session was owned on wake, physical state: " + newDeviceIdleState);
             DiagnosticLogger.i("DOZE", "no_owned_session_on_wake physicalState=" + newDeviceIdleState);
-            // Belt and braces for markers left by an earlier failed restore.
+            // Belt and braces for markers left by an earlier failed or partial reversion. Packages
+            // are not the only persistent debt: Wi-Fi, mobile data, Bluetooth, location, battery
+            // saver and the sensor toggles are journalled too, and an unowned wake is exactly when
+            // a previously failed restore should get another chance.
             restoreSuspendedPackages("handleScreenOn/unowned");
             reEnableBlockedNotifications();
+            restoreDeviceStates(context, "screen on");
         }
     }
 
