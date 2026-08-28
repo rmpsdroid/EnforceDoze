@@ -246,6 +246,103 @@ public class ForceDozeService extends Service {
      * for work that never ran.
      */
     private static final int SUPERSEDED_EXIT_CODE = -3;
+
+    /** The physical write behind one device-state toggle, with no ordering logic of its own. */
+    private interface RawStateToggle {
+        void apply(boolean enabled, Shell.OnCommandResultListener2 done);
+    }
+
+    /**
+     * Latest-wins serializer for a single physical device-state toggle.
+     * <p>
+     * The generic radios had the same defect the sensor, biometric, motion and notification toggles
+     * were each given a slot for: entry writes one target and the wake restore writes the opposite,
+     * every command runs on its own thread and its own remote process, and completion order is not
+     * guaranteed. stateRestoreInFlight only stops a duplicate restore; it cannot order an entry
+     * against a restore, so the losing order leaves a radio in its Doze state after the session has
+     * ended.
+     * <p>
+     * Same contract as the existing slots: an in-flight command is never completed artificially and
+     * always runs to its real callback, which is what then releases the newest pending request; a
+     * request still queued when a newer one replaces it is completed exactly once with
+     * {@link #SUPERSEDED_EXIT_CODE}, which is non-zero and therefore leaves any durable marker it
+     * was carrying uncleared. The lock guards the slot bookkeeping only and is never held while a
+     * command runs.
+     * <p>
+     * One slot per toggle, deliberately: unrelated radios should still move concurrently, so there
+     * is no shared device-state queue and no global Shizuku serialization.
+     */
+    private static final class StateOpSlot {
+        private final String key;
+        private final RawStateToggle raw;
+        private final Object lock = new Object();
+        private boolean inFlight = false;
+        private Boolean pendingTarget = null;
+        private Shell.OnCommandResultListener2 pendingCallback = null;
+
+        StateOpSlot(String key, RawStateToggle raw) {
+            this.key = key;
+            this.raw = raw;
+        }
+
+        void request(boolean enabled, Shell.OnCommandResultListener2 done) {
+            Shell.OnCommandResultListener2 superseded;
+            boolean dispatchNow;
+            synchronized (lock) {
+                superseded = pendingCallback;
+                pendingTarget = enabled;
+                pendingCallback = done;
+                dispatchNow = !inFlight;
+                if (dispatchNow) {
+                    inFlight = true;
+                }
+            }
+            if (superseded != null) {
+                // Completed outside the lock, exactly once, and only ever for a request that never
+                // reached the shell.
+                superseded.onCommandResult(0, SUPERSEDED_EXIT_CODE, new ArrayList<>(), new ArrayList<>());
+            }
+            if (dispatchNow) {
+                dispatch();
+            }
+        }
+
+        private void dispatch() {
+            final boolean target;
+            final Shell.OnCommandResultListener2 done;
+            synchronized (lock) {
+                if (pendingTarget == null) {
+                    inFlight = false;
+                    return;
+                }
+                target = pendingTarget;
+                done = pendingCallback;
+                pendingTarget = null;
+                pendingCallback = null;
+                inFlight = true;
+            }
+
+            DiagnosticLogger.i("STATE_OP", key + " target=" + (target ? "enable" : "disable")
+                    + " start");
+            raw.apply(target, (commandCode, exitCode, stdout, stderr) -> {
+                DiagnosticLogger.i("STATE_OP", key + " target=" + (target ? "enable" : "disable")
+                        + " finished exit=" + exitCode);
+                if (done != null) {
+                    done.onCommandResult(commandCode, exitCode, stdout, stderr);
+                }
+                // Only the real callback releases the next request, so ordering follows completion
+                // rather than dispatch - on either backend, and across an execution-mode change.
+                dispatch();
+            });
+        }
+    }
+
+    private final StateOpSlot mobileDataOp = new StateOpSlot("mobileData", this::applyMobileDataStateRaw);
+    private final StateOpSlot wifiOp = new StateOpSlot("wifi", this::applyWiFiStateRaw);
+    private final StateOpSlot batterySaverOp = new StateOpSlot("batterySaver", this::applyBatterySaverStateRaw);
+    private final StateOpSlot airplaneOp = new StateOpSlot("airplane", this::applyAirplaneStateRaw);
+    private final StateOpSlot bluetoothOp = new StateOpSlot("bluetooth", this::applyBluetoothStateRaw);
+    private final StateOpSlot gpsOp = new StateOpSlot("gps", this::applyGPSStateRaw);
     /** Reported for a package operation whose Doze generation has already been replaced. */
     private static final int STALE_GENERATION_EXIT_CODE = -4;
 
@@ -4245,6 +4342,10 @@ public class ForceDozeService extends Service {
     }
 
     public void setMobileDataState(boolean enabled, Shell.OnCommandResultListener2 done) {
+        mobileDataOp.request(enabled, done);
+    }
+
+    private void applyMobileDataStateRaw(boolean enabled, Shell.OnCommandResultListener2 done) {
         executeCommandWithRoot("svc data " + (enabled ? "enable" : "disable"), done, false);
     }
 
@@ -4259,6 +4360,10 @@ public class ForceDozeService extends Service {
      * thread, and which reported on the wrong radio anyway.
      */
     public void setWiFiState(boolean enabled, Shell.OnCommandResultListener2 done) {
+        wifiOp.request(enabled, done);
+    }
+
+    private void applyWiFiStateRaw(boolean enabled, Shell.OnCommandResultListener2 done) {
         if (isSuAvailable || isShizukuAvailable) {
             executeCommandWithRoot("svc wifi " + (enabled ? "enable" : "disable"), done, false);
             return;
@@ -4324,6 +4429,10 @@ public class ForceDozeService extends Service {
     }
 
     public void setBatterSaverState(Context context, boolean enabled, Shell.OnCommandResultListener2 done) {
+        batterySaverOp.request(enabled, done);
+    }
+
+    private void applyBatterySaverStateRaw(boolean enabled, Shell.OnCommandResultListener2 done) {
         if (!isSuAvailable && !isShizukuAvailable) {
             notifyCommandFinished(done, -1);
             return;
@@ -4342,6 +4451,10 @@ public class ForceDozeService extends Service {
      * the value it is meant to announce.
      */
     public void setAirplaneState(Context context, boolean enabled, Shell.OnCommandResultListener2 done) {
+        airplaneOp.request(enabled, done);
+    }
+
+    private void applyAirplaneStateRaw(boolean enabled, Shell.OnCommandResultListener2 done) {
         if (!isSuAvailable && !isShizukuAvailable) {
             notifyCommandFinished(done, -1);
             return;
@@ -4357,6 +4470,10 @@ public class ForceDozeService extends Service {
     }
 
     public void setBluetoothState(Context context, boolean enabled, Shell.OnCommandResultListener2 done) {
+        bluetoothOp.request(enabled, done);
+    }
+
+    private void applyBluetoothStateRaw(boolean enabled, Shell.OnCommandResultListener2 done) {
         if (!isSuAvailable && !isShizukuAvailable) {
             notifyCommandFinished(done, -1);
             return;
@@ -4369,6 +4486,10 @@ public class ForceDozeService extends Service {
     }
 
     public void setGPSState(Context context, boolean enabled, Shell.OnCommandResultListener2 done) {
+        gpsOp.request(enabled, done);
+    }
+
+    private void applyGPSStateRaw(boolean enabled, Shell.OnCommandResultListener2 done) {
         if (!isSuAvailable && !isShizukuAvailable) {
             notifyCommandFinished(done, -1);
             return;
