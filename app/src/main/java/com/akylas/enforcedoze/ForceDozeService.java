@@ -171,6 +171,29 @@ public class ForceDozeService extends Service {
      * "apply the newest instead".
      */
     /**
+     * Notification toggles get the same single-slot treatment as the other physical toggles, and
+     * for the same concrete reason. The whole set is already one joined shell invocation, but
+     * ShizukuHandler runs every command on its own thread and its own remote process, so the
+     * DISABLE issued at entry and the ENABLE issued on the wake can be in flight together and
+     * complete in either order. If the older DISABLE lands last, notifications stay off after the
+     * Doze session has ended and nothing is left to notice.
+     * <p>
+     * One slot for the one toggle, latest request wins, and an in-flight command is never
+     * completed artificially - it always runs to its real callback, which is what then releases the
+     * newest pending request. Deliberately narrow: unrelated Shizuku commands still run
+     * concurrently, exactly as upstream intends.
+     * <p>
+     * The pending request holds the built command, which is the package-set snapshot and the target
+     * state together, so a superseded request cannot later be re-resolved against a different set
+     * of installed packages or uids.
+     */
+    private final Object notificationOpLock = new Object();
+    private boolean notificationOpInFlight = false;
+    private String pendingNotificationCommand = null;
+    private boolean pendingNotificationEnabled = false;
+    private int pendingNotificationCount = 0;
+
+    /**
      * Motion sensors get the same treatment as the other physical toggles, and for the same
      * concrete reason. Ordering the Java dispatches is not enough: every command runs on its own
      * thread and its own remote process, so "restrict" dispatched at entry and "enable" dispatched
@@ -3717,7 +3740,62 @@ public class ForceDozeService extends Service {
             return;
         }
         log((enabled ? "Turning on " : "Turning off ") + "notifications for " + commands.size() + " package(s)");
-        executeCommandWithRoot(TextUtils.join("; ", commands), null, false);
+        requestNotificationState(TextUtils.join("; ", commands), enabled, commands.size());
+    }
+
+    /**
+     * Queues a notification toggle. Returns immediately; the command itself is dispatched by
+     * {@link #dispatchPendingNotificationOp()}, either now or after whatever is already running has
+     * genuinely finished.
+     *
+     * @param command the fully built shell invocation for this exact package set and target state
+     * @param enabled the target, for diagnostics only
+     * @param count   how many packages the command covers, for diagnostics only
+     */
+    private void requestNotificationState(String command, boolean enabled, int count) {
+        boolean dispatchNow;
+        synchronized (notificationOpLock) {
+            // Replacing a queued request is safe: it never ran, so nothing physical is undone by
+            // dropping it. An in-flight command is untouched - it keeps its own callback and is
+            // never declared finished early.
+            pendingNotificationCommand = command;
+            pendingNotificationEnabled = enabled;
+            pendingNotificationCount = count;
+            dispatchNow = !notificationOpInFlight;
+            if (dispatchNow) {
+                notificationOpInFlight = true;
+            }
+        }
+        if (dispatchNow) {
+            dispatchPendingNotificationOp();
+        }
+    }
+
+    private void dispatchPendingNotificationOp() {
+        final String command;
+        final boolean enabled;
+        final int count;
+        synchronized (notificationOpLock) {
+            if (pendingNotificationCommand == null) {
+                notificationOpInFlight = false;
+                return;
+            }
+            command = pendingNotificationCommand;
+            enabled = pendingNotificationEnabled;
+            count = pendingNotificationCount;
+            pendingNotificationCommand = null;
+            notificationOpInFlight = true;
+        }
+
+        // The lock is released before the command is issued; only the slot bookkeeping is guarded.
+        DiagnosticLogger.i("NOTIF", "toggle_start enabled=" + enabled + " count=" + count);
+        executeCommandWithRoot(command, (commandCode, exitCode, stdout, stderr) -> {
+            DiagnosticLogger.i("NOTIF", "toggle_finished enabled=" + enabled + " count=" + count
+                    + " exit=" + exitCode);
+            // Only the real callback releases the next request, so ordering follows completion
+            // rather than dispatch. Works identically on the root backend.
+            dispatchPendingNotificationOp();
+        }, false);
     }
 
     public void setPackageState(Context context, String packageName, boolean enabled) {
