@@ -367,6 +367,13 @@ public class DozeStateStore {
      * here, and the only demonstrated remedy is an explicit unforce.
      * <p>
      * Absent means false, so no migration is needed.
+     * <p>
+     * The name says reforce because that was its first user, but the bit means the more general
+     * thing: an owned-session physical transaction of ours is unresolved. The temporary release
+     * performed when a locked lock screen becomes visible sets it too, for the same reason - it also
+     * changes physical state that an interrupted process would otherwise leave unaccounted. Both
+     * settle it through {@link #finishOwnedReforceAttempt()}, and the recovery rule is the same for
+     * either: unforce conservatively, clear, then let ordinary policy decide.
      */
     public boolean beginOwnedReforceAttempt() {
         if (prefs.edit().putBoolean(KEY_OWNED_REFORCE_PENDING, true).commit()) {

@@ -297,6 +297,29 @@ public class ForceDozeService extends Service {
     private long ownedReforceEpoch = EPOCH_NONE;
 
     /**
+     * The temporary physical release performed when an owned session's lock screen becomes visible.
+     * <p>
+     * A locked wake with waitForUnlock keeps the logical session, its epoch and its package
+     * generation, but the device must not stay in forced deep idle while the user is looking at it.
+     * Every existing unforce was welded to something else - session exit, the PREPARING debt, or the
+     * reforce debt - so this is the one physical operation that leaves ownership completely alone.
+     * <p>
+     * It is serialized against the reforce for the obvious reason: commands run on independent
+     * threads and processes, so an unforce dispatched at SCREEN_ON and a force dispatched at the
+     * following SCREEN_OFF could complete in either order. The losing order leaves the phone awake
+     * and unrestricted with the screen off. Only one of the two may ever be outstanding, and while
+     * this one is, nothing samples pm.isDeviceIdleMode() to decide anything - that sample is exactly
+     * what is untrustworthy until the release settles.
+     */
+    private static final int RELEASE_NONE = 0;
+    private static final int RELEASE_IN_FLIGHT = 1;
+
+    /** Guarded by {@link #physicalEntryLock}. */
+    private int lockedWakeReleasePhase = RELEASE_NONE;
+    /** Session identity the outstanding release belongs to. Guarded by {@link #physicalEntryLock}. */
+    private long lockedWakeReleaseEpoch = EPOCH_NONE;
+
+    /**
      * Whether the attempt currently outstanding is allowed to trigger the single post-cleanup
      * policy re-evaluation. False for an attempt that was itself started by one, so a re-entry can
      * never chain into another. Guarded by {@link #physicalEntryLock}.
@@ -1459,6 +1482,171 @@ public class ForceDozeService extends Service {
         }
     }
 
+    /**
+     * Physically leaves forced deep idle while an owned session's lock screen is showing, without
+     * ending anything.
+     * <p>
+     * This is the piece that was simply missing: the fork already restores packages, sensors and
+     * biometrics temporarily for a locked wake, but nothing ever released the force, so the device
+     * stayed in deep idle behind a visible lock screen - and, because the force never dropped, the
+     * following screen-off found pm.isDeviceIdleMode() still true and never performed a genuine
+     * owned-session reforce either.
+     * <p>
+     * Touches no ownership whatsoever: not inDoze, not the epoch, not the package generation, not
+     * any journal marker other than the shared physical-transaction bit, and it writes neither ENTER
+     * nor EXIT.
+     */
+    private void releasePhysicalDozeForLockedWake(String reason, long expectedEpoch) {
+        final int plan;
+        final long epoch;
+        synchronized (physicalEntryLock) {
+            if (serviceStopping) {
+                return;
+            }
+            // EPOCH_NONE means the caller has no prior identity to honour - a live ACTION_SCREEN_ON
+            // is simply an event, and the barrier is where it first decides which session it is
+            // looking at. A caller that already adopted or claimed an epoch passes it instead, so a
+            // delayed continuation cannot release a session that replaced the one it was started
+            // for.
+            if (expectedEpoch == EPOCH_NONE) {
+                epoch = activeSessionEpoch.get();
+            } else {
+                epoch = expectedEpoch;
+                if (activeSessionEpoch.get() != expectedEpoch) {
+                    DiagnosticLogger.i("DOZE", "lockscreen_release_skipped reason=stale_session"
+                            + " expectedEpoch=" + expectedEpoch);
+                    return;
+                }
+            }
+            if (epoch == EPOCH_NONE || !isActiveSessionEpoch(epoch)) {
+                return;
+            }
+            Context context = getApplicationContext();
+            // Only for a keyguard this session is expected to outlive. A full wake is a session
+            // exit and is owned by handleScreenOn.
+            if (!Utils.isScreenOn(context) || !waitForUnlock || !Utils.isDeviceLocked(context)) {
+                return;
+            }
+            if (isCallActiveNow()) {
+                return;
+            }
+            if (dozeStateStore.isEntryPending() || physicalEntryPhase != PHASE_NONE) {
+                DiagnosticLogger.i("DOZE", "lockscreen_release_skipped reason=fresh_entry_active");
+                return;
+            }
+            if (isOwnedReforceUnresolved()) {
+                // The reforce state machine already owns this: its callback classifies a locked
+                // wake as WORK_LOCKED_WAKE and issues the corrective unforce itself. A second
+                // command here would be the duplicate that protocol exists to avoid.
+                DiagnosticLogger.i("DOZE", "lockscreen_release_skipped reason=owned_reforce_unresolved");
+                return;
+            }
+            if (lockedWakeReleasePhase != RELEASE_NONE) {
+                return;
+            }
+            if (!pm.isDeviceIdleMode()) {
+                // Nothing to release. Trustworthy: no physical command of ours is outstanding.
+                return;
+            }
+
+            plan = classifyReforcePlan(context);
+            if (plan == REFORCE_PLAN_SHIZUKU_UNAVAILABLE) {
+                // Selected Shizuku is absent. Nothing is dispatched, no marker is written, and no
+                // other backend is borrowed - the session simply stays forced behind the lock
+                // screen, which is what it did before this change.
+                log("Shizuku mode is selected but Shizuku is not available, not releasing deep idle");
+                DiagnosticLogger.i("DOZE", "lockscreen_release_deferred reason=shizuku_unavailable");
+                return;
+            }
+            if (!isPrivilegedReforcePlan(plan)) {
+                // The tunable path performs no physical force-idle transaction at all, so there is
+                // genuinely nothing to release there.
+                //
+                // The pre-N legacy path is different and the distinction matters: it does issue a
+                // real "dumpsys deviceidle force-idle". It is excluded here only because it has
+                // never had the callback-backed transaction protocol the durable marker depends on,
+                // so a release could not be settled. That is an existing pre-N compatibility
+                // limitation carried forward unchanged, not a claim that nothing is forced.
+                DiagnosticLogger.i("DOZE", "lockscreen_release_skipped reason=no_tracked_transaction"
+                        + " plan=" + reforcePlanName(plan));
+                return;
+            }
+            // Durable before dispatch, exactly as a reforce is. A release that succeeds changes
+            // physical state, so an interrupted one must leave a record; the shared marker means
+            // "an owned-session physical transaction is unresolved", and its existing conservative
+            // recovery - unforce, clear, then let ordinary policy decide - is already the right
+            // answer for an interrupted release.
+            if (!dozeStateStore.beginOwnedReforceAttempt()) {
+                log("Could not record the locked-wake release, not releasing deep idle");
+                DiagnosticLogger.e("DOZE", "lockscreen_release_aborted reason=journal_write_failed");
+                return;
+            }
+            lockedWakeReleaseEpoch = epoch;
+            lockedWakeReleasePhase = RELEASE_IN_FLIGHT;
+        }
+
+        log("Temporarily leaving forced deep idle for the lock screen (" + reason + ")");
+        DiagnosticLogger.i("DOZE", "lockscreen_release_start epoch=" + epoch
+                + " plan=" + reforcePlanName(plan));
+        dispatchOnCapturedPlan(plan, "dumpsys deviceidle unforce", "lockscreen_unforce", false,
+                (commandCode, exitCode, stdout, stderr) -> onLockedWakeReleaseResult(epoch, exitCode));
+    }
+
+    /**
+     * Settles a locked-wake release and decides what the session needs next.
+     * <p>
+     * The exit code says whether the command ran; it is never used to decide lifecycle. That comes
+     * from the existing classifier, against the epoch this release was started for.
+     */
+    private void onLockedWakeReleaseResult(long capturedEpoch, int exitCode) {
+        boolean physicallyIdle = verifyPhysicalDozeEntered();
+
+        boolean cleared;
+        boolean reevaluate = false;
+        int state;
+        synchronized (physicalEntryLock) {
+            state = classifySessionEntryWork(capturedEpoch);
+            lockedWakeReleasePhase = RELEASE_NONE;
+            lockedWakeReleaseEpoch = EPOCH_NONE;
+
+            DiagnosticLogger.i("DOZE", "lockscreen_release_result exit=" + exitCode
+                    + " idleMode=" + physicallyIdle + " lifecycle=" + sessionWorkStateName(state));
+
+            cleared = dozeStateStore.finishOwnedReforceAttempt();
+            if (!cleared) {
+                // The physical command may well have worked, but nothing durable says so. It is not
+                // reported as settled and no force may follow it; the ordinary conservative resolver
+                // owns it from here - unforce, clear, then re-evaluate policy - which is safe
+                // because unforcing an already-unforced device is a no-op.
+                DiagnosticLogger.e("DOZE", "lockscreen_release_journal_clear_failed");
+            } else if (state == WORK_ELIGIBLE) {
+                // The screen went off again while this was outstanding, so the session wants deep
+                // idle back. Exactly one ordinary re-evaluation, through the existing reforce
+                // machinery: same epoch, no ENTER, no EXIT, no new generation. This also covers a
+                // failed unforce, where the re-evaluation simply finds the device still idle and
+                // does nothing.
+                reevaluate = true;
+            }
+            // WORK_LOCKED_WAKE: still behind the keyguard, stay released.
+            // WORK_STALE: the session ended; never reforce it.
+        }
+
+        if (!cleared) {
+            maybeResolveOwnedReforceDebt("locked-wake release journal clear failed");
+            return;
+        }
+        // The shared marker gates fresh entry, so while this release held it a legitimate new
+        // session could have been refused and its intent parked. Clearing the marker here is the
+        // moment that becomes retryable, and the existing settlement helper is what knows how to do
+        // it: it no-ops while any session is owned, and with none it consults the restore debt
+        // before consuming the deferred intent. Skipping it would let that entry sit deferred with
+        // nothing left to release it.
+        onOwnedReforceSettled(false);
+        if (reevaluate) {
+            ensureOwnedDozePhysicalState("locked-wake release settled", capturedEpoch);
+        }
+    }
+
     private static String sessionWorkStateName(int state) {
         switch (state) {
             case WORK_ELIGIBLE:
@@ -1579,6 +1767,13 @@ public class ForceDozeService extends Service {
                 return;
             }
             if (ownedReforcePhase == REFORCE_CLEANUP_IN_FLIGHT) {
+                return;
+            }
+            if (lockedWakeReleasePhase == RELEASE_IN_FLIGHT) {
+                // The marker is shared, and right now it belongs to a locked-wake release whose own
+                // callback will settle it. Dispatching a cleanup unforce here would put a second
+                // command alongside that one and could clear the marker underneath it.
+                DiagnosticLogger.i("DOZE", "owned_reforce_cleanup_skipped reason=release_in_flight");
                 return;
             }
             // REFORCE_CLEANUP_PENDING, or REFORCE_NONE with the durable marker still set.
@@ -1909,44 +2104,11 @@ public class ForceDozeService extends Service {
      * away between classification and dispatch.
      */
     private void dispatchOwnedReforce(int plan, Shell.OnCommandResultListener2 onResult) {
-        final String command = "dumpsys deviceidle force-idle deep";
         switch (plan) {
             case REFORCE_PLAN_SHIZUKU:
-                shizukuHandler.executeCommand(command,
-                        (commandCode, exitCode, stdout, stderr) -> {
-                            DiagnosticLogger.i("DOZE", "force_idle_deep exit=" + exitCode);
-                            printShellOutput(stdout);
-                            printShellOutput(stderr);
-                            onResult.onCommandResult(commandCode, exitCode, stdout, stderr);
-                        }, true);
-                return;
             case REFORCE_PLAN_ROOT:
-                rootShellExecutor.execute(() -> {
-                    if (rootSession != null) {
-                        rootSession.addCommand(command, 0, (Shell.OnCommandResultListener2)
-                                (commandCode, exitCode, STDOUT, STDERR) -> {
-                                    DiagnosticLogger.i("DOZE", "force_idle_deep exit=" + exitCode);
-                                    onResult.onCommandResult(commandCode, exitCode, STDOUT, STDERR);
-                                });
-                    } else {
-                        rootSession = new Shell.Builder()
-                                .useSU()
-                                .setWatchdogTimeout(5)
-                                .setMinimalLogging(true)
-                                .open((success, reason) -> {
-                                    if (reason != Shell.OnShellOpenResultListener.SHELL_RUNNING) {
-                                        log("Error opening root shell for owned reforce: " + reason);
-                                        onResult.onCommandResult(0, -1, new ArrayList<>(), new ArrayList<>());
-                                    } else {
-                                        rootSession.addCommand(command, 0, (Shell.OnCommandResultListener2)
-                                                (commandCode, exitCode, STDOUT, STDERR) -> {
-                                                    DiagnosticLogger.i("DOZE", "force_idle_deep exit=" + exitCode);
-                                                    onResult.onCommandResult(commandCode, exitCode, STDOUT, STDERR);
-                                                });
-                                    }
-                                });
-                    }
-                });
+                dispatchOnCapturedPlan(plan, "dumpsys deviceidle force-idle deep",
+                        "force_idle_deep", true, onResult);
                 return;
             case REFORCE_PLAN_LEGACY:
                 // Pre-N behaviour, preserved exactly as applyDoze() has always performed it. No
@@ -1956,6 +2118,56 @@ public class ForceDozeService extends Service {
             default:
                 applyDozeTunableConstants();
         }
+    }
+
+    /**
+     * Runs one command on the privileged backend that was captured under the barrier, rather than
+     * on whichever backend the configured mode names at dispatch time. Shared by the owned-session
+     * reforce and by the locked-wake release so both get the same guarantee: a callback arrives
+     * whether the command runs, the binder is gone, or the root shell cannot be opened.
+     *
+     * @param plan must be {@link #REFORCE_PLAN_SHIZUKU} or {@link #REFORCE_PLAN_ROOT}
+     */
+    private void dispatchOnCapturedPlan(int plan, String command, String tag, boolean printOutput,
+                                        Shell.OnCommandResultListener2 onResult) {
+        if (plan == REFORCE_PLAN_SHIZUKU) {
+            shizukuHandler.executeCommand(command,
+                    (commandCode, exitCode, stdout, stderr) -> {
+                        DiagnosticLogger.i("DOZE", tag + " exit=" + exitCode);
+                        if (printOutput) {
+                            printShellOutput(stdout);
+                            printShellOutput(stderr);
+                        }
+                        onResult.onCommandResult(commandCode, exitCode, stdout, stderr);
+                    }, printOutput);
+            return;
+        }
+        rootShellExecutor.execute(() -> {
+            if (rootSession != null) {
+                rootSession.addCommand(command, 0, (Shell.OnCommandResultListener2)
+                        (commandCode, exitCode, STDOUT, STDERR) -> {
+                            DiagnosticLogger.i("DOZE", tag + " exit=" + exitCode);
+                            onResult.onCommandResult(commandCode, exitCode, STDOUT, STDERR);
+                        });
+            } else {
+                rootSession = new Shell.Builder()
+                        .useSU()
+                        .setWatchdogTimeout(5)
+                        .setMinimalLogging(true)
+                        .open((success, reason) -> {
+                            if (reason != Shell.OnShellOpenResultListener.SHELL_RUNNING) {
+                                log("Error opening root shell for " + tag + ": " + reason);
+                                onResult.onCommandResult(0, -1, new ArrayList<>(), new ArrayList<>());
+                            } else {
+                                rootSession.addCommand(command, 0, (Shell.OnCommandResultListener2)
+                                        (commandCode, exitCode, STDOUT, STDERR) -> {
+                                            DiagnosticLogger.i("DOZE", tag + " exit=" + exitCode);
+                                            onResult.onCommandResult(commandCode, exitCode, STDOUT, STDERR);
+                                        });
+                            }
+                        });
+            }
+        });
     }
 
     public void leaveDoze() {
@@ -4206,7 +4418,19 @@ public class ForceDozeService extends Service {
                         + " outstandingEpoch=" + ownedReforceEpoch);
                 return;
             }
-            // Cheap in-process read; no dumpsys and nothing to wait on.
+            if (lockedWakeReleasePhase == RELEASE_IN_FLIGHT) {
+                // Deliberately before the idle sample, not after it. A release is outstanding, so
+                // pm.isDeviceIdleMode() may still report the state the release is in the middle of
+                // undoing; acting on it would either skip a reforce that is genuinely needed or
+                // dispatch a force that could complete before the older unforce. The release
+                // callback re-evaluates this exact epoch once it settles.
+                log("A locked-wake release is still in flight, deferring the reforce (" + reason + ")");
+                DiagnosticLogger.i("DOZE", "owned_session_reforce_skipped reason=release_in_flight"
+                        + " releaseEpoch=" + lockedWakeReleaseEpoch);
+                return;
+            }
+            // Cheap in-process read; no dumpsys and nothing to wait on. Trustworthy here because
+            // the two checks above guarantee no physical command of ours is outstanding.
             if (pm.isDeviceIdleMode()) {
                 return;
             }
@@ -4798,6 +5022,14 @@ public class ForceDozeService extends Service {
             enforcePackageStateForLifecycle(reason);
             enforceBiometricStateForLifecycle(reason);
             enforceSensorStateForLifecycle(reason);
+            // A process recreated while the session was already sitting behind a visible lock
+            // screen has no ACTION_SCREEN_ON to come, so without this the device would stay
+            // physically forced with nothing left to release it. Scoped to the epoch adopted above
+            // rather than to whatever is active by now, and a no-op when the shared marker is
+            // already pending - that case is owned by the marker-first branch at the top of this
+            // method, which runs before anything here. Nothing about the session changes: same
+            // epoch, same generation, no ENTER and no EXIT.
+            releasePhysicalDozeForLockedWake(reason, recoveredEpoch);
             return;
         }
 
@@ -5025,6 +5257,12 @@ public class ForceDozeService extends Service {
 
                 if (!deviceLocked || !waitForUnlock) {
                     handleScreenOn(context, time, delay);
+                } else {
+                    // The session stays owned behind the keyguard, but it must not stay physically
+                    // forced into deep idle while the user is looking at the device. This releases
+                    // the force and nothing else: same session, same epoch, same package
+                    // generation, no ENTER and no EXIT.
+                    releasePhysicalDozeForLockedWake("screen on", EPOCH_NONE);
                 }
             } else if (action.equals(Intent.ACTION_SCREEN_OFF)) {
                 log("Screen OFF received");
