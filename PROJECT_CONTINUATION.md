@@ -1,0 +1,4223 @@
+# EnforceDoze Fork — Authoritative Project Continuation
+
+**Updated:** 2026-08-28 (Asia/Kolkata)
+**Repository:** `rmpsdroid/EnforceDoze`
+**Current authoritative master:** `94e70f6`
+**Purpose:** single source of truth for continuing this project in a new ChatGPT window without restarting the investigation.
+
+---
+
+# 0. HOW TO USE THIS FILE
+
+This file consolidates:
+
+1. the earlier **EnforceDoze Fork — Master Continuation Prompt**;
+2. the later continuation snapshot that followed it;
+3. the work completed during the latest 2026-08-28 audit session, including the Shizuku recovery fixes and the boot/reboot recovery liveness fix;
+4. the current Git/device/test state;
+5. the remaining audit list;
+6. a reusable continuation prompt at the end.
+
+## Supersession rule
+
+**PART I and the FINAL CONTINUATION PROMPT are the current authoritative state.**
+
+The historical source snapshots are retained later in this file so that no earlier technical detail, test observation, branch name, invariant, or design rationale is lost. Some of those historical snapshots contain statements such as old ADB endpoints, old `master` SHAs, “master must remain untouched,” “no merge,” or an old “next audit item.” Those statements describe the project **at that historical checkpoint** and are superseded by the newer state in PART I.
+
+Do not treat old ADB endpoints as permanent. Wireless debugging ports change after reboot.
+
+---
+
+# PART I — CURRENT AUTHORITATIVE PROJECT STATE
+
+# 1. PROJECT GOAL
+
+This remains a long-running audit, hardening, modernization, device-testing, and eventual public-release project for an Android fork based on **EnforceDoze**.
+
+The immediate phase is still reliability/correctness first:
+
+- Doze entry and exit;
+- screen on/off and unlock behavior;
+- Shizuku and root execution;
+- package suspension/restoration;
+- notification disable/restore;
+- physical device-state changes;
+- sensor/biometric handling;
+- maintenance behavior;
+- async ordering and stale callbacks;
+- durable state journals;
+- generation/session ownership;
+- process death and boot recovery;
+- Android API/Samsung behavior;
+- service lifecycle and recovery.
+
+Work on **one narrow audit item at a time**.
+
+Do not mix functional reliability work with future UI/rebranding/public-release work.
+
+---
+
+# 2. USER / REVIEW WORKFLOW
+
+The user is not an Android developer and needs:
+
+- exact commands;
+- beginner-safe instructions;
+- one controlled stage at a time;
+- brief interpretation of every result;
+- no assumption of Git/Gradle/ADB expertise;
+- no huge command dumps during device testing.
+
+Claude CLI is primarily used for implementation/debugging.
+
+ChatGPT acts as independent reviewer and should:
+
+1. inspect real source/diffs rather than trust summaries;
+2. challenge implementation assumptions;
+3. preserve known-good architecture;
+4. reject unrelated redesign;
+5. guide build/device testing;
+6. inspect Git status and staged contents;
+7. require explicit approval before commits;
+8. require explicit approval before pushes;
+9. require explicit approval before merges to `master`.
+
+## Command formatting
+
+When the prompt is:
+
+`PS D:\AndroidProjects\EnforceDoze>`
+
+give PowerShell commands appropriate for that shell.
+
+When the prompt is:
+
+`C:\adb>`
+
+give only `adb.exe ...` style commands.
+
+Proceed one stage at a time and wait for output during live testing.
+
+---
+
+# 3. OPERATING PRINCIPLES — MANDATORY
+
+1. Preserve known-good architecture unless concrete evidence requires a change.
+2. Prefer read-only investigation before modifications.
+3. Make one controlled change at a time.
+4. Do not combine unrelated bugs in one functional branch.
+5. Validate after every meaningful change.
+6. Prefer event-driven recovery over timers/polling.
+7. Avoid broad locks unless necessary.
+8. Do not clear durable restore debt merely to hide a failed restore.
+9. Failed backend execution must preserve durable retry obligation where architecture allows.
+10. Distinguish:
+    - logically ACTIVE;
+    - physically forced deep idle;
+    - owned Doze session;
+    - maintenance transition;
+    - fresh entry;
+    - deferred entry/recovery.
+11. Do not expose secrets/passwords/API keys.
+12. Do not commit temporary review `.diff`, `.patch`, or raw audit log files unless explicitly requested.
+13. Never use `git add .` in this repository while protected untracked artifacts exist.
+14. Before commit:
+    - source review;
+    - diff review;
+    - `git diff --check`;
+    - successful build;
+    - relevant device test;
+    - staged-content verification.
+15. No commit without explicit **approve commit**.
+16. No push without explicit **approve push**.
+17. No merge to `master` without explicit **approve merge to master**.
+18. No push of `master` without explicit **approve push master**.
+19. Do not claim deterministic reproduction when only source structure or mechanics were validated.
+20. Samsung lockscreen/AOD visual appearance is not proof of actual screen/keyguard/idle state.
+
+---
+
+# 4. REPOSITORY / PATHS
+
+Upstream:
+
+`Akylas/EnforceDoze`
+
+Fork:
+
+`rmpsdroid/EnforceDoze`
+
+Windows repository:
+
+`D:\AndroidProjects\EnforceDoze`
+
+Application package:
+
+`com.akylas.enforcedoze.fork`
+
+Debug APK:
+
+`D:\AndroidProjects\EnforceDoze\app\build\outputs\apk\debug\app-debug.apk`
+
+Known app version from the earlier checkpoint:
+
+- `versionCode=86`
+- `versionName=1.10.2`
+- `minSdk=23`
+- `targetSdk=36`
+
+Do not assume version metadata changed unless verified from the current source/build.
+
+---
+
+# 5. CURRENT GIT STATE — 2026-08-28 END OF SESSION
+
+Current branch:
+
+`master`
+
+Current local HEAD:
+
+`94e70f6`
+
+Current remote:
+
+`origin/master = 94e70f6`
+
+Verified final log:
+
+```text
+94e70f6 (HEAD -> master, origin/master, origin/fix/boot-disabled-restore-liveness-v1, origin/HEAD, fix/boot-disabled-restore-liveness-v1) Fix disabled boot restore after late Shizuku start
+9b88c55 (origin/fix/shizuku-mode-switch-recovery-v1, fix/shizuku-mode-switch-recovery-v1) Fix restore retry after execution mode switch
+78f21e0 (origin/fix/shizuku-recovery-leave-doze-v1, fix/shizuku-recovery-leave-doze-v1) Fix durable Shizuku Doze exit recovery
+```
+
+The latest merge/push sequence was explicitly approved and completed:
+
+- feature branch `fix/boot-disabled-restore-liveness-v1`;
+- commit `94e70f6`;
+- branch pushed;
+- fast-forward merged to `master`;
+- `master` pushed;
+- local `master` and `origin/master` synchronized.
+
+Therefore any older handoff statement saying `master` is still at `a5b7c4a...`, that `master` has not been changed, or that these fixes are branch-only is **historical**.
+
+Historical custom audit baseline remains relevant for provenance:
+
+`audit/claude-current`
+`fda26b14176480927db22271644a7096bbc9c285`
+
+---
+
+# 6. PROTECTED UNTRACKED FILES — DO NOT COMMIT
+
+At the end of the latest session, `git status -sb` showed only these untracked artifacts:
+
+```text
+boot-restore-step1.txt
+boot-restore-step4.txt
+boot-restore-step5.txt
+boot-restore-step7.txt
+boot-restore-step8-shizuku-trigger.txt
+cls
+fresh-force-late-settle-review-v1.diff
+fresh-force-late-settle-review-v2.diff
+fresh-force-late-settle-review-v3.diff
+notification-toggle-race-v1-uncommitted.patch
+```
+
+These are protected review/audit artifacts.
+
+Do not stage them.
+
+Do not use:
+
+`git add .`
+
+Stage source/document files explicitly by path.
+
+---
+
+# 7. PRIMARY DEVICE / CURRENT TEST ENVIRONMENT
+
+Primary validation device:
+
+**Samsung Galaxy S26 Ultra**
+
+- Android API 36
+- Samsung One UI
+- Shizuku preferred backend
+
+Latest working wireless ADB endpoint after the final reboot test:
+
+`30.30.30.234:38481`
+
+Older endpoints may remain listed as `offline`.
+
+**Do not treat the port as permanent.** After reboot, first run:
+
+`C:\adb\adb.exe devices`
+
+and use the row whose state is `device`.
+
+Shizuku process name:
+
+`shizuku_server`
+
+PowerShell note:
+
+`$PID` is a reserved automatic variable. When storing the Shizuku PID, use something like:
+
+`$shizukuPid`
+
+Normal user preference:
+
+`waitForUnlock=true`
+
+Execution mode during the latest test:
+
+`executionMode=shizuku`
+
+Important current device-setting note:
+
+The final boot-recovery reproduction deliberately left:
+
+`serviceEnabled=false`
+
+The EnforceDoze main switch was turned OFF as part of the test. Before normal use or a new ordinary Doze regression, verify whether the user wants the service re-enabled.
+
+Final observed post-recovery device state:
+
+- Shizuku running;
+- `ForceDozeService` stopped;
+- `serviceEnabled=false`;
+- `executionMode=shizuku`;
+- `inDoze=false`;
+- `ownedReforcePending=false`;
+- `entryPending=false`;
+- suspended-package debt cleared;
+- `mForceIdle=false`;
+- `mState=ACTIVE`;
+- `mLightState=ACTIVE`;
+- ChatGPT package `suspended=false`.
+
+The generation metadata value `231` remained in the journal as historical generation metadata; the applied suspended-package set itself was cleared.
+
+---
+
+# 8. IMPORTANT COMPLETED FIX HISTORY
+
+The historical snapshots later in this file contain the full earlier chronology. Important known commits include:
+
+## Earlier reliability work
+
+- Phase 1 wake restoration series:
+  - `5dd3ef...`
+  - `dc0200...`
+  - `a54be7...`
+  - `5c55b03`
+- Diagnostic logging:
+  - `b78240449a7a993830f9f7252d3905715accf0a1`
+- USER_PRESENT:
+  - `e94d85036b2df9e35f43edf74b10a10bc28b6f47`
+- Call recovery:
+  - `cb788cf`
+  - `2b09fa4`
+  - `113e0651923449a15137944e32a9e818e39c4b57`
+- Lockscreen sensors:
+  - `fb2e9b1ff6dd3ace51ca997f067cf12b27701134`
+- Package lifecycle:
+  - `777ae22...`
+  - `9e556fda9f5b8e39126f376ab862fb06eb51c917`
+- Stats crash:
+  - `65825d718f3aabfb3f421b4cedc9f274f309bee6`
+- Lockscreen Doze resume series:
+  - `4de3ffd...`
+  - `a8fe1d0...`
+  - `76861db...`
+  - `2212f29...`
+  - `b091745b8801d873dfeb35152f2a70a4d536a5f6`
+- Fresh force/PREPARING:
+  - `ea4c432...`
+  - `2855424d2912095e246b47c48875ce78bb6b3e8f`
+- Shizuku-unavailable handling:
+  - `6b2a34c4686150879ce735f7078ccb53fd6009e4`
+- Owned-session reforce:
+  - `70ac1a20111cb379f64ece605ab0939f4ef3e536`
+- Locked-wake physical release:
+  - `a9a1227c4ff2522af345340b929e0f79325944ee`
+- Late fresh force-idle settlement:
+  - `dd3ded441cf1dfc9277e23ec165a99c8981ab780`
+- Android 16 notification Binder fallback:
+  - `a93541c14594b4fe387544aba307a22c8952fa6c`
+- Notification serializer:
+  - `0a2aefc0b8ffeb5acf357e4ca54c24e63d1fd7df`
+- Generic device-state serializer:
+  - `8555b9c9d6bd76575aeda60937e9f7d22539de47`
+- Generation-safe device-state restores:
+  - `d369e4e490a0cb5cd02c3eb4d5ee2fdf594ce4f8`
+
+## Latest three Shizuku/recovery commits now on `master`
+
+1. `78f21e0` — **Fix durable Shizuku Doze exit recovery**
+2. `9b88c55` — **Fix restore retry after execution mode switch**
+3. `94e70f6` — **Fix disabled boot restore after late Shizuku start**
+
+The latest three are described in detail below.
+
+---
+
+# 9. `78f21e0` — DURABLE SHIZUKU DOZE EXIT RECOVERY
+
+Branch:
+
+`fix/shizuku-recovery-leave-doze-v1`
+
+Commit:
+
+`78f21e0`
+
+Subject:
+
+`Fix durable Shizuku Doze exit recovery`
+
+Known changed source files:
+
+- `DozeStateStore.java`
+- `ForceDozeService.java`
+
+Recorded diff size:
+
+- 393 insertions
+- 39 deletions
+
+This work followed the earlier suspected “logically ACTIVE but still physically forced IDLE after Shizuku failure/recovery” concern.
+
+The earlier handoff correctly required a deterministic reproduction with real keyguard state verified rather than assuming visual unlock.
+
+The dedicated work then established and fixed durable exit/recovery behavior.
+
+Known physical/device validation from that work included:
+
+- `mForceIdle` recovered `true -> false`;
+- Android moved `IDLE -> ACTIVE`;
+- package suspension restoration recovered after Shizuku reconnect;
+- the 232-package restore debt was retained while execution was unavailable and retried rather than silently cleared;
+- recovery proceeded in the same observed app PID (`21472`) in that test;
+- continuation logging included:
+  - `HARD_BLOCK_RESTORE_START reason=owned reforce debt settled`
+
+Final status:
+
+**FIXED / BUILT / DEVICE-TESTED / COMMITTED / PUSHED / MERGED**
+
+This supersedes the old historical label:
+
+`SUSPECTED / NEEDS DEDICATED REPRODUCTION`
+
+for the narrow Shizuku-recovered ACTIVE physical leaveDoze durability issue that this branch addressed.
+
+Do not infer that every possible Shizuku lifecycle edge is thereby audited; later fixes below addressed separate retry/liveness holes.
+
+---
+
+# 10. `9b88c55` — RESTORE RETRY AFTER EXECUTION MODE SWITCH
+
+Branch:
+
+`fix/shizuku-mode-switch-recovery-v1`
+
+Commit:
+
+`9b88c55`
+
+Subject:
+
+`Fix restore retry after execution mode switch`
+
+Purpose:
+
+Ensure unresolved restoration work is retried after an execution-backend/mode transition instead of being left stranded merely because the earlier backend attempt failed.
+
+This is a distinct concern from:
+
+- durable physical exit debt;
+- late-Shizuku boot liveness;
+- ordinary fresh-entry deferral.
+
+Final status:
+
+**FIXED / BUILT / DEVICE-TESTED / COMMITTED / PUSHED / MERGED**
+
+It was the direct parent of the latest boot-liveness branch:
+
+`94e70f6` was created from `9b88c55`.
+
+Do not invent additional implementation specifics for this commit unless the source/diff is re-opened; the subject/status above are the authoritative facts retained from the completed session.
+
+---
+
+# 11. `94e70f6` — DISABLED BOOT RESTORE AFTER LATE SHIZUKU START
+
+Branch:
+
+`fix/boot-disabled-restore-liveness-v1`
+
+Base:
+
+`9b88c55`
+
+Commit:
+
+`94e70f6`
+
+Subject:
+
+`Fix disabled boot restore after late Shizuku start`
+
+Final source diff:
+
+```text
+MyApplication.java | 50 insertions
+Utils.java         | 24 insertions
+2 files changed, 74 insertions(+)
+```
+
+`git diff --check` passed.
+
+Build:
+
+`.\gradlew.bat assembleDebug`
+
+Result:
+
+`BUILD SUCCESSFUL`
+
+APK installed successfully with `adb install -r`.
+
+## 11.1 Confirmed pre-fix liveness bug
+
+The confirmed problematic state was:
+
+- durable suspended-package restore debt exists;
+- app is configured for Shizuku;
+- `serviceEnabled=false`;
+- device reboots;
+- Shizuku is not yet available during the finite boot recovery attempt.
+
+Old behavior:
+
+1. `BootCompleteReceiver` receives boot.
+2. It detects durable package/device restore debt.
+3. It starts `ForceDozeService` with `ACTION_RESTORE_STATE`.
+4. Shizuku is unavailable.
+5. package unsuspend fails (`exit=-1`);
+6. durable package record correctly remains;
+7. because the EnforceDoze service is disabled, the temporary recovery service waits about 3 seconds and stops;
+8. the service-level Shizuku listener disappears with `onDestroy`;
+9. Shizuku starts later;
+10. no remaining listener/event causes the disabled recovery service to retry;
+11. packages such as ChatGPT can remain suspended indefinitely until the user manually starts/enables the app.
+
+The journal behavior was correct; the missing piece was **liveness**.
+
+## 11.2 Rejected design
+
+An early candidate considered keeping the disabled recovery service alive until all debt clears.
+
+That was rejected because if Shizuku never becomes available, a disabled foreground service could remain resident indefinitely.
+
+The chosen fix had to remain event-driven and non-resident.
+
+## 11.3 Relevant existing Shizuku architecture
+
+`ShizukuHandler` already uses a global singleton and sticky binder-received listener behavior.
+
+Shizuku provider dependency:
+
+`dev.rikka.shizuku:provider:13.1.5`
+
+Manifest provider is present through:
+
+`rikka.shizuku.ShizukuProvider`
+
+with authority based on:
+
+`${applicationId}.shizuku`
+
+The important behavior observed in the real test is that starting Shizuku causes Android/Shizuku to contact registered app providers, which can start the EnforceDoze process solely to deliver the binder.
+
+That event is the natural late-recovery trigger.
+
+## 11.4 Final implementation — `MyApplication.java`
+
+`MyApplication` now initializes the process-level Shizuku recovery observer.
+
+Key behavior:
+
+- initialize `ShizukuHandler` from `Application.onCreate`;
+- retain a process-level `OnAvailibilityChange` listener;
+- when availability becomes `true`, call:
+  - `maybeRecoverDisabledStateAfterShizukuStart()`;
+- immediately call the same recovery check if `isShizukuAvailable()` is already true after listener registration, covering sticky-listener construction/order timing.
+
+Recovery gate:
+
+1. only if current execution mode is Shizuku;
+2. return if `serviceEnabled=true` because the normal live service owns reconnect recovery;
+3. inspect durable state:
+   - package debt via `hasAppliedSuspendedPackages()`;
+   - device-state debt via `hasPendingRestore()`;
+4. if no debt, do nothing;
+5. if debt exists while service is disabled, explicitly start:
+   - `ForceDozeService.ACTION_RESTORE_STATE`.
+
+Diagnostic messages added:
+
+- `app_shizuku_restore_trigger`
+- `app_shizuku_restore_start_result`
+
+## 11.5 Final implementation — `Utils.java`
+
+Added:
+
+`startForceDozeServiceAction(Context context, String action)`
+
+Purpose:
+
+- start `ForceDozeService` for one explicit action;
+- do **not** change `serviceEnabled`;
+- use `startForegroundService` on Android O+;
+- use `startService` on older Android;
+- catch background/FGS start exceptions;
+- log failure;
+- return `false` rather than crash.
+
+This is separate from existing helpers that intentionally refuse to start the normal service while `serviceEnabled=false`.
+
+## 11.6 Files intentionally NOT changed
+
+`ForceDozeService.java` was not modified for this fix.
+
+The existing disabled-state `ACTION_RESTORE_STATE` behavior remains:
+
+- issue reversion;
+- if `serviceEnabled=false`, allow a short grace period;
+- stop again.
+
+This is important: the fix does not create a permanently running disabled service.
+
+---
+
+# 12. `94e70f6` — DECISIVE REAL-DEVICE TEST
+
+## 12.1 Clean baseline before reproduction
+
+Installing the patched APK while an active owned Doze session was in progress killed/replaced the running service, so a clean baseline was re-established before the decisive test.
+
+Clean baseline eventually confirmed:
+
+- device ACTIVE;
+- `mForceIdle=false`;
+- ChatGPT `suspended=false`;
+- durable package debt cleared;
+- `inDoze=false`;
+- `entryPending=false`;
+- `ownedReforcePending=false`.
+
+## 12.2 Create fresh owned Doze
+
+Phone was locked/screen off and allowed to enter owned Doze.
+
+Observed:
+
+- `mForceIdle=true`
+- `mScreenOn=false`
+- `mScreenLocked=true`
+- `mState=IDLE`
+- `mLightState=OVERRIDE`
+- ChatGPT `suspended=true`
+- `inDoze=true`
+- package suspended-set journal present
+- package generation `231`
+- `ownedReforcePending=false`
+- `entryPending=false`
+
+## 12.3 Kill Shizuku during Doze
+
+Shizuku server PID was captured using PowerShell variable:
+
+`$shizukuPid`
+
+because `$PID` is reserved.
+
+Observed server PID in this test:
+
+`16606`
+
+After kill:
+
+- `shizuku_server` absent.
+
+## 12.4 Unlock while Shizuku unavailable
+
+The phone was fully unlocked while Shizuku remained unavailable.
+
+Observed:
+
+- `mForceIdle=true`
+- `mScreenOn=true`
+- `mScreenLocked=false`
+- `mState=IDLE`
+- ChatGPT still `suspended=true`
+- durable state:
+  - `inDoze=false`
+  - suspended package set still present
+  - `ownedReforcePending=true`
+  - package generation `231`
+  - `entryPending=false`
+
+Important logs:
+
+- Shizuku binder died;
+- package restore started for screen-on;
+- batch unsuspend could not run because Shizuku unavailable;
+- fallback also failed;
+- `HARD_BLOCK_RESTORE_COMMAND_FINISHED exit=-1 count=232`;
+- package record was kept.
+
+This intentionally established durable unresolved debt.
+
+## 12.5 Disable EnforceDoze while Shizuku remains unavailable
+
+The main EnforceDoze switch was turned OFF.
+
+Verified:
+
+```text
+serviceEnabled=false
+executionMode=shizuku
+```
+
+`ForceDozeService` stopped.
+
+Shizuku remained absent.
+
+ChatGPT remained:
+
+`suspended=true`
+
+Durable package debt remained.
+
+`ownedReforcePending=true` remained before reboot because physical unforce could not execute without the backend.
+
+## 12.6 Reboot
+
+Logcat was cleared and device rebooted.
+
+Wireless ADB endpoint changed; final active endpoint became:
+
+`30.30.30.234:38481`
+
+The test intentionally did **not** manually open EnforceDoze or Shizuku.
+
+## 12.7 First boot recovery attempt fails as intended
+
+At approximately:
+
+`20:38:39`
+
+logs showed:
+
+```text
+Received BOOT_COMPLETED intent, isServiceEnabled=false
+BOOT_RECOVERY_PENDING deviceStates=[] suspendedPackages=232
+```
+
+Boot recovery started `ACTION_RESTORE_STATE`.
+
+The service saw:
+
+- `pendingPackages=232`
+- no device-state debt after reboot normalization
+
+The package restore attempt failed because Shizuku was not yet available.
+
+At:
+
+`20:38:43.870`
+
+observed:
+
+`HARD_BLOCK_RESTORE_COMMAND_FINISHED exit=-1 count=232`
+
+The durable package debt remained.
+
+This reproduced the exact pre-fix situation up to the point where old code would have become permanently stuck.
+
+## 12.8 Shizuku later starts and wakes EnforceDoze
+
+Shizuku server later ran as PID:
+
+`25450`
+
+At:
+
+`20:38:54.383`
+
+Android logged:
+
+```text
+Start proc 25867:com.akylas.enforcedoze.fork/u0a707
+for content provider
+{com.akylas.enforcedoze.fork/rikka.shizuku.ShizukuProvider}
+```
+
+This is decisive proof that EnforceDoze was started specifically because of the Shizuku provider delivery path.
+
+At:
+
+`20:38:55.042`
+
+EnforceDoze logged:
+
+`ShizukuHandler(25867): Shizuku binder received`
+
+At:
+
+`20:38:55.063`
+
+Android allowed EnforceDoze to start:
+
+`ACTION_RESTORE_STATE`
+
+as a background FGS with:
+
+`code:SYSTEM_ALLOW_LISTED`
+
+This occurred about 21 ms after the app received the binder.
+
+## 12.9 Durable restore succeeds
+
+The recreated recovery service saw:
+
+- `pendingPackages=232`
+- `screenOn=true`
+- `inDoze=false`
+
+At:
+
+`20:38:55.178`
+
+observed:
+
+`HARD_BLOCK_BATCH unsuspend count=232 exit=0`
+
+At:
+
+`20:38:55.179`
+
+observed:
+
+`HARD_BLOCK_RESTORE_COMMAND_FINISHED exit=0 count=232`
+
+Therefore the full 232-package restore succeeded.
+
+## 12.10 Temporary disabled recovery service stops again
+
+Because the app main service remained disabled:
+
+At:
+
+`20:38:58.162`
+
+observed:
+
+`Reversion issued, stopping the service again`
+
+Then:
+
+`Stopping service and enabling sensors`
+
+`Service destroyed without an owned Doze session, no EXIT recorded`
+
+At:
+
+`20:38:59.871`
+
+Android killed the now-empty app process.
+
+This proves the design remains temporary/non-resident.
+
+## 12.11 Final state
+
+Final inspection showed:
+
+- Shizuku running;
+- no `ForceDozeService` record from the stopped recovery;
+- `serviceEnabled=false`;
+- `executionMode=shizuku`;
+- suspended-package applied set removed;
+- `ownedReforcePending=false`;
+- `entryPending=false`;
+- `inDoze=false`;
+- ChatGPT `suspended=false`;
+- `mForceIdle=false`;
+- `mScreenOn=true`;
+- `mScreenLocked=false`;
+- `mState=ACTIVE`;
+- `mLightState=ACTIVE`.
+
+Result:
+
+**REPRODUCED / FIXED / BUILD PASS / DEVICE TEST PASS / COMMITTED / PUSHED / MERGED TO MASTER**
+
+---
+
+# 13. LATEST BOOT-RECOVERY AUDIT ARTIFACTS
+
+Protected local evidence files:
+
+```text
+boot-restore-step1.txt
+boot-restore-step4.txt
+boot-restore-step5.txt
+boot-restore-step7.txt
+boot-restore-step8-shizuku-trigger.txt
+```
+
+The final trigger log:
+
+`boot-restore-step8-shizuku-trigger.txt`
+
+contains roughly 7,493 lines and includes the decisive provider/binder/FGS/restore/stop sequence.
+
+Do not commit these raw logs by default.
+
+The GitHub continuation document should summarize evidence, while raw logs remain local unless there is a deliberate reason to publish sanitized test artifacts.
+
+---
+
+# 14. IMPORTANT FOLLOW-UP AFTER `94e70f6` — NOT A CONFIRMED BUG
+
+One regression remains worth testing before considering the application-level late-Shizuku trigger completely closed under all boot orderings:
+
+## Disabled boot + durable debt + Shizuku already available
+
+Reason:
+
+During boot, `Application.onCreate()` runs before/around `BootCompleteReceiver`.
+
+If all of these are true:
+
+- Shizuku mode selected;
+- `serviceEnabled=false`;
+- durable package/state debt exists;
+- Shizuku is already available at application startup;
+
+then:
+
+1. `MyApplication` may see debt and immediately start `ACTION_RESTORE_STATE`;
+2. `BootCompleteReceiver` may also detect the same debt and start `ACTION_RESTORE_STATE`.
+
+This could cause duplicate recovery delivery.
+
+No harmful duplicate behavior has been proven.
+
+Do **not** label it a bug yet.
+
+It should be treated as:
+
+**FOLLOW-UP REGRESSION / SOURCE-AUDIT ITEM**
+
+Test/read source before changing code.
+
+Avoid using unreliable `Utils.isMyServiceRunning()` as a correctness gate merely to suppress duplicate starts; earlier source comments indicate One UI can misreport running-service state.
+
+Possible duplicate delivery may already be harmless because restore operations/journals are guarded/serialized, but this should be proven rather than assumed.
+
+---
+
+# 15. SEPARATE NOTIFICATION BOOT-RECOVERY OBSERVATION
+
+During the boot-liveness source audit, notification restoration was examined.
+
+Important distinction:
+
+- package/device restore debt has durable journal support;
+- notification operations are serialized in memory;
+- notification-only restore debt does not appear to use the same durable boot journal mechanism.
+
+No notification-only boot-loss bug was proven during `94e70f6`.
+
+Do not expand the boot package/device liveness fix retrospectively.
+
+Keep this as a separate future audit item if notification-only crash/boot recovery needs deterministic review.
+
+---
+
+# 16. HISTORICAL DEEP DETAILS THAT MUST REMAIN KNOWN-GOOD
+
+## Late fresh force-idle settlement — `dd3ded4`
+
+A real device showed that the shell command could report:
+
+`Now forced in to deep idle mode`
+
+while an immediate `PowerManager.isDeviceIdleMode()` sample was still false.
+
+The old implementation incorrectly classified this as semantic refusal and cleared PREPARING, while the deep-idle broadcast arrived about 47 ms later, producing an orphan physical force:
+
+- logical/durable state false;
+- `mForceIdle=true`;
+- Android IDLE.
+
+The fix uses a two-signal settlement model:
+
+- exact entry attempt token;
+- command acceptance signal;
+- physical deep-idle observation signal;
+- commit only when both belong to the same current attempt;
+- no timer;
+- no polling.
+
+Do not claim the stochastic `accepted_pending_confirmation` timing was naturally re-hit after the fix unless new evidence does so.
+
+The full historical source snapshot later in this document retains the detailed verdict ordering, lock invariant, cancellation behavior, and test plan.
+
+## Locked-wake physical release — `a9a1227`
+
+With `waitForUnlock=true`:
+
+- lockscreen wake physically unforces Android;
+- same logical owned session remains;
+- same epoch/generation remains;
+- no EXIT on mere locked wake;
+- screen-off while still locked should reforce the same owned session;
+- USER_PRESENT performs final restore/unforce/EXIT.
+
+Historical evidence already validated locked-wake release and final unlock behavior.
+
+One older planned test — lockscreen visible, screen times out OFF while still locked, same-session genuine owned reforce — was explicitly noted as not directly completed at that checkpoint. Unless later source/device evidence is found, keep it on the regression backlog rather than silently marking it done.
+
+## Generic state serialization
+
+Generic async physical toggles are latest-wins serialized per state.
+
+Includes:
+
+- mobile data;
+- Wi-Fi;
+- battery saver;
+- airplane mode;
+- Bluetooth;
+- GPS.
+
+Do not assume dispatch order equals completion order.
+
+## Generation-safe restore — `d369e4e`
+
+Durable device-state restore markers use generations so stale callbacks cannot erase newer debt.
+
+Important concepts:
+
+- generation stored per applied key;
+- `AppliedKeySnapshot`;
+- `clearAppliedIfGeneration`;
+- selection/snapshot/dispatch protected by `physicalEntryLock`;
+- fresh-entry debt barrier prevents a new session from capturing still-restricted state as its new pre-Doze baseline;
+- maintenance reapply is not treated as a fresh session.
+
+The exact old-generation/new-generation callback overlap was not naturally reproduced; do not exaggerate evidence.
+
+---
+
+# 17. FORK FEATURES / ARCHITECTURE TO PRESERVE
+
+Preserve unless a concrete audit proves a defect:
+
+## Dual-install/fork identity
+
+- namespace base;
+- `.fork` application ID;
+- manifest `${applicationId}`;
+- FGS specialUse setup;
+- shell grants/whitelist based on dynamic package ID;
+- explicit `.fork` preferences.
+
+## Settings persistence
+
+- SettingsActivity reload notifies service;
+- execution mode committed before reload;
+- multiple Shizuku listeners supported;
+- destructive preference writes removed.
+
+## `SettingsBackup.java`
+
+- SAF Create/Open;
+- background import/export;
+- one reload after import.
+
+## Multi-select package chooser
+
+- search;
+- system/user filter;
+- select all;
+- batch result;
+- background labels;
+- lazy icons;
+- BlockApps batch commits once.
+
+## `DozeStateStore`
+
+Durable private preferences:
+
+`enforcedoze_doze_state`
+
+Tracks relevant:
+
+- pre/applied physical states;
+- `inDoze`;
+- synchronous durable writes;
+- package generation/session ownership;
+- `entryPending`;
+- `ownedReforcePending`;
+- generation-safe device-state restore markers.
+
+## `BootCompleteReceiver`
+
+Recovery covers relevant:
+
+- device-state pending;
+- package-only pending;
+- fresh PREPARING recovery;
+- owned-reforce recovery;
+- package/device restore request after reboot.
+
+## `ShizukuHandler`
+
+Important architecture:
+
+- binder listeners;
+- multiple availability listeners;
+- command execution on Java threads/processes;
+- reflective `Shizuku.newProcess` path;
+- sticky binder delivery behavior used by the new application-level recovery.
+
+---
+
+# 18. CURRENT COMPLETED / OPEN AUDIT MATRIX
+
+## Completed / no fix
+
+- handleScreenOn/session-exit barrier — PASS / NO FIX
+- sensor serializer narrow concurrency — PASS / NO FIX
+
+## Completed / fixed
+
+- notification shell disable/enable ordering
+- generic device-state command ordering
+- generic device-state generation races
+- late fresh force-idle settlement
+- locked-wake physical release
+- Shizuku durable physical exit recovery
+- restore retry after execution-mode switch
+- disabled boot restore after late Shizuku start
+
+## Follow-up / deferred
+
+Priority should be adjusted by evidence, but current useful order is:
+
+1. `94e70f6` regression: disabled boot + durable debt + Shizuku already available; prove whether duplicate `ACTION_RESTORE_STATE` delivery is harmless or needs gating.
+2. Same-session lockscreen timeout reforce regression, if still not subsequently proven.
+3. Generic SharedPreferences commit-result handling.
+4. Maintenance async restore/reapply behavior.
+5. Maintenance process-death recovery.
+6. Shizuku `newProcess` deprecation / newer Android API behavior.
+7. stdout/stderr pipe deadlock risk.
+8. broader `onDestroy` async restore / boot timing audit beyond the now-fixed late-Shizuku liveness case.
+9. notification blocklist exact-set correctness.
+10. notification-only boot/process-death restoration durability.
+11. biometric pre-state assumptions.
+12. root orphan processes.
+13. `getPlayingPackageName` missing callback.
+14. root child-process survival.
+15. pre-N tracked release protocol.
+16. tunable callback absence.
+17. marker-stuck edge cases.
+18. PREPARING phantom-boot risk.
+
+Do not treat this order as immutable.
+
+---
+
+# 19. TESTING RULES
+
+Always verify real state.
+
+## Display
+
+Do not trust a visually black Samsung screen.
+
+Use system dumps.
+
+## Keyguard
+
+Do not infer unlock from appearance.
+
+Verify keyguard state.
+
+## Device idle
+
+Track at minimum:
+
+- `mForceIdle`
+- `mScreenOn`
+- `mScreenLocked`
+- `mState`
+- `mLightState`
+
+## Durable journal
+
+Inspect:
+
+- `inDoze`
+- `entryPending`
+- `ownedReforcePending`
+- applied package set
+- generations
+- pending restore keys
+
+## Package suspension
+
+Use a representative package such as ChatGPT only as a test indicator; package journal count/logs are the more complete proof.
+
+## Backend recovery
+
+When killing Shizuku, explicitly verify `shizuku_server` is absent before interpreting failures.
+
+When it returns, distinguish:
+
+- binder availability;
+- app process wake;
+- recovery-service start;
+- actual shell success;
+- durable marker clear;
+- final service stop.
+
+---
+
+# 20. BUILD ENVIRONMENT NOTE
+
+An older Windows checkpoint had Gradle accidentally using a 32-bit Java 8 runtime and failing before compilation with heap reservation error.
+
+The working solution was to use Android Studio's 64-bit JBR for the PowerShell session when needed:
+
+`C:\Program Files\Android\Android Studio\jbr`
+
+Do not treat the old 32-bit Java failure as a source-code failure.
+
+Current latest patched tree built successfully.
+
+Do not make global Java changes unless necessary.
+
+---
+
+# 21. GIT WORKFLOW FOR FUTURE FUNCTIONAL FIXES
+
+For each narrow fix:
+
+1. verify `master`, `origin/master`, and worktree;
+2. create a narrow feature branch;
+3. perform read-only source audit;
+4. implement only after defect/mechanism is understood;
+5. independently inspect diff;
+6. `git diff --check`;
+7. build;
+8. install;
+9. establish clean device baseline;
+10. perform relevant deterministic test;
+11. restore temporary settings;
+12. run regression;
+13. inspect `git status`;
+14. stage only intended files;
+15. `git diff --cached --check`;
+16. `git diff --cached --stat`;
+17. wait for **approve commit**;
+18. commit;
+19. verify HEAD/status;
+20. wait for **approve push**;
+21. push feature branch;
+22. verify;
+23. wait for **approve merge to master**;
+24. fast-forward merge when possible;
+25. wait for **approve push master**;
+26. push master;
+27. verify `master == origin/master`.
+
+Never stage protected audit artifacts accidentally.
+
+---
+
+# 22. NEW GITHUB CONTINUITY WORKFLOW
+
+From this point onward, maintain a tracked repository document:
+
+`PROJECT_CONTINUATION.md`
+
+This file should become the project's human/AI handoff record.
+
+## Goal
+
+If a ChatGPT window is lost or becomes too long:
+
+1. open a new chat;
+2. attach the latest `PROJECT_CONTINUATION.md` from GitHub/local repo;
+3. tell ChatGPT to follow the **FINAL CONTINUATION PROMPT**;
+4. continue from the exact last verified state.
+
+## What to update after each completed fix
+
+Update the top authoritative sections with:
+
+- date;
+- current `master` and `origin/master` SHA;
+- branch/commit subject;
+- exact files changed;
+- bug status;
+- source-review status;
+- build status;
+- device-test evidence;
+- what was naturally reproduced versus structurally proven;
+- current user/device settings that matter;
+- protected untracked artifacts;
+- next audit item;
+- updated final continuation prompt.
+
+## Recommended documentation-commit discipline
+
+Do not mix documentation housekeeping into an unreviewed functional change.
+
+A clean approach after a functional fix is fully merged/pushed:
+
+1. create a small docs-only branch from updated `master`, e.g.:
+   - `docs/continuation-20260828`
+2. update only `PROJECT_CONTINUATION.md`;
+3. run `git diff --check`;
+4. review;
+5. stage only the continuation file;
+6. explicit **approve commit**;
+7. commit;
+8. explicit **approve push**;
+9. push docs branch;
+10. merge to `master` only with explicit approval;
+11. push master only with explicit approval.
+
+This lets the document record the final functional commit SHA accurately without rewriting the functional commit.
+
+## Raw logs
+
+Do not make GitHub a dump of raw logcat files by default.
+
+Prefer:
+
+- concise evidence summaries in `PROJECT_CONTINUATION.md`;
+- commit hashes;
+- exact key log lines;
+- reproducible test procedures.
+
+Keep raw logs local unless sanitized publication has a concrete purpose.
+
+---
+
+# 23. PUBLIC RELEASE PLAN — LATER
+
+Only after reliability auditing is frozen:
+
+1. full regression suite;
+2. review all integrated fixes;
+3. complete rebranding;
+4. app/fork identity review;
+5. new icon/adaptive icon/splash/artwork;
+6. UI/settings modernization;
+7. donation/support review;
+8. preserve upstream attribution and legal notices;
+9. professional GitHub README;
+10. screenshots;
+11. installation/build instructions;
+12. Shizuku instructions;
+13. root instructions if retained;
+14. supported Android/Samsung notes;
+15. troubleshooting;
+16. changelog;
+17. audit/test history;
+18. architecture/reliability notes;
+19. known limitations;
+20. credits/upstream links;
+21. release notes;
+22. signing/release process;
+23. GitHub Releases/APK publication.
+
+Do not mix this work into current reliability branches.
+
+---
+
+# PART II — HISTORICAL SOURCE SNAPSHOT A
+
+The following is the earlier master handoff retained for lossless historical reference.
+
+**It is historical. PART I supersedes any stale “current state,” ADB endpoint, master SHA, branch status, or next-step statement inside this quoted snapshot.**
+
+> # EnforceDoze Fork — Master Continuation Prompt
+>
+> I am continuing a long-running audit, hardening, modernization, device-testing, and eventual public-release project for an Android app fork based on **EnforceDoze**.
+>
+> Treat everything below as the authoritative project state unless I explicitly provide newer evidence.
+>
+> ---
+>
+> # 1. PROJECT GOAL
+>
+> The project is not just to patch individual bugs.
+>
+> The overall plan is:
+>
+> ## Phase A — Complete reliability/security/concurrency audit
+> Systematically inspect and fix correctness problems in:
+>
+> - Doze entry
+> - Doze exit
+> - screen on/off handling
+> - unlock handling
+> - Shizuku execution
+> - root execution
+> - package suspension/restoration
+> - notification disable/restore
+> - Wi-Fi/mobile-data/Bluetooth/GPS/airplane/battery-saver state handling
+> - sensor state handling
+> - biometric state handling
+> - maintenance-window handling
+> - async shell command ordering
+> - process death/recovery
+> - boot/restart recovery
+> - durable state journals
+> - race conditions
+> - stale callbacks
+> - generation/session ownership
+> - root/Shizuku backend failures
+> - Android API compatibility
+> - package lifecycle changes
+> - service lifecycle
+> - notification service compatibility
+> - edge cases involving stale PREPARING/ACTIVE states
+>
+> We are proceeding **one narrow audit item at a time**.
+>
+> Do not redesign working architecture without concrete evidence that it is necessary.
+>
+> ---
+>
+> # 2. AFTER ALL FUNCTIONAL AUDITS ARE FINISHED
+>
+> Once the app is stable, tested, and hardened, we will proceed with a separate public-release/rebranding program.
+>
+> This future work MUST NOT be mixed into current functional bug-fix branches.
+>
+> Planned later stages:
+>
+> ## Rebranding
+>
+> Perform a complete rebrand of the fork, including:
+>
+> - application name
+> - package/application identity if appropriate
+> - icon
+> - adaptive icon
+> - splash screen
+> - launcher graphics
+> - colors
+> - typography
+> - branding strings
+> - internal references that should no longer say original app name
+> - about screen
+> - version naming strategy
+> - fork identity
+> - application descriptions
+> - screenshots
+> - app artwork
+> - possibly notification icon/branding where appropriate
+>
+> Do not remove required attribution to the original project.
+>
+> ---
+>
+> ## Public GitHub repository
+>
+> Create a polished **public GitHub repository** for the fork.
+>
+> The public repository should include:
+>
+> - professional README
+> - project overview
+> - screenshots
+> - feature list
+> - installation instructions
+> - Shizuku setup instructions
+> - root mode instructions if retained
+> - supported Android versions
+> - Samsung/Android 16 notes
+> - troubleshooting
+> - known limitations
+> - changelog
+> - release notes
+> - audit history
+> - testing notes
+> - architecture overview where useful
+> - security/reliability notes
+> - contribution instructions if appropriate
+> - issue-reporting guidance
+> - license information
+> - build instructions
+> - credits
+> - acknowledgments
+> - original upstream attribution
+> - links to upstream project
+> - fork history
+>
+> The GitHub page should look polished and professional rather than like a raw development fork.
+>
+> ---
+>
+> ## Credits / attribution
+>
+> The original EnforceDoze developers and contributors must receive proper credit.
+>
+> Include:
+>
+> - upstream project name
+> - upstream repository
+> - original author/developer attribution
+> - contributors where appropriate
+> - license attribution
+> - explanation that this project is a fork
+> - a clear section describing changes made by this fork
+> - no misleading claim that the fork is the original project
+>
+> Preserve all required legal/license notices.
+>
+> ---
+>
+> ## Changelog / audit logs
+>
+> Create clear documentation for:
+>
+> - important bug fixes
+> - concurrency fixes
+> - Android 16 compatibility work
+> - Samsung-specific observations
+> - Shizuku behavior
+> - wake/unlock handling
+> - package restoration
+> - notification restoration
+> - physical device-state restoration
+> - durable-state recovery
+> - tests performed on real hardware
+> - known edge cases not directly reproduced
+>
+> We should be transparent about what was:
+>
+> - source-reviewed
+> - build-tested
+> - device-tested
+> - naturally reproduced
+> - structurally fixed but not deterministically reproduced
+>
+> Do not falsely claim a race was reproduced when it was only proven by code inspection.
+>
+> ---
+>
+> ## Donation page
+>
+> Later update donation/support links both:
+>
+> - inside the Android app
+> - in the GitHub repository
+>
+> Before changing donation behavior, inspect:
+>
+> - current donation implementation
+> - upstream licensing expectations
+> - attribution requirements
+> - whether original donation links should remain or be acknowledged
+> - whether the fork should have a separate donation/support link
+> - wording to avoid misleading users
+>
+> Do this carefully and ethically.
+>
+> ---
+>
+> ## UI redesign / tweaks
+>
+> Only after functional reliability work is finished:
+>
+> - inspect current screens
+> - modernize UI incrementally
+> - improve spacing
+> - typography
+> - colors
+> - navigation
+> - dialogs
+> - settings organization
+> - usability
+> - visual polish
+> - Android 16 compatibility
+> - dark/light theme behavior
+> - accessibility where practical
+>
+> Do not introduce UI redesign while functional audits are still active.
+>
+> ---
+>
+> # 3. MY ROLE / EXPERIENCE
+>
+> I am not an Android developer.
+>
+> I need:
+>
+> - exact commands
+> - beginner-safe instructions
+> - one stage at a time
+> - explanations of what each result means
+> - no assumption that I know Git/Gradle/ADB internals
+> - no large command dumps unless absolutely necessary
+>
+> Claude CLI is used primarily for implementation/debugging.
+>
+> ChatGPT's role is to act as the independent reviewer:
+>
+> 1. inspect source and diffs independently;
+> 2. challenge Claude's assumptions;
+> 3. reject incomplete or over-broad fixes;
+> 4. protect the known-good architecture;
+> 5. approve or reject builds;
+> 6. guide device testing;
+> 7. verify Git status and commit contents;
+> 8. approve commits only after testing;
+> 9. approve pushes only after explicit confirmation.
+>
+> Do not accept Claude's explanation as proof if the code/diff can be inspected directly.
+>
+> ---
+>
+> # 4. OPERATING PRINCIPLES
+>
+> These rules are mandatory.
+>
+> 1. Preserve known-good architecture unless there is concrete evidence to change it.
+> 2. Prefer read-only investigation before making changes.
+> 3. Before destructive/configuration-changing operations:
+>    - determine current state;
+>    - identify dependencies;
+>    - identify rollback;
+>    - explain what will change.
+> 4. Make one controlled change at a time.
+> 5. Validate after every meaningful change.
+> 6. Do not combine unrelated bugs into one branch.
+> 7. Do not commit before:
+>    - source review;
+>    - diff review;
+>    - `git diff --check`;
+>    - successful build;
+>    - relevant device test.
+> 8. Do not push before explicit approval from me.
+> 9. Never merge into `master` unless I explicitly request it.
+> 10. Do not rewrite working areas just for style.
+> 11. Prefer event-driven logic over timers/polling.
+> 12. Avoid broad global locks unless clearly necessary.
+> 13. Do not hide failed state restoration by clearing durable markers.
+> 14. Durable state journals must survive backend failure/process interruption where architecture permits.
+> 15. Always distinguish:
+>     - logically ACTIVE
+>     - physically forced Android deep idle
+>     - owned Doze session
+>     - maintenance transition
+>     - fresh session
+>     - deferred session
+> 16. No secrets/passwords/API keys should ever be printed.
+> 17. Do not commit temporary review `.diff` or `.patch` files.
+>
+> ---
+>
+> # 5. REPOSITORIES / PATHS
+>
+> Upstream:
+>
+> `Akylas/EnforceDoze`
+>
+> My fork:
+>
+> `rmpsdroid/EnforceDoze`
+>
+> Windows repo:
+>
+> `D:\AndroidProjects\EnforceDoze`
+>
+> Package:
+>
+> `com.akylas.enforcedoze.fork`
+>
+> Debug APK:
+>
+> `D:\AndroidProjects\EnforceDoze\app\build\outputs\apk\debug\app-debug.apk`
+>
+> ---
+>
+> # 6. MASTER / BASELINES
+>
+> `master` MUST remain untouched.
+>
+> Known-good master baseline:
+>
+> `a5b7c4acc7a9d8b9f48b906be66c4792dd2cd77b`
+>
+> This was verified after the latest push with:
+>
+> `git rev-parse master`
+>
+> and it still returned exactly:
+>
+> `a5b7c4acc7a9d8b9f48b906be66c4792dd2cd77b`
+>
+> Historical audit baseline:
+>
+> `audit/claude-current`
+>
+> Commit:
+>
+> `fda26b14176480927db22271644a7096bbc9c285`
+>
+> ---
+>
+> # 7. DEVICE
+>
+> Primary real-world validation device:
+>
+> **Samsung Galaxy S26 Ultra**
+>
+> - Android API 36
+> - Samsung One UI
+> - Shizuku is preferred execution backend
+>
+> ADB currently working endpoint:
+>
+> `30.30.30.234:41335`
+>
+> Old endpoint:
+>
+> `30.30.30.234:40189`
+>
+> The old endpoint may still appear as `offline`.
+>
+> Therefore while both endpoints exist, always use:
+>
+> `adb.exe -s 30.30.30.234:41335 ...`
+>
+> Do not use generic `adb.exe shell ...` until only one device exists.
+>
+> ---
+>
+> # 8. COMMAND FORMAT
+>
+> When I am at:
+>
+> `PS D:\AndroidProjects\EnforceDoze>`
+>
+> give me only the PowerShell command.
+>
+> When I am at:
+>
+> `C:\adb>`
+>
+> give me only:
+>
+> `adb.exe ...`
+>
+> Do not repeat the prompt text.
+>
+> Proceed one stage at a time and wait for my output.
+>
+> ---
+>
+> # 9. EXPECTED UNTRACKED REVIEW FILES
+>
+> These four files are intentionally untracked:
+>
+> - `fresh-force-late-settle-review-v1.diff`
+> - `fresh-force-late-settle-review-v2.diff`
+> - `fresh-force-late-settle-review-v3.diff`
+> - `notification-toggle-race-v1-uncommitted.patch`
+>
+> They must NOT be committed unless explicitly requested.
+>
+> A clean project status may therefore still show these four `??` files.
+>
+> ---
+>
+> # 10. IMPORTANT PREVIOUSLY TESTED/PUSHED FIXES
+>
+> These are already tested/pushed and should be treated as known-good history unless new evidence contradicts them.
+>
+> ## Phase 1 wake restoration
+>
+> Commits include:
+>
+> - `5dd3ef...`
+> - `dc0200...`
+> - `a54be7...`
+> - `5c55b03`
+>
+> ---
+>
+> ## Diagnostic logging
+>
+> `b78240449a7a993830f9f7252d3905715accf0a1`
+>
+> ---
+>
+> ## USER_PRESENT handling
+>
+> `e94d85036b2df9e35f43edf74b10a10bc28b6f47`
+>
+> ---
+>
+> ## Call recovery
+>
+> Commits:
+>
+> - `cb788cf`
+> - `2b09fa4`
+> - `113e0651923449a15137944e32a9e818e39c4b57`
+>
+> ---
+>
+> ## Lockscreen sensor behavior
+>
+> `fb2e9b1ff6dd3ace51ca997f067cf12b27701134`
+>
+> ---
+>
+> ## Package lifecycle
+>
+> - `777ae22`
+> - `9e556fda9f5b8e39126f376ab862fb06eb51c917`
+>
+> ---
+>
+> ## Stats crash
+>
+> `65825d718f3aabfb3f421b4cedc9f274f309bee6`
+>
+> ---
+>
+> ## Lockscreen Doze resume
+>
+> Commits include:
+>
+> - `4de3ffd`
+> - `a8fe1d0`
+> - `76861db`
+> - `2212f29`
+> - `b091745b8801d873dfeb35152f2a70a4d536a5f6`
+>
+> ---
+>
+> ## Fresh force-result / PREPARING handling
+>
+> - `ea4c432`
+> - `2855424d2912095e246b47c48875ce78bb6b3e8f`
+>
+> ---
+>
+> ## Shizuku unavailable handling
+>
+> `6b2a34c4686150879ce735f7078ccb53fd6009e4`
+>
+> ---
+>
+> ## Owned-session reforce
+>
+> `70ac1a20111cb379f64ece605ab0939f4ef3e536`
+>
+> This protects async owned reforce against the session ending while the command is still running.
+>
+> ---
+>
+> ## Locked-wake physical release
+>
+> `a9a1227c4ff2522af345340b929e0f79325944ee`
+>
+> Important behavior:
+>
+> When `waitForUnlock=true`:
+>
+> - screen-on while still locked physically UNFORCEs Android;
+> - logical owned session remains intact;
+> - session epoch/generation remains;
+> - if screen turns off again before unlock, the same owned session can reforce;
+> - USER_PRESENT performs final restore/unforce/EXIT.
+>
+> ---
+>
+> ## Late fresh force-idle settlement
+>
+> `dd3ded441cf1dfc9277e23ec165a99c8981ab780`
+>
+> Problem:
+>
+> Fresh shell force-idle could report success while `PowerManager` still reported not idle; older code could clear PREPARING before a deep-idle broadcast arrived ~47 ms later.
+>
+> Fix:
+>
+> - two-signal in-memory settlement latch
+> - exact `entryAttemptToken`
+> - no timer
+> - no polling
+>
+> The stochastic `accepted_pending_confirmation` path was not naturally re-hit during tests, so do not claim deterministic device reproduction.
+>
+> ---
+>
+> ## Android 16 notification Binder fallback
+>
+> `a93541c14594b4fe387544aba307a22c8952fa6c`
+>
+> On Samsung API 36, hidden reflection field:
+>
+> `TRANSACTION_setNotificationsEnabledForPackage`
+>
+> was missing.
+>
+> Framework inspection/decdump showed:
+>
+> - transaction 17 = setter
+> - transaction 19 = getter
+>
+> An exact API-36 Binder transaction fallback was added.
+>
+> Device tested by disabling/restoring Play Store notifications.
+>
+> ---
+>
+> ## Notification command serializer
+>
+> `0a2aefc0b8ffeb5acf357e4ca54c24e63d1fd7df`
+>
+> Reason:
+>
+> Shizuku `executeCommand` launches operations independently; notification disable/enable operations could finish out of order.
+>
+> Added a single-slot latest-wins serializer.
+>
+> Device mechanics validated.
+>
+> The exact opposite-target overlap was not naturally reproduced because commands usually complete in roughly 12–30 ms.
+>
+> ---
+>
+> ## Generic physical state command serializer
+>
+> `8555b9c9d6bd76575aeda60937e9f7d22539de47`
+>
+> Commit message:
+>
+> `fix: serialize generic device state commands`
+>
+> It serialized command ordering for:
+>
+> - mobile data
+> - Wi-Fi
+> - battery saver
+> - airplane mode
+> - Bluetooth
+> - GPS
+>
+> Generic `StateOpSlot` latest-wins model:
+>
+> - per-toggle
+> - one in-flight command
+> - one pending command
+> - newer pending target supersedes older pending target
+> - superseded callback receives `-3`
+> - actual in-flight callback is never fabricated
+> - locks are not held while physical shell work executes
+>
+> Battery Saver device validation passed.
+>
+> Exact opposite-target overlap was not naturally reproduced.
+>
+> Status:
+>
+> **FIXED / TESTED / PUSHED**
+>
+> ---
+>
+> # 11. SENSOR SERIALIZER AUDIT
+>
+> This audit is complete.
+>
+> Relevant state:
+>
+> - `sensorOpLock`
+> - `sensorOpInFlight`
+> - `pendingSensorTarget`
+> - `pendingSensorCallback`
+> - `pendingSensorLabel`
+> - `lockscreenSensorOverrideActive`
+>
+> `requestSensorState` is already latest-wins.
+>
+> Findings:
+>
+> 1. Queued reapply label can become slightly misleading diagnostically, but no physical-state or callback corruption was found.
+> 2. `lockscreenSensorOverrideActive` has a minor synchronization inconsistency, but call-site inspection showed it only controls cancellation diagnostic behavior.
+>
+> Conclusion:
+>
+> **PASS / NO FIX**
+>
+> Do not reopen without new evidence.
+>
+> ---
+>
+> # 12. LATEST COMPLETED FIX — GENERATION-SAFE DEVICE STATE RESTORES
+>
+> Branch:
+>
+> `fix/device-state-generation-v1`
+>
+> Commit:
+>
+> `d369e4e490a0cb5cd02c3eb4d5ee2fdf594ce4f8`
+>
+> Commit message:
+>
+> `fix: make device-state restores generation-safe`
+>
+> Remote branch was pushed and verified.
+>
+> Remote SHA:
+>
+> `d369e4e490a0cb5cd02c3eb4d5ee2fdf594ce4f8`
+>
+> Master remained unchanged.
+>
+> Status:
+>
+> **FIXED / BUILT / DEVICE-TESTED / COMMITTED / PUSHED**
+>
+> ---
+>
+> # 13. GENERATION BUG THAT WAS FIXED
+>
+> Before this fix, physical command serializers prevented old shell commands from landing in the wrong order, but durable restore markers could still be corrupted.
+>
+> Old logic:
+>
+> `DozeStateStore.markApplied(key, previousValue)`
+>
+> stored:
+>
+> - pre-value
+> - applied=true
+> - applied timestamp
+>
+> but no generation.
+>
+> `clearApplied(key)`
+>
+> blindly removed the marker.
+>
+> Example race:
+>
+> 1. Old session restore starts for Wi-Fi.
+> 2. Restore command is async.
+> 3. New session begins.
+> 4. New session calls `markApplied(KEY_WIFI, newPre)`.
+> 5. New generation debt now exists.
+> 6. Old restore callback completes successfully.
+> 7. Old callback blindly clears `KEY_WIFI`.
+> 8. New session's durable restore debt disappears.
+>
+> There was also a maintenance adoption race:
+>
+> - old restore pass enumerates key
+> - maintenance reapply creates newer generation
+> - old pass could snapshot newer generation unless selection/snapshot/dispatch are serialized
+>
+> There was also a fresh-session correctness problem:
+>
+> A truly new session could begin while old restore was still physically completing and read the still-restricted state as the new “pre-Doze” state.
+>
+> Generation alone was therefore insufficient.
+>
+> ---
+>
+> # 14. GENERATION FIX IMPLEMENTATION
+>
+> ## DozeStateStore
+>
+> Added generation storage:
+>
+> `PREFIX_GENERATION = "gen."`
+>
+> `markApplied` is synchronized.
+>
+> Each call increments the existing generation and atomically stores:
+>
+> - previous value
+> - applied marker
+> - generation
+> - applied timestamp
+>
+> Added:
+>
+> `AppliedKeySnapshot`
+>
+> containing:
+>
+> - `key`
+> - `previousValue`
+> - `generation`
+>
+> Added synchronized:
+>
+> `getAppliedKeySnapshot(key, defaultPreviousValue)`
+>
+> Returns null if key is not currently applied.
+>
+> Added synchronized:
+>
+> `clearAppliedIfGeneration(key, expectedGeneration)`
+>
+> Only clears the applied marker if the generation still matches.
+>
+> Generation itself is retained rather than reset.
+>
+> Missing generation defaults to `0` for compatibility with older stored markers.
+>
+> ---
+>
+> # 15. RESTORE INTEGRATION
+>
+> `performRestore` now receives the captured previous value.
+>
+> Generic six physical state keys plus sensors/biometrics restore from the captured snapshot.
+>
+> `onRestoreFinished(key, generation, exitCode)`:
+>
+> - preserves existing special Doze guards for:
+>   - all sensors
+>   - biometrics
+>   - motion
+> - on `exitCode == 0`, calls:
+>   `clearAppliedIfGeneration`
+> - if generation changed:
+>   - logs `RESTORE_SUPERSEDED`
+>   - preserves the newer durable marker
+>
+> ---
+>
+> # 16. DEFAULT PRE-DOZE VALUES
+>
+> Compatibility defaults match old behavior:
+>
+> - AIRPLANE → false
+> - BATTERY_SAVER → false
+> - other generic physical states → true
+>
+> ---
+>
+> # 17. RESTORE SELECTION / MAINTENANCE RACE FIX
+>
+> A first version was rejected because:
+>
+> `getAppliedKeys()`
+>
+> was outside `physicalEntryLock`.
+>
+> That left the maintenance adoption race open.
+>
+> Final approved implementation performs all of these in one uninterrupted `physicalEntryLock` section:
+>
+> 1. `getAppliedKeys`
+> 2. optional key filtering
+> 3. `stateRestoreInFlight.add`
+> 4. generation snapshot
+> 5. restore dispatch
+>
+> The lock is NOT held while waiting for shell completion.
+>
+> This was independently inspected and approved.
+>
+> ---
+>
+> # 18. FRESH-ENTRY DEBT BARRIER
+>
+> Existing:
+>
+> `ownedReforceFreshEntryDeferred`
+>
+> was generalized to:
+>
+> `debtFreshEntryDeferred`
+>
+> Added:
+>
+> `armDebtFreshEntryIntent(reason)`
+>
+> and:
+>
+> `maybeConsumeDebtFreshEntryIntent(reason)`
+>
+> Fresh entry is deferred if either:
+>
+> - owned reforce is unresolved, or
+> - fresh entry is otherwise valid but package/state restore debt remains
+>
+> Debt gate conditions:
+>
+> `hasAppliedSuspendedPackages() || hasPendingRestore()`
+>
+> These gates exist in BOTH actual fresh-session claim paths:
+>
+> 1. tunable fallback before `setInDoze(true)` and fresh journal claim
+> 2. `beginPrivilegedFreshEntry()` before `beginForceIdleAttempt`
+>
+> This is important because it prevents a genuinely new session from capturing still-restricted physical state as its new baseline.
+>
+> ---
+>
+> # 19. MAINTENANCE BEHAVIOR
+>
+> Maintenance transitions are NOT treated as fresh sessions.
+>
+> `MAINTENANCE_RESTORE_KEYS` includes:
+>
+> - AIRPLANE
+> - BLUETOOTH
+> - GPS
+> - WIFI
+> - MOBILE_DATA
+> - BATTERY_SAVER
+> - ALL_SENSORS
+>
+> On deep-idle exit while owned session and not already maintenance:
+>
+> - restore maintenance keys
+> - set maintenance=true
+>
+> On deep-idle re-entry during maintenance:
+>
+> `enterDozeHandleNetwork(context)`
+>
+> is used.
+>
+> The fresh debt gate was intentionally NOT inserted into `actualEnterDozeHandleNetwork`, preserving maintenance semantics.
+>
+> ---
+>
+> # 20. DEBT INTENT CANCELLATION
+>
+> `invalidateDesiredEntry()` clears:
+>
+> - `shizukuFreshEntryDeferred`
+> - `debtFreshEntryDeferred`
+>
+> Therefore deferred fresh entry is cancelled by events such as:
+>
+> - screen on
+> - call
+> - charging policy
+> - custom period changes
+> - session teardown
+>
+> ---
+>
+> # 21. DEBT COMPLETION RETRY
+>
+> Package restoration completion calls:
+>
+> - `maybeRetryDeferredShizukuEntry("package_debt_cleared")`
+> - `maybeConsumeDebtFreshEntryIntent("package_debt_cleared")`
+>
+> State restoration completion calls:
+>
+> - `maybeRetryDeferredShizukuEntry("restore_debt_cleared")`
+> - `maybeConsumeDebtFreshEntryIntent("restore_debt_cleared")`
+>
+> `maybeConsumeDebtFreshEntryIntent`:
+>
+> 1. no-op if flag false
+> 2. clears if service stopping
+> 3. checks owned-reforce unresolved state
+> 4. returns if unresolved
+> 5. returns if package debt remains
+> 6. returns if state debt remains
+> 7. CAS true→false
+> 8. one winner calls:
+>    `reevaluateEntryAfterCleanup()`
+>
+> Even though the method releases `physicalEntryLock` before final debt/CAS checks, source analysis concluded this is safe because actual fresh claim paths recheck critical gates under `physicalEntryLock`.
+>
+> ---
+>
+> # 22. GENERATION FIX BUILD / DEVICE TESTS
+>
+> `git diff --check`:
+>
+> PASS
+>
+> `.\gradlew assembleDebug`:
+>
+> PASS
+>
+> Warnings were unrelated.
+>
+> APK installed successfully.
+>
+> ---
+>
+> # 23. NORMAL BATTERY-SAVER DEVICE TEST
+>
+> Temporary setting:
+>
+> `Turn on Battery Saver in Doze = ON`
+>
+> Entry:
+>
+> - `mState=IDLE`
+> - `mLightState=OVERRIDE`
+> - `low_power=1`
+>
+> Wake/unlock:
+>
+> - `mState=ACTIVE`
+> - `mLightState=ACTIVE`
+> - `low_power=0`
+>
+> Generation-aware logs included:
+>
+> `RESTORE_SUCCESS allSensors exit=0 gen=1`
+>
+> `RESTORE_SUCCESS batterySaver exit=0 gen=1`
+>
+> This confirmed normal generation-aware restore.
+>
+> ---
+>
+> # 24. SHIZUKU FAILURE / DURABLE DEBT TEST
+>
+> While device was in Doze with battery saver enabled:
+>
+> Shizuku server was deliberately killed.
+>
+> When phone woke while Shizuku was unavailable:
+>
+> - package restore failed
+> - state restore failed
+> - markers remained
+>
+> Logs included:
+>
+> `RESTORE_FAILED batterySaver exit=-1, marker kept for retry`
+>
+> `RESTORE_FAILED allSensors exit=-1, marker kept for retry`
+>
+> Package unsuspend also failed.
+>
+> Apps appeared greyed out because the package debt was intentionally unresolved.
+>
+> After Shizuku restarted:
+>
+> - packages unsuspended
+> - apps became enabled again
+> - state debt retried
+> - battery saver returned to 0
+> - current generation succeeded
+>
+> Logs:
+>
+> `RESTORE_SUCCESS allSensors exit=0 gen=3`
+>
+> `RESTORE_SUCCESS batterySaver exit=0 gen=3`
+>
+> This strongly validated:
+>
+> - failed callbacks do not erase debt
+> - journal survives backend failure
+> - retry works
+> - newer generation succeeds
+>
+> The exact old-generation callback/new-generation callback overlap was NOT naturally reproduced.
+>
+> Do not claim it was.
+>
+> ---
+>
+> # 25. FINAL CLEAN REGRESSION
+>
+> Temporary Battery Saver preference was restored to:
+>
+> `turnOnBatterySaverInDoze=false`
+>
+> Normal preference:
+>
+> `waitForUnlock=true`
+>
+> Final clean screen-off cycle:
+>
+> Display confirmed:
+>
+> - `Display State=OFF`
+> - `mScreenState=OFF`
+> - `mActualState=OFF`
+>
+> Device idle:
+>
+> - `mForceIdle=true`
+> - `mState=IDLE`
+> - `mLightState=OVERRIDE`
+>
+> Battery Saver:
+>
+> `0`
+>
+> This proved fresh entry works while battery-saver preference remains off.
+>
+> ---
+>
+> # 26. FINAL CLEAN UNLOCK REGRESSION
+>
+> At first the phone was thought to be unlocked, but Android keyguard still reported:
+>
+> - `showing=true`
+> - `mIsShowing=true`
+>
+> Therefore the apparent failure to leave Doze at that moment was NOT valid evidence of a bug.
+>
+> After the phone was genuinely unlocked, keyguard reported:
+>
+> - `showing=false`
+> - `mIsShowing=false`
+>
+> Final device state became:
+>
+> - `mForceIdle=false`
+> - `mState=ACTIVE`
+> - `mLightState=ACTIVE`
+>
+> Logs showed:
+>
+> `Screen ON received`
+>
+> `HARD_BLOCK_RESTORE_START reason=screen on count=232`
+>
+> `HARD_BLOCK_BATCH unsuspend count=232 exit=0`
+>
+> `Temporarily leaving forced deep idle for the lock screen`
+>
+> Then:
+>
+> `UNLOCK received true`
+>
+> `handleScreenOn`
+>
+> `Last known Doze state: IDLE`
+>
+> `Exiting Doze (owned session), physical state: ACTIVE`
+>
+> and finally:
+>
+> `DOZE_UNFORCE_FINISHED exit=0`
+>
+> Package restore also completed successfully.
+>
+> Therefore final normal regression:
+>
+> **PASS**
+>
+> ---
+>
+> # 27. IMPORTANT CORRECTION ABOUT SHIZUKU RECOVERY BUG
+>
+> During the earlier Shizuku-failure test, a possible bug was observed where:
+>
+> - service logical state appeared ACTIVE
+> - `mForceIdle=true`
+> - Android remained IDLE after Shizuku returned
+>
+> This was initially considered a confirmed:
+>
+> “Shizuku recovered ACTIVE physical leaveDoze durability” bug.
+>
+> However, the later clean regression showed that keyguard state had not been verified during the earlier test.
+>
+> Because `waitForUnlock=true`, being physically awake is not equivalent to being logically unlocked.
+>
+> Therefore:
+>
+> ## Do NOT currently treat this bug as conclusively proven.
+>
+> Instead, the next audit should deliberately and deterministically test:
+>
+> **Shizuku backend failure → screen on → real keyguard unlock → Shizuku recovery → physical leaveDoze behavior**
+>
+> with keyguard state verified at every stage.
+>
+> This remains a deferred/high-priority audit item, but its status should now be:
+>
+> **SUSPECTED / NEEDS DEDICATED REPRODUCTION**
+>
+> not “confirmed”.
+>
+> ---
+>
+> # 28. CURRENT COMPLETED BRANCH
+>
+> Branch:
+>
+> `fix/device-state-generation-v1`
+>
+> Commit:
+>
+> `d369e4e490a0cb5cd02c3eb4d5ee2fdf594ce4f8`
+>
+> Remote verified with:
+>
+> `git ls-remote origin refs/heads/fix/device-state-generation-v1`
+>
+> which returned the same SHA.
+>
+> Working tree afterward contained only the four expected untracked review files.
+>
+> Master remained:
+>
+> `a5b7c4acc7a9d8b9f48b906be66c4792dd2cd77b`
+>
+> No merge into master.
+>
+> ---
+>
+> # 29. NEXT AUDIT ITEM
+>
+> Proceed next with:
+>
+> ## Shizuku recovery while ACTIVE / physical leaveDoze durability
+>
+> But start **read-only**.
+>
+> Do not create a fix branch immediately unless source investigation confirms a defect.
+>
+> The first goal is to inspect:
+>
+> - Shizuku availability callback
+> - what happens on availability transition `false → true`
+> - whether package debt is retried
+> - whether state debt is retried
+> - whether physical Doze exit debt exists
+> - whether logical `isInDoze()` can become false before physical unforce succeeds
+> - whether a failed locked-wake unforce is durably remembered
+> - whether USER_PRESENT later retries physical unforce
+> - whether backend recovery while the screen is already unlocked retries leaveDoze
+> - whether the existing deferred Shizuku mechanism covers entry only, exit only, or both
+> - whether session ownership is already cleared before physical exit succeeds
+> - whether a failed Shizuku exit can become orphaned
+>
+> Do NOT assume the bug exists.
+>
+> First reconstruct the state machine from source.
+>
+> ---
+>
+> # 30. DEDICATED REPRO TEST DESIGN FOR NEXT ITEM
+>
+> If source inspection suggests the bug is possible, test deterministically.
+>
+> Possible controlled sequence:
+>
+> 1. Confirm Shizuku available.
+> 2. Confirm phone ACTIVE and unlocked.
+> 3. Clear logcat.
+> 4. Turn screen off.
+> 5. Confirm display truly OFF.
+> 6. Confirm:
+>    - `mForceIdle=true`
+>    - `mState=IDLE`
+> 7. While still in Doze, kill Shizuku server.
+> 8. Confirm Shizuku unavailable.
+> 9. Wake phone.
+> 10. Check keyguard:
+>     - expect showing=true while locked
+> 11. Observe what EnforceDoze tries to do.
+> 12. Fully unlock phone.
+> 13. Confirm keyguard:
+>     - `showing=false`
+>     - `mIsShowing=false`
+> 14. While Shizuku is still unavailable, observe:
+>     - logical service state
+>     - `mForceIdle`
+>     - deviceidle state
+>     - restore debt
+> 15. Restart Shizuku.
+> 16. Confirm availability true.
+> 17. Observe whether:
+>     - package restore retries
+>     - state restore retries
+>     - physical unforce retries
+> 18. Verify:
+>     - `mForceIdle=false`
+>     - `mState=ACTIVE`
+> 19. If it remains forced:
+>     - capture source logs before manually running `dumpsys deviceidle unforce`
+>
+> Do not infer unlock based on visual appearance.
+>
+> Always verify keyguard state with `dumpsys window policy`.
+>
+> ---
+>
+> # 31. CURRENT DEFERRED AUDIT LIST
+>
+> Continue roughly in this order, but adjust when evidence requires.
+>
+> Already done:
+>
+> - handleScreenOn/session-exit barrier — PASS / NO FIX
+> - notification shell disable/enable race — FIXED / TESTED
+> - generic device-state command reorder — FIXED / TESTED / PUSHED
+> - sensor serializer narrow concurrency — PASS / NO FIX
+> - generic generation races — FIXED / TESTED / PUSHED
+>
+> Next / deferred:
+>
+> 1. Shizuku recovered ACTIVE physical leaveDoze durability — dedicated reproduction needed
+> 2. generic SharedPreferences commit-result handling
+> 3. maintenance async restore/reapply behavior
+> 4. maintenance process-death recovery
+> 5. Shizuku `newProcess` deprecation / Android API behavior
+> 6. stdout/stderr pipe deadlock risk
+> 7. onDestroy async restore / boot timing
+> 8. notification blocklist exact-set correctness
+> 9. biometric pre-state assumptions
+> 10. root orphan processes
+> 11. `getPlayingPackageName` missing callback
+> 12. root child-process survival
+> 13. pre-N tracked release protocol
+> 14. tunable callback absence
+> 15. marker-stuck edge cases
+> 16. PREPARING phantom-boot risk
+>
+> Do not treat this list as immutable. New evidence may insert a higher-priority item.
+>
+> ---
+>
+> # 32. GENERAL COMMAND CONCURRENCY MODEL
+>
+> Shizuku commands can execute in separate threads/processes.
+>
+> Never assume command dispatch order equals completion order.
+>
+> Known serializers now exist for:
+>
+> - notification state
+> - generic physical device-state toggles
+> - sensors
+>
+> When auditing a new async path, always ask:
+>
+> - Can operation A and B overlap?
+> - Can stale A complete after newer B?
+> - Does callback A mutate durable state belonging to B?
+> - Is there a generation/token/session check?
+> - Is there durable debt if backend execution fails?
+> - Can the service claim logical success before physical success?
+> - Can process death lose the unresolved physical action?
+>
+> ---
+>
+> # 33. DEVICE-STATE KEYS
+>
+> Generic physical state commands include:
+>
+> ## Mobile data
+>
+> `svc data`
+>
+> ## Wi-Fi
+>
+> `svc wifi`
+>
+> with pre-Q WifiManager fallback
+>
+> ## Battery saver
+>
+> `settings put global low_power`
+>
+> ## Airplane mode
+>
+> `settings put global airplane_mode_on ...`
+>
+> plus:
+>
+> `am broadcast -a android.intent.action.AIRPLANE_MODE --ez state ...`
+>
+> ## Bluetooth
+>
+> `svc bluetooth`
+>
+> ## GPS/location
+>
+> `settings put secure location_mode`
+>
+> These now use generic state serialization and generation-safe restore markers.
+>
+> ---
+>
+> # 34. NOTIFICATION API-36 SPECIAL CASE
+>
+> On Samsung Android 16/API 36:
+>
+> reflection lookup of hidden transaction constants fails.
+>
+> Fallback Binder transaction is intentionally restricted to exact Android 16/API 36 behavior.
+>
+> Do not generalize that transaction number to arbitrary Android versions without inspecting framework behavior first.
+>
+> ---
+>
+> # 35. BUILD WARNINGS
+>
+> Existing warnings include:
+>
+> - Gradle restricted native `System::load`
+> - deprecated Media APIs in NotificationService
+> - unsafe operations in DozeTunableHandler
+> - deprecated Gradle features
+>
+> These did not block build.
+>
+> Do not mix warning cleanup into functional race-fix branches unless warning is directly relevant to the current audit item.
+>
+> ---
+>
+> # 36. GIT WORKFLOW
+>
+> For every new fix:
+>
+> 1. verify current branch/head
+> 2. create a narrow feature branch
+> 3. inspect source
+> 4. let Claude implement only after architecture is understood
+> 5. inspect diff independently
+> 6. run:
+>    `git diff --check`
+> 7. build:
+>    `.\gradlew assembleDebug`
+> 8. install APK
+> 9. device-test relevant behavior
+> 10. restore temporary preferences
+> 11. verify regression
+> 12. inspect:
+>    `git status --short`
+> 13. stage only intended files
+> 14. run:
+>    `git diff --cached --check`
+> 15. run:
+>    `git diff --cached --stat`
+> 16. wait for my explicit:
+>    `approve commit`
+> 17. commit
+> 18. verify status/head
+> 19. wait for explicit:
+>    `approve push`
+> 20. push branch
+> 21. verify remote SHA
+> 22. verify master unchanged
+>
+> Never commit review patch files.
+>
+> Never merge feature branch into master unless I explicitly request it.
+>
+> ---
+>
+> # 37. TEST RESULT TERMINOLOGY
+>
+> Use precise labels.
+>
+> Examples:
+>
+> ### Fully reproduced
+>
+> `REPRODUCED / FIXED / DEVICE-TESTED`
+>
+> Only use when actual failure timing was observed.
+>
+> ### Structurally proven, timing not naturally reproduced
+>
+> Use wording such as:
+>
+> `PASS — implementation and device mechanics validated. Exact opposite-target in-flight overlap not naturally reproduced.`
+>
+> ### Source-only
+>
+> `SOURCE REVIEW PASS`
+>
+> ### Built
+>
+> `BUILD PASS`
+>
+> ### Device tested
+>
+> `DEVICE TEST PASS`
+>
+> Do not exaggerate evidence.
+>
+> ---
+>
+> # 38. NORMAL USER SETTINGS TO PRESERVE
+>
+> Important known normal setting:
+>
+> `waitForUnlock=true`
+>
+> Temporary testing setting:
+>
+> `turnOnBatterySaverInDoze`
+>
+> was restored to:
+>
+> `false`
+>
+> Notification blocklist currently includes Play Store as part of prior notification testing.
+>
+> Do not casually change/remove existing blocklist data.
+>
+> ---
+>
+> # 39. IMPORTANT ANDROID TESTING RULE
+>
+> Samsung lockscreen/AOD behavior can be misleading.
+>
+> Never assume:
+>
+> - screen is off because it looks black;
+> - screen is unlocked because UI appears;
+> - Android is ACTIVE because display is awake.
+>
+> Use actual system state.
+>
+> Useful checks:
+>
+> Display:
+>
+> `adb.exe -s 30.30.30.234:41335 shell dumpsys display | findstr /I /C:"Display State=" /C:"mScreenState=" /C:"mActualState="`
+>
+> Keyguard:
+>
+> `adb.exe -s 30.30.30.234:41335 shell dumpsys window policy | findstr /I "keyguard showing occluded"`
+>
+> Doze:
+>
+> `adb.exe -s 30.30.30.234:41335 shell dumpsys deviceidle | findstr /I "mForceIdle mState="`
+>
+> Battery saver:
+>
+> `adb.exe -s 30.30.30.234:41335 shell settings get global low_power`
+>
+> Power/wake state may also be inspected with `dumpsys power`, but Samsung/AOD interpretation requires care.
+>
+> ---
+>
+> # 40. LOGGING
+>
+> For focused app logs:
+>
+> `adb.exe -s 30.30.30.234:41335 logcat -d -s ForceDozeService:I ShizukuHandler:I *:S`
+>
+> Useful existing diagnostic strings include:
+>
+> - `Screen OFF received`
+> - `Screen ON received`
+> - `UNLOCK received`
+> - `Entering Doze`
+> - `Now forced in to deep idle mode`
+> - `ACTION_DEVICE_IDLE_MODE_CHANGED`
+> - `Current (Deep) state`
+> - `RESTORE_PENDING`
+> - `RESTORE_SUCCESS`
+> - `RESTORE_FAILED`
+> - `RESTORE_SUPERSEDED`
+> - `HARD_BLOCK_RESTORE_START`
+> - `HARD_BLOCK_BATCH`
+> - `DOZE_UNFORCE_FINISHED`
+> - Shizuku availability changes
+>
+> ---
+>
+> # 41. HOW TO RESPOND TO ME
+>
+> Be direct and structured.
+>
+> I am not a developer.
+>
+> Give:
+>
+> - one stage at a time
+> - exact command
+> - what we expect
+> - brief explanation of significance
+>
+> Wait for my pasted output before proceeding.
+>
+> Do not dump ten future commands at once during device testing.
+>
+> When source investigation is needed, tell me what to ask Claude or what exact command to run.
+>
+> Independently inspect Claude's changes before approving them.
+>
+> Do not assume implementation correctness because it builds.
+>
+> Do not commit/push without explicit approval.
+>
+> ---
+>
+> # 42. WHERE TO START IN THIS NEW CHAT
+>
+> Start with the next audit item:
+>
+> ## Shizuku recovery while ACTIVE / physical leaveDoze durability
+>
+> But **do not modify code yet**.
+>
+> Begin with a read-only source audit.
+>
+> First verify current Git branch and working-tree status.
+>
+> Then inspect all code involved in:
+>
+> - Shizuku availability callback
+> - Shizuku binder death
+> - availability recovery
+> - screen-on path
+> - USER_PRESENT/unlock path
+> - `leaveDoze`
+> - `exitDoze`
+> - physical unforce callback
+> - owned-session teardown
+> - Shizuku deferred intents
+> - restoration debt retry
+>
+> The goal is to answer:
+>
+> > Can the app become logically ACTIVE while Android remains physically `mForceIdle=true` after Shizuku was unavailable during exit, and if so, what exact state transition loses the retry obligation?
+>
+> Do not assume the answer is yes.
+>
+> Prove or disprove it from source first.
+>
+> Only after source analysis should we design a dedicated deterministic device test.
+>
+> If a bug is proven, create a new narrow branch, likely something like:
+>
+> `fix/shizuku-recovery-leave-doze-v1`
+>
+> but do not create it until the defect is confirmed.
+>
+> ---
+>
+> # 43. LONG-TERM RELEASE PLAN — DO NOT FORGET
+>
+> After all audits/fixes are complete:
+>
+> 1. freeze functional behavior
+> 2. run full regression suite
+> 3. review all branches/fixes
+> 4. decide final integration strategy
+> 5. complete full application rebranding
+> 6. review package/application identity
+> 7. redesign icon and visual assets
+> 8. improve UI/settings organization
+> 9. update donation/support page
+> 10. establish ethical upstream attribution
+> 11. preserve license/legal notices
+> 12. prepare public GitHub repository
+> 13. build polished README
+> 14. add screenshots
+> 15. add architecture notes
+> 16. add installation guides
+> 17. document Shizuku setup
+> 18. document Android 16/Samsung specifics
+> 19. publish changelog
+> 20. publish audit/fix history
+> 21. document known limitations
+> 22. credit original developers/contributors
+> 23. prepare release notes
+> 24. create GitHub Releases
+> 25. publish APK/release artifacts only after final signing/release process is agreed
+> 26. continue UI polishing only after reliability baseline is frozen
+>
+> The public release should look like a maintained, professional fork—not just an accumulation of patches.
+>
+> ---
+>
+> Treat this entire prompt as the project handover state.
+>
+> Start with **read-only Git/source verification for the Shizuku recovery / physical leaveDoze audit**, one step at a time.
+
+---
+
+# PART III — HISTORICAL SOURCE SNAPSHOT B
+
+The following is the later/alternate continuation snapshot retained for lossless historical reference.
+
+It contains additional detailed context around the late fresh force-idle settlement work, locked-wake release test design, old build environment issue, and then-current device-test sequence.
+
+**It is historical. PART I supersedes stale “current state,” “no push,” “master unchanged,” ADB endpoint, and next-step statements inside this quoted snapshot.**
+
+> I am continuing a long Android EnforceDoze fork audit/hardening project from a previous ChatGPT conversation.
+>
+> IMPORTANT: Treat everything below as authoritative continuity context. Do not make me restart the investigation or repeat completed work.
+>
+> I am NOT a developer. Give me exact, beginner-safe commands, preferably one controlled stage at a time.
+>
+> Claude CLI is doing implementation/debugging work.
+> ChatGPT's role is to independently inspect actual source/diffs, challenge Claude's reasoning, approve or reject changes, guide commits/builds/device tests, and preserve the known-good architecture.
+>
+> Do not accept Claude reports as proof when an actual diff/source file can be inspected.
+>
+> ============================================================
+> PROJECT / REPOSITORY
+> ============================================================
+>
+> Upstream:
+>
+>     Akylas/EnforceDoze
+>
+> User fork:
+>
+>     rmpsdroid/EnforceDoze
+>
+> Repository on Windows:
+>
+>     D:\AndroidProjects\EnforceDoze
+>
+> Upstream/default branch:
+>
+>     master
+>
+> CRITICAL RULE:
+>
+>     master must remain untouched.
+>
+> Upstream master known baseline SHA:
+>
+>     a5b7c4acc7a9d8b9f48b906be66c4792dd2cd77b
+>
+> Custom audit baseline:
+>
+>     audit/claude-current
+>     fda26b14176480927db22271644a7096bbc9c285
+>
+> ============================================================
+> WORKFLOW RULES
+> ============================================================
+>
+> 1. Preserve upstream architecture/functionality unless there is a concrete bug.
+> 2. Prefer narrow fixes, not redesigns.
+> 3. Read-only investigation before changes.
+> 4. One controlled change at a time.
+> 5. Validate after every meaningful change.
+> 6. Do not push until explicitly approved.
+> 7. Do not merge into master.
+> 8. Do not casually rewrite working code.
+> 9. No broad privacy/security claims without audit.
+> 10. Claude implementation reports are not proof. Inspect actual diff/source where possible.
+>
+> For Windows PowerShell commands, when I am already at:
+>
+>     PS D:\AndroidProjects\EnforceDoze>
+>
+> give only the command itself.
+>
+> For ADB commands, when I am already at:
+>
+>     C:\adb>
+>
+> give only:
+>
+>     adb.exe ...
+>
+> Do not duplicate the prompt text.
+>
+> ============================================================
+> DEVICE / TEST ENVIRONMENT
+> ============================================================
+>
+> Real test device:
+>
+>     Samsung Galaxy S26 Ultra
+>     Android API 36
+>     One UI
+>     Shizuku preferred
+>
+> Wireless ADB endpoint:
+>
+>     30.30.30.234:37159
+>
+> Package:
+>
+>     com.akylas.enforcedoze.fork
+>
+> Debug APK:
+>
+>     D:\AndroidProjects\EnforceDoze\app\build\outputs\apk\debug\app-debug.apk
+>
+> Installed app version before latest work:
+>
+>     versionCode=86
+>     versionName=1.10.2
+>     minSdk=23
+>     targetSdk=36
+>
+> Current phone instruction until build verification is complete:
+>
+>     screen ON
+>     unlocked
+>     home screen visible
+>
+> Do not start another screen-off/deviceidle test until the committed-tree
+> build passes and we explicitly begin the controlled device test.
+>
+> ============================================================
+> IMPORTANT EXISTING COMMIT HISTORY
+> ============================================================
+>
+> Known progression:
+>
+> Phase1 wake restoration:
+>     5dd3ef...
+>     dc0200...
+>     a54be7...
+>     5c55b0...
+>
+> Diagnostic logging:
+>     b78240449a7a993830f9f7252d3905715accf0a1
+>
+> USER_PRESENT:
+>     e94d85036b2df9e35f43edf74b10a10bc28b6f47
+>
+> Call recovery:
+>     cb788cf...
+>     2b09fa...
+>     113e0651923449a15137944e32a9e818e39c4b57
+>
+> Lockscreen sensors:
+>     fb2e9b1ff6dd3ace51ca997f067cf12b27701134
+>
+> Package lifecycle:
+>     777ae225...
+>     9e556fda9f5b8e39126f376ab862fb06eb51c917
+>
+> Stats crash:
+>     65825d718f3aabfb3f421b4cedc9f274f309bee6
+>
+> Lockscreen Doze resume series:
+>     4de3ffd9...
+>     a8fe1d01...
+>     76861db4...
+>     2212f292...
+>     b091745b8801d873dfeb35152f2a70a4d536a5f6
+>
+> Fresh force-result / PREPARING work:
+>     ea4c4327f05179fcc90ffb15d2e102629b099271
+>     2855424d2912095e246b47c48875ce78bb6b3e8f
+>
+> Shizuku-unavailable fix:
+>     6b2a34c4686150879ce735f7078ccb53fd6009e4
+>
+> Owned-session reforce:
+>     70ac1a20111cb379f64ece605ab0939f4ef3e536
+>
+> Locked-wake physical release:
+>     a9a1227c4ff2522af345340b929e0f79325944ee
+>
+> CURRENT LATEST COMMIT:
+>
+>     dd3ded441cf1dfc9277e23ec165a99c8981ab780
+>
+> Branch:
+>
+>     fix/fresh-force-late-settle-v1
+>
+> Parent:
+>
+>     a9a1227c4ff2522af345340b929e0f79325944ee
+>
+> Commit subject:
+>
+>     fix: handle late fresh force-idle settlement
+>
+> Diffstat:
+>
+>     ForceDozeService.java only
+>     288 insertions(+)
+>     29 deletions(-)
+>
+> ============================================================
+> CURRENT BRANCH STATUS
+> ============================================================
+>
+> The latest commit was made successfully:
+>
+>     dd3ded441cf1dfc9277e23ec165a99c8981ab780
+>
+> Parent verified exactly:
+>
+>     a9a1227c4ff2522af345340b929e0f79325944ee
+>
+> Current branch:
+>
+>     fix/fresh-force-late-settle-v1
+>
+> Only these files remain untracked:
+>
+>     fresh-force-late-settle-review-v1.diff
+>     fresh-force-late-settle-review-v2.diff
+>     fresh-force-late-settle-review-v3.diff
+>
+> They are review artifacts only and MUST NOT be committed.
+>
+> No push has occurred.
+>
+> ============================================================
+> WHY THIS LATEST FIX EXISTS
+> ============================================================
+>
+> A real-device fresh-entry race was demonstrated.
+>
+> At approximately:
+>
+>     10:06:20
+>
+> diagnostics showed:
+>
+>     force_idle_attempt_start mode=fresh token=10
+>     force_idle_deep exit=0
+>
+> Then immediate verification said:
+>
+>     idleMode=false
+>
+> and old code classified:
+>
+>     semantic_rejection
+>
+> and cleared PREPARING.
+>
+> But logcat proved DeviceIdleController had actually said:
+>
+>     Now forced in to deep idle mode
+>
+> Exact real device evidence:
+>
+>     08-28 10:06:20.244 ShizukuHandler:
+>     Now forced in to deep idle mode
+>
+>     08-28 10:06:20.259 ForceDozeService:
+>     Now forced in to deep idle mode
+>
+> Then only about 47 ms after the incorrect abort:
+>
+>     device_idle_mode_changed_ignored
+>         reason=no_owned_session
+>         deepIdle=true
+>
+> Result while phone later awake/unlocked:
+>
+>     inDoze=false
+>     entryPending=false
+>     ownedReforcePending=false
+>
+> but:
+>
+>     mForceIdle=true
+>     mState=IDLE
+>     mLightState=OVERRIDE
+>
+> That was an orphan physical force.
+>
+> We manually cleaned it with:
+>
+>     adb shell dumpsys deviceidle unforce
+>
+> and confirmed:
+>
+>     mForceIdle=false
+>     mState=ACTIVE
+>     mLightState=ACTIVE
+>
+> with durable flags still false.
+>
+> ============================================================
+> ROOT CAUSE
+> ============================================================
+>
+> The force-idle shell command can finish successfully and print:
+>
+>     Now forced in to deep idle mode
+>
+> before:
+>
+>     PowerManager.isDeviceIdleMode()
+>
+> has become true.
+>
+> Therefore:
+>
+>     exit=0 + immediate idle=false
+>
+> is NOT sufficient evidence of semantic refusal.
+>
+> Additionally, Shizuku can report a nonzero/-1 outcome after a command
+> may already have partially executed, so:
+>
+>     exit!=0 + immediate idle=false
+>
+> also cannot safely clear PREPARING without conservative cleanup.
+>
+> ============================================================
+> LATEST FIX DESIGN — dd3ded4
+> ============================================================
+>
+> Source review of the final v3 diff PASSED before commit.
+>
+> Only:
+>
+>     ForceDozeService.java
+>
+> was changed.
+>
+> No new durable key.
+>
+> A two-signal in-memory latch was added, guarded by:
+>
+>     physicalEntryLock
+>
+> Fields conceptually:
+>
+>     pendingEntryConfirmToken
+>     pendingEntryCommandAccepted
+>     pendingEntryIdleObserved
+>
+> A fresh privileged session commits only when BOTH are established for
+> the same exact current entryAttemptToken:
+>
+>     command accepted
+>     physical deep idle observed
+>
+> The durable:
+>
+>     KEY_ENTRY_PENDING
+>
+> remains the process-death record.
+>
+> ============================================================
+> COMMAND RESULT CLASSIFICATION
+> ============================================================
+>
+> Final intended verdict order:
+>
+> 1.
+>
+>     command completed
+>     AND explicit controller REFUSED
+>
+>     -> semantic_rejection
+>
+> Explicit refusal takes precedence over an idle sample so we never claim
+> an unrelated/natural idle state.
+>
+> 2.
+>
+>     command completed
+>     AND physically idle
+>
+>     -> verified_success
+>
+> 3.
+>
+>     command completed
+>     AND explicit controller SUCCESS
+>     AND immediate idle=false
+>
+>     -> accepted_pending_confirmation
+>
+> Keep PREPARING.
+> Wait for framework deep-idle observation.
+>
+> 4.
+>
+>     command completed
+>     but output unknown
+>     and idle=false
+>
+>     -> conservative physical UNFORCE cleanup
+>
+> 5.
+>
+>     command did not complete / exit!=0
+>
+>     -> transport_outcome_uncertain
+>     -> conservative physical UNFORCE cleanup
+>     -> KEY_ENTRY_PENDING must remain until unforce succeeds
+>
+> Explicit controller success recognised:
+>
+>     Now forced in to deep idle mode
+>
+> also tolerant of:
+>
+>     Now forced into deep idle mode
+>
+> Explicit refusal includes:
+>
+>     Unable to go deep idle
+>
+> and existing:
+>
+>     stopped at ...
+>
+> Unknown OEM wording is NOT treated as success.
+>
+> ============================================================
+> TWO-SIGNAL ORDERING
+> ============================================================
+>
+> Callback first:
+>
+>     shell callback:
+>         accepted
+>         idle=false
+>
+>     -> commandAccepted=true
+>     -> keep PREPARING
+>     -> no inDoze
+>     -> no epoch
+>     -> no generation
+>     -> no ENTER
+>
+> later:
+>
+>     ACTION_DEVICE_IDLE_MODE_CHANGED deepIdle=true
+>
+>     -> idleObserved=true
+>     -> both signals true
+>     -> commit once
+>
+> Broadcast first:
+>
+>     deepIdle=true arrives first
+>
+>     -> idleObserved=true only
+>     -> DO NOT commit yet
+>
+> later shell callback:
+>
+>     if command accepted
+>         -> both signals true -> commit once
+>
+>     if refusal/transport uncertainty
+>         -> never claim the earlier broadcast
+>         -> abort or conservative cleanup
+>
+> ============================================================
+> IMPORTANT BARRIER INVARIANT
+> ============================================================
+>
+> During final source review we found and fixed another race.
+>
+> ALL three fresh successful commit routes now perform:
+>
+>     commitDozeSession()
+>     phase/latch transition
+>     commitFreshDozeSession(...)
+>
+> while still holding:
+>
+>     physicalEntryLock
+>
+> Routes:
+>
+> 1. immediate verified success
+> 2. broadcast-first then callback completes pair
+> 3. callback-first then idle broadcast completes pair
+>
+> This prevents SCREEN_ON/call/etc. from seeing:
+>
+>     inDoze=true
+>
+> before the fresh session has actually been fully established.
+>
+> This was independently inspected in:
+>
+>     fresh-force-late-settle-review-v3.diff
+>
+> and source review was PASS.
+>
+> ============================================================
+> CANCELLATION / RECOVERY
+> ============================================================
+>
+> If a command has already reported acceptance but physical confirmation
+> is still pending and SCREEN_ON/call/charging/custom-period/etc.
+> cancels the entry:
+>
+>     move to PHASE_CLEANING_UP
+>     real corrective UNFORCE
+>     keep KEY_ENTRY_PENDING until cleanup succeeds
+>
+> Process death does NOT reconstruct the in-memory latch.
+>
+> Existing durable recovery remains:
+>
+>     entryPending=true
+>         -> conservative UNFORCE
+>         -> checked clear
+>         -> ordinary policy
+>
+> No timers.
+> No Thread.sleep.
+> No polling.
+> No arbitrary 100/500/1000 ms delay.
+> No Samsung-specific workaround.
+> No min_time_to_alarm changes.
+> No alarm cancellation.
+> No fake ENTER/EXIT.
+>
+> ============================================================
+> LOCKED-WAKE RELEASE WORK — a9a1227
+> ============================================================
+>
+> Prior commit:
+>
+>     a9a1227c4ff2522af345340b929e0f79325944ee
+>
+> subject:
+>
+>     fix: release forced idle during owned lockscreen wakes
+>
+> Its purpose:
+>
+> When waitForUnlock=true and a committed owned Doze session wakes only
+> to the lock screen:
+>
+>     preserve same logical session
+>     preserve same epoch
+>     preserve same package generation
+>     temporarily restore lockscreen-sensitive restrictions
+>     physically UNFORCE deep idle
+>     no EXIT
+>     no new ENTER
+>     no new generation
+>
+> If the screen goes OFF again without USER_PRESENT:
+>
+>     reapply temporary restrictions
+>     keep same epoch/generation
+>     perform genuine owned-session physical reforce
+>
+> USER_PRESENT finally:
+>
+>     restores
+>     unforces
+>     one EXIT
+>     ends epoch once
+>
+> ============================================================
+> REAL-DEVICE PASS ALREADY OBTAINED FOR a9a1227
+> ============================================================
+>
+> Earlier real-device test proved:
+>
+> Fresh entry:
+>
+>     force_idle_deep exit=0
+>     verified success
+>     session_epoch_started epoch=2
+>     package generation gen=153
+>
+> Locked SCREEN_ON:
+>
+>     screen_on waitForUnlock=true locked=true
+>     temporary package unsuspend same gen=153
+>     sensor restore
+>
+> Physical-release path:
+>
+>     lockscreen_release_start epoch=2 plan=shizuku
+>     lockscreen_unforce exit=0
+>     lockscreen_release_result
+>         idleMode=false
+>         lifecycle=locked_wake
+>
+> Then USER_PRESENT happened before SCREEN_OFF could test reforce.
+>
+> Final exit:
+>
+>     same gen=153
+>     session_epoch_ended epoch=2
+>     DOZE_UNFORCE_FINISHED exit=0
+>     final package unsuspend success
+>     sensor restore success
+>
+> So already PASS:
+>
+>     fresh entry
+>     locked SCREEN_ON physical release
+>     same logical epoch
+>     same package generation
+>     USER_PRESENT final exit
+>
+> Still NOT directly tested:
+>
+>     lockscreen visible
+>     -> screen times out OFF while still locked
+>     -> same-session genuine owned reforce
+>
+> That test was paused when the fresh late-settle orphan bug was discovered.
+>
+> ============================================================
+> OWNED-SESSION REFORCE — 70ac1a2
+> ============================================================
+>
+> Commit:
+>
+>     70ac1a20111cb379f64ece605ab0939f4ef3e536
+>
+> This protects async owned-session reforce against its session ending
+> while the force command is in flight.
+>
+> It has:
+>
+>     durable ownedReforcePending marker
+>     owned reforce phases
+>     epoch identity
+>     conservative stale cleanup
+>     no fallback for NEW Doze
+>     recovery-first handling
+>
+> Do not redesign it during the current test unless evidence specifically
+> shows a problem.
+>
+> ============================================================
+> FORK FEATURES THAT MUST BE PRESERVED
+> ============================================================
+>
+> 1. Rebranding / dual install
+>    - namespace base
+>    - .fork application ID
+>    - manifest ${applicationId}
+>    - FGS specialUse
+>    - shell grants and whitelist use dynamic package ID
+>    - explicit prefs target .fork
+>
+> 2. Settings persistence
+>    - SettingsActivity reload always notifies service
+>    - execution mode committed before reload
+>    - multiple Shizuku listeners
+>    - destructive preference writes removed
+>
+> 3. SettingsBackup.java
+>    - SAF Create/Open
+>    - background import/export
+>    - one reload after import
+>
+> 4. Multi-select package chooser
+>    - search
+>    - system/user filter
+>    - select all
+>    - batch result
+>    - labels background
+>    - icons lazy
+>    - BlockApps batch commits once
+>
+> 5. DozeStateStore durable state
+>    - private prefs: enforcedoze_doze_state
+>    - pre/applied keys for airplane/BT/GPS/WiFi/data/battery saver/sensors/
+>      biometrics/motion/hotspot
+>    - inDoze
+>    - synchronous commit
+>    - package generation/session ownership
+>    - entryPending
+>    - ownedReforcePending
+>
+> 6. BootCompleteReceiver recovery
+>    - device-state pending
+>    - package-only pending
+>    - fresh PREPARING recovery
+>    - owned-reforce recovery
+>
+> 7. ForceDoze fixes
+>    - fast getDeviceIdleState
+>    - package shell batch/loop
+>    - durable state journal
+>    - Shizuku fixes
+>
+> 8. ShizukuHandler
+>    - binder listeners
+>    - ~2s wait
+>    - multiple listeners
+>    - reflective Shizuku.newProcess
+>    - per-command Java thread/process
+>
+> ============================================================
+> KNOWN DEFERRED ISSUES — DO NOT RANDOMLY MIX INTO CURRENT FIX
+> ============================================================
+>
+> Deferred separately:
+>
+> - final handleScreenOn/session-exit barrier cleanup
+> - notification shell disable/enable race
+> - general device-state command reorder
+> - sensor serializer narrow concurrency
+> - generic generation races
+> - generic SharedPreferences commit results
+> - maintenance async restore/reapply
+> - maintenance process death
+> - Shizuku recovered ACTIVE physical leaveDoze durability
+> - Shizuku newProcess deprecation/API14
+> - stdout/stderr pipe deadlock
+> - onDestroy async restore/boot timing
+> - notification blocklist exact-set
+> - biometric pre-state assumed
+> - root orphan
+> - getPlayingPackageName missing callback
+> - root child survival
+> - pre-N tracked release protocol absent
+> - tunable callback absent
+> - marker-stuck edge cases
+> - PREPARING phantom boot risk
+>
+> Do not expand the current change into these.
+>
+> ============================================================
+> CURRENT BUILD SITUATION
+> ============================================================
+>
+> After committing dd3ded4, I ran:
+>
+>     .\gradlew.bat assembleDebug
+>
+> It failed BEFORE compilation because Gradle used:
+>
+>     C:\Program Files (x86)\Java\jre1.8.0_421\bin\java.exe
+>
+> Error:
+>
+>     Could not reserve enough space for 2097152KB object heap
+>
+> This is the already-known Windows 32-bit Java environment problem, NOT
+> yet evidence of a source-code/build failure.
+>
+> The intended fix is to use Android Studio's 64-bit JBR for this
+> PowerShell session, not change Windows globally.
+>
+> Expected Android Studio JBR path:
+>
+>     C:\Program Files\Android\Android Studio\jbr
+>
+> Previous ChatGPT had just asked me to check:
+>
+>     Test-Path "C:\Program Files\Android\Android Studio\jbr\bin\java.exe"
+>
+> and, if True:
+>
+>     & "C:\Program Files\Android\Android Studio\jbr\bin\java.exe" -version
+>
+> The new chat should continue from build-environment verification.
+>
+> ============================================================
+> WHAT I WILL PASTE NEXT
+> ============================================================
+>
+> I will paste the outputs of these four commands:
+>
+> 1.
+>
+>     java -version
+>
+> 2.
+>
+>     .\gradlew.bat --version
+>
+> 3.
+>
+>     .\gradlew.bat assembleDebug
+>
+> 4.
+>
+>     git status --short
+>
+> Interpret them carefully.
+>
+> If Gradle is still using 32-bit Java, guide me to set temporary
+> PowerShell-session JAVA_HOME/PATH to:
+>
+>     C:\Program Files\Android\Android Studio\jbr
+>
+> without making a permanent/global Windows change.
+>
+> Likely temporary PowerShell form, but verify based on the outputs:
+>
+>     $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+>     $env:Path = "$env:JAVA_HOME\bin;$env:Path"
+>
+> Then verify:
+>
+>     java -version
+>     .\gradlew.bat --version
+>
+> before rebuilding.
+>
+> Do not amend or recreate dd3ded4 merely because the first build used
+> the wrong JVM.
+>
+> ============================================================
+> WHAT HAPPENS AFTER BUILD PASS
+> ============================================================
+>
+> Once the COMMITTED TREE build passes:
+>
+> 1. Verify commit still:
+>
+>        dd3ded441cf1dfc9277e23ec165a99c8981ab780
+>
+> 2. Verify parent still:
+>
+>        a9a1227c4ff2522af345340b929e0f79325944ee
+>
+> 3. Verify only review .diff files are untracked, unless Gradle created
+>    something like:
+>
+>        .kotlin/
+>
+>    If .kotlin/ appears, remove the generated folder rather than changing
+>    .gitignore unless there is a concrete reason.
+>
+> 4. Do NOT push yet.
+>
+> 5. Then guide installation of the newly built debug APK on:
+>
+>        30.30.30.234:37159
+>
+> 6. Preserve app data/settings using:
+>
+>        adb.exe -s 30.30.30.234:37159 install -r "D:\AndroidProjects\EnforceDoze\app\build\outputs\apk\debug\app-debug.apk"
+>
+> 7. Before testing, establish a clean baseline:
+>
+>        phone unlocked
+>        home screen visible
+>        screen ON
+>
+>    and inspect:
+>
+>        mForceIdle
+>        mState
+>        mLightState
+>
+>    plus:
+>
+>        inDoze
+>        entryPending
+>        ownedReforcePending
+>
+> Expected clean baseline:
+>
+>        mForceIdle=false
+>        mState=ACTIVE
+>        mLightState=ACTIVE
+>
+>        inDoze=false
+>        entryPending=false
+>        ownedReforcePending=false
+>
+> If not clean, STOP and investigate before screen-off testing.
+>
+> ============================================================
+> REAL-DEVICE TEST PRIORITY AFTER BUILD
+> ============================================================
+>
+> First priority is to prove dd3ded4 fixes the fresh late-settle bug.
+>
+> We previously saw:
+>
+>     controller SUCCESS text
+>     immediate idle=false
+>     ~47 ms later deepIdle=true
+>
+> The desired new behavior is:
+>
+>     force_idle_result
+>         verdict=accepted_pending_confirmation
+>         controllerResult=success
+>         idleMode=false
+>
+> then:
+>
+>     entry_awaiting_idle_confirmation
+>
+> then later deep-idle broadcast:
+>
+>     entry_committed
+>         confirmedBy=idle_broadcast
+>
+> and ONLY THEN:
+>
+>     logical session
+>     epoch
+>     ENTER
+>     package generation/restrictions
+>
+> At no point should we again see:
+>
+>     semantic_rejection
+>
+> for controller SUCCESS text merely because the immediate PM sample is
+> false.
+>
+> And at no point should we end up:
+>
+>     inDoze=false
+>     entryPending=false
+>     ownedReforcePending=false
+>
+> while:
+>
+>     mForceIdle=true
+>
+> That combination is the orphan regression and is a blocker.
+>
+> ============================================================
+> SECOND REAL-DEVICE TEST AFTER FRESH LATE-SETTLE PASS
+> ============================================================
+>
+> Resume the paused a9a1227 same-session lockscreen reforce test.
+>
+> Sequence:
+>
+> A. Clean unlocked baseline, screen ON.
+>
+> B. Turn screen OFF.
+>    Wait about 15 sec.
+>    Confirm fresh owned Doze session.
+>
+> C. Press power once.
+>    Show lock screen.
+>    DO NOT unlock.
+>
+> Expected while screen ON + still LOCKED:
+>
+>     mForceIdle=false
+>     mState=ACTIVE
+>     mLightState=ACTIVE
+>
+> or equivalent physically unforced state.
+>
+> Diagnostics should show:
+>
+>     lockscreen_release_start
+>     lockscreen_unforce exit=0
+>     lockscreen_release_result idleMode=false lifecycle=locked_wake
+>
+> Same logical epoch and same package generation must remain.
+>
+> D. Do NOT unlock.
+>
+> Let lockscreen time itself out so screen becomes OFF while still locked.
+> Wait about 15 sec.
+>
+> Then inspect:
+>
+>     dumpsys deviceidle
+>
+> Expected:
+>
+>     mForceIdle=true
+>     mState=IDLE
+>     mLightState=OVERRIDE
+>
+> This must now be a genuine same-session owned reforce through the
+> 70ac1a2 mechanism.
+>
+> Diagnostics should confirm:
+>
+>     same epoch
+>     same package generation
+>     package re-suspend same generation
+>     owned reforce transaction
+>     no new ENTER
+>     no EXIT
+>     no new package generation
+>     no orphan marker debt
+>
+> E. Only after inspecting that state should USER_PRESENT/unlock finalize
+> the session.
+>
+> Expected final:
+>
+>     one EXIT
+>     epoch ended once
+>     final package restore
+>     sensor/biometric/etc. restore
+>     physical unforce
+>     all durable markers false
+>
+> ============================================================
+> IMPORTANT DEVICE TEST RULE
+> ============================================================
+>
+> Guide me ONE TEST STAGE AT A TIME.
+>
+> Do not dump a huge set of ADB commands at once.
+>
+> I am a non-developer and want to paste each output before moving to the
+> next stage.
+>
+> ============================================================
+> CURRENT DECISION STATUS
+> ============================================================
+>
+> Latest source review for:
+>
+>     dd3ded4
+>
+> was:
+>
+>     SOURCE REVIEW PASS
+>     COMMIT PASS
+>
+> Commit exists and is correctly based on a9a1227.
+>
+> Only remaining immediate requirement:
+>
+>     COMMITTED-TREE BUILD PASS using correct 64-bit Java
+>
+> Then:
+>
+>     REAL-DEVICE TEST
+>
+> No push yet.
+> No merge.
+> No master changes.
+>
+> ============================================================
+> CONTINUE FROM HERE
+> ============================================================
+>
+> I am now going to paste the outputs of:
+>
+> 1. java -version
+> 2. .\gradlew.bat --version
+> 3. .\gradlew.bat assembleDebug
+> 4. git status --short
+>
+> Please analyze those outputs and continue from exactly this point.
+> Do not restart the project explanation.
+> Do not ask me to repeat prior history.
+
+---
+
+# PART IV — FINAL CONTINUATION PROMPT
+
+Copy/paste or point a new ChatGPT conversation to this section.
+
+## CONTINUE ENFORCEDOZE FROM HERE
+
+I am continuing a long-running Android **EnforceDoze fork** audit/hardening project.
+
+The attached `PROJECT_CONTINUATION.md` is the authoritative project handoff.
+
+Do **not** make me restate completed history.
+
+### Current repository
+
+- Fork: `rmpsdroid/EnforceDoze`
+- Local repo: `D:\AndroidProjects\EnforceDoze`
+- Package: `com.akylas.enforcedoze.fork`
+- Current branch: `master`
+- Current authoritative HEAD: `94e70f6`
+- `origin/master`: `94e70f6`
+
+Latest commits on master:
+
+```text
+94e70f6 Fix disabled boot restore after late Shizuku start
+9b88c55 Fix restore retry after execution mode switch
+78f21e0 Fix durable Shizuku Doze exit recovery
+```
+
+### Latest fix status
+
+`94e70f6` is:
+
+**REPRODUCED / FIXED / BUILD PASS / DEVICE TEST PASS / COMMITTED / PUSHED / MERGED**
+
+It fixed:
+
+**service disabled + durable boot restore debt + Shizuku unavailable during finite boot recovery + Shizuku starts later**
+
+New event-driven behavior:
+
+**ShizukuProvider wakes EnforceDoze -> binder received -> temporary `ACTION_RESTORE_STATE` FGS -> durable package restore succeeds -> disabled service stops again.**
+
+No polling and no permanently resident disabled service.
+
+### Latest decisive device evidence
+
+Initial boot restore:
+
+- `BOOT_RECOVERY_PENDING ... suspendedPackages=232`
+- Shizuku unavailable
+- restore failed `exit=-1`
+- debt retained
+
+Later:
+
+- Android started EnforceDoze PID `25867` specifically for:
+  - `rikka.shizuku.ShizukuProvider`
+- `ShizukuHandler: Shizuku binder received`
+- Android allowed `ACTION_RESTORE_STATE`
+- `HARD_BLOCK_BATCH unsuspend count=232 exit=0`
+- `HARD_BLOCK_RESTORE_COMMAND_FINISHED exit=0 count=232`
+- service stopped again after its disabled-state grace period
+- final ChatGPT `suspended=false`
+- final `mForceIdle=false`
+- final `mState=ACTIVE`
+
+### Important current phone setting
+
+The reproduction left the EnforceDoze main service switch OFF:
+
+`serviceEnabled=false`
+
+Execution mode:
+
+`shizuku`
+
+Before ordinary Doze testing, verify whether it should be re-enabled.
+
+### Current ADB
+
+Latest endpoint from the final reboot:
+
+`30.30.30.234:38481`
+
+But wireless debugging ports change.
+
+Always run `adb devices` first after reboot and use the endpoint whose state is `device`.
+
+### Protected untracked files
+
+Never stage these accidentally:
+
+```text
+boot-restore-step1.txt
+boot-restore-step4.txt
+boot-restore-step5.txt
+boot-restore-step7.txt
+boot-restore-step8-shizuku-trigger.txt
+cls
+fresh-force-late-settle-review-v1.diff
+fresh-force-late-settle-review-v2.diff
+fresh-force-late-settle-review-v3.diff
+notification-toggle-race-v1-uncommitted.patch
+```
+
+Never use `git add .`.
+
+### Immediate follow-up
+
+Start read-only.
+
+First verify Git state before any change.
+
+The most direct follow-up is:
+
+**Regression/source audit for disabled boot + durable debt when Shizuku is ALREADY available at startup.**
+
+Question to answer:
+
+> Can `MyApplication.onCreate()` and `BootCompleteReceiver` both deliver `ACTION_RESTORE_STATE` for the same durable debt, and if so, is duplicate delivery already harmless/serialized or does it require a narrow idempotency gate?
+
+Do not assume there is a bug.
+
+Do not use unreliable `isMyServiceRunning()` as a correctness fix merely to suppress duplication.
+
+If this regression is clean, continue the deferred audit list in PART I.
+
+Also keep the older unclosed same-session lockscreen timeout reforce regression on the backlog unless evidence shows it was completed later.
+
+### How to work with me
+
+I am not an Android developer.
+
+Give:
+
+- exact commands;
+- one stage at a time;
+- what the output means;
+- no giant future command dump.
+
+When I am at PowerShell:
+
+`PS D:\AndroidProjects\EnforceDoze>`
+
+give PowerShell commands.
+
+When I am at:
+
+`C:\adb>`
+
+give `adb.exe ...` commands.
+
+### Approval gates
+
+No commit unless I explicitly say:
+
+**approve commit**
+
+No push unless I explicitly say:
+
+**approve push**
+
+No merge to master unless I explicitly say:
+
+**approve merge to master**
+
+No push of master unless I explicitly say:
+
+**approve push master**
+
+### First action in a new chat
+
+Begin with read-only Git verification.
+
+Do not restart the project explanation.
+
+Do not ask me to repeat prior history.
+
+---
+
+# END OF AUTHORITATIVE CONTINUATION FILE
