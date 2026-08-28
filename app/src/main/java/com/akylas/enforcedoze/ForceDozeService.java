@@ -3689,6 +3689,10 @@ public class ForceDozeService extends Service {
         } catch (IllegalAccessException e3) {
             log(e3.toString());
         }
+        if (transaction == 0 && Build.VERSION.SDK_INT == 36) {
+            transaction = 17;
+            Log.w(TAG, "Using Android 16 notification Binder transaction fallback");
+        }
         if (transaction == 0) {
             Log.e(TAG, "Could not resolve the notification transaction code, skipping");
             return;
