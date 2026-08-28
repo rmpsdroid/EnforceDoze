@@ -1381,6 +1381,20 @@ public class ForceDozeService extends Service {
         // ago may be usable now - but the cleanup completes on another thread, and its continuation
         // must not observe a half-applied settings pass.
         maybeResolveOwnedReforceDebt("settings reloaded");
+
+        // A settings-mode change can make the selected privileged backend usable without producing
+        // an availability transition. In particular, switching Root -> Shizuku while the Shizuku
+        // binder is already alive updates the cached availability above, but no false->true listener
+        // callback occurs. If a finished session still owes package/device restoration, retry it now
+        // rather than leaving that durable debt stranded until some unrelated lifecycle event.
+        boolean selectedBackendAvailable = useShizuku ? isShizukuAvailable : isSuAvailable;
+        if (selectedBackendAvailable
+                && !dozeStateStore.isInDoze()
+                && (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasPendingRestore())) {
+            DiagnosticLogger.i("RECOVERY", "settings_reload_retry_pending_restore"
+                    + " executionMode=" + (useShizuku ? "shizuku" : "root"));
+            applyRecoveryPolicy("SETTINGS_RELOAD_RECOVERY", "selected backend became usable");
+        }
     }
 
     /**
