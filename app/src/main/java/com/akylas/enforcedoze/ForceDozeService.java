@@ -501,7 +501,11 @@ public class ForceDozeService extends Service {
     private final AtomicBoolean shizukuFreshEntryDeferred = new AtomicBoolean(false);
 
     /**
-     * "A real fresh entry became due, but owned-reforce or restore debt had priority."
+     * "A real fresh entry became due, but higher-priority asynchronous debt had priority."
+     * <p>
+     * One intent for every kind of that debt - an unresolved owned reforce, an unfinished
+     * device-state restore, an unfinished package restore - deliberately not one flag per kind.
+     * Two independent flags could each decide a fresh entry was due and produce two sessions.
      * <p>
      * Deliberately separate from {@link #shizukuFreshEntryDeferred}, which means something else -
      * the backend was absent - and is consumed by different events. Armed only where an otherwise
@@ -514,7 +518,7 @@ public class ForceDozeService extends Service {
      * later; and no further screen-off is coming. In memory only - the entry it remembers is the
      * one this process was asked for, and a process that dies is asked again.
      */
-    private final AtomicBoolean ownedReforceFreshEntryDeferred = new AtomicBoolean(false);
+    private final AtomicBoolean debtFreshEntryDeferred = new AtomicBoolean(false);
 
     /**
      * Identity of the ACTIVE logical session, deliberately separate from {@link #entryAttemptToken}.
@@ -2056,9 +2060,9 @@ public class ForceDozeService extends Service {
      * triggers re-forces once; that reforce settles against the same session and ends in
      * reevaluateEntryAfterCleanup(), which no-ops while the session is owned.
      */
-    private void armOwnedReforceEntryIntent() {
-        if (ownedReforceFreshEntryDeferred.compareAndSet(false, true)) {
-            DiagnosticLogger.i("DOZE", "owned_reforce_entry_deferred reason=owned_reforce_unresolved");
+    private void armDebtFreshEntryIntent(String reason) {
+        if (debtFreshEntryDeferred.compareAndSet(false, true)) {
+            DiagnosticLogger.i("DOZE", "debt_entry_deferred reason=" + reason);
         }
     }
 
@@ -2092,8 +2096,8 @@ public class ForceDozeService extends Service {
                     + " reason=pending_restore");
             return;
         }
-        if (ownedReforceFreshEntryDeferred.compareAndSet(true, false)) {
-            DiagnosticLogger.i("DOZE", "owned_reforce_entry_retried reason=debt_settled");
+        if (debtFreshEntryDeferred.compareAndSet(true, false)) {
+            DiagnosticLogger.i("DOZE", "debt_entry_retried reason=debt_settled");
         }
         reevaluateEntryAfterCleanup();
     }
@@ -2107,12 +2111,12 @@ public class ForceDozeService extends Service {
      * call, the charger or the custom period ending between arming and consuming cannot force an
      * entry that is no longer wanted.
      */
-    private void maybeConsumeOwnedReforceEntryIntent(String reason) {
-        if (!ownedReforceFreshEntryDeferred.get()) {
+    private void maybeConsumeDebtFreshEntryIntent(String reason) {
+        if (!debtFreshEntryDeferred.get()) {
             return;
         }
         if (serviceStopping) {
-            ownedReforceFreshEntryDeferred.set(false);
+            debtFreshEntryDeferred.set(false);
             return;
         }
         // Under the barrier: ownedReforcePhase is guarded by it, and this hook runs on package and
@@ -2128,10 +2132,10 @@ public class ForceDozeService extends Service {
         if (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasPendingRestore()) {
             return;
         }
-        if (!ownedReforceFreshEntryDeferred.compareAndSet(true, false)) {
+        if (!debtFreshEntryDeferred.compareAndSet(true, false)) {
             return;
         }
-        DiagnosticLogger.i("DOZE", "owned_reforce_entry_retried reason=" + reason);
+        DiagnosticLogger.i("DOZE", "debt_entry_retried reason=" + reason);
         reevaluateEntryAfterCleanup();
     }
 
@@ -2449,7 +2453,16 @@ public class ForceDozeService extends Service {
                 log("An owned reforce is unresolved, skipping the fallback entry");
                 DiagnosticLogger.i("DOZE", "entry_refused reason=owned_reforce_unresolved"
                         + " mode=tunable_fallback");
-                armOwnedReforceEntryIntent();
+                armDebtFreshEntryIntent("owned_reforce_unresolved");
+                return;
+            }
+            // Same rule as the privileged path: no fresh session over an unfinished restore, or the
+            // pre-Doze values this session records are the previous session's restrictions.
+            if (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasPendingRestore()) {
+                log("Restore debt is still outstanding, skipping the fallback entry");
+                DiagnosticLogger.i("DOZE", "entry_refused reason=restore_debt_outstanding"
+                        + " mode=tunable_fallback");
+                armDebtFreshEntryIntent("restore_debt_outstanding");
                 return;
             }
             // Re-checked inside the barrier on the CONFIGURED MODE, not merely on availability.
@@ -2473,6 +2486,11 @@ public class ForceDozeService extends Service {
                             + " mode=tunable_fallback");
                 }
                 return;
+            }
+            // The fallback is about to claim ownership, so the debt intent has stopped describing
+            // anything and must not survive as a second trigger.
+            if (debtFreshEntryDeferred.getAndSet(false)) {
+                DiagnosticLogger.i("DOZE", "debt_entry_deferral_consumed reason=fallback_claim_started");
             }
             // One ordering change against the original: the durable flag is set before the entry
             // work rather than after it. The session-scoped guard requires an owned session, so
@@ -2566,7 +2584,22 @@ public class ForceDozeService extends Service {
                         + ownedReforcePhaseName(ownedReforcePhase));
                 // This entry was otherwise valid - every guard above it passed - so it is
                 // remembered rather than lost, and retried once the debt that outranked it clears.
-                armOwnedReforceEntryIntent();
+                armDebtFreshEntryIntent("owned_reforce_unresolved");
+                return;
+            }
+            // A fresh session must not begin over an unfinished restore. Generations stop an old
+            // callback clearing a new owner's marker, but they cannot stop the new session reading
+            // the physical state: entry captures pre-Doze values from the live device, and while an
+            // old restore is still in flight those values are the previous session's restrictions.
+            // The session would then record "Wi-Fi was off" and honour it for ever. Checked here,
+            // inside the barrier and after the entry has otherwise been proven current, so nothing
+            // can slip between the check and the claim.
+            if (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasPendingRestore()) {
+                log("Restore debt is still outstanding, skipping fresh entry");
+                DiagnosticLogger.i("DOZE", "entry_refused reason=restore_debt_outstanding"
+                        + " pendingStates=" + dozeStateStore.getAppliedKeys().size()
+                        + " suspendedPackages=" + dozeStateStore.getAppliedSuspendedPackages().size());
+                armDebtFreshEntryIntent("restore_debt_outstanding");
                 return;
             }
             // A real attempt is taking over, so the intent "entry is due but the backend is
@@ -2578,6 +2611,12 @@ public class ForceDozeService extends Service {
             // protocol owns every decision about whether anything is retried.
             if (shizukuFreshEntryDeferred.getAndSet(false)) {
                 DiagnosticLogger.i("DOZE", "entry_deferral_consumed reason=fresh_attempt_started");
+            }
+            // Same reasoning for the debt intent: a real attempt has taken ownership, so an intent
+            // that still said "an entry is due but debt blocked it" would be a second, independent
+            // trigger able to start a duplicate session later.
+            if (debtFreshEntryDeferred.getAndSet(false)) {
+                DiagnosticLogger.i("DOZE", "debt_entry_deferral_consumed reason=fresh_attempt_started");
             }
 
             // The durable record is written before the phase is claimed and before anything is
@@ -3066,8 +3105,8 @@ public class ForceDozeService extends Service {
             if (shizukuFreshEntryDeferred.getAndSet(false)) {
                 DiagnosticLogger.i("DOZE", "entry_deferral_cancelled reason=" + reason);
             }
-            if (ownedReforceFreshEntryDeferred.getAndSet(false)) {
-                DiagnosticLogger.i("DOZE", "owned_reforce_entry_deferral_cancelled reason=" + reason);
+            if (debtFreshEntryDeferred.getAndSet(false)) {
+                DiagnosticLogger.i("DOZE", "debt_entry_deferral_cancelled reason=" + reason);
             }
             if (physicalEntryPhase == PHASE_ATTEMPTING) {
                 DiagnosticLogger.i("DOZE", "entry_invalidated reason=" + reason);
@@ -4280,7 +4319,7 @@ public class ForceDozeService extends Service {
         // The other half of the debt: a final un-suspend that clears the generation can be the last
         // thing standing between a deferred entry and its retry.
         maybeRetryDeferredShizukuEntry("package_debt_cleared");
-        maybeConsumeOwnedReforceEntryIntent("package_debt_cleared");
+        maybeConsumeDebtFreshEntryIntent("package_debt_cleared");
     }
 
     public String getDeviceIdleState() {
@@ -4678,35 +4717,67 @@ public class ForceDozeService extends Service {
      *                 (they are only re-disabled when a fresh Doze cycle starts).
      */
     public void restoreDeviceStates(Context context, String reason, Set<String> onlyKeys) {
-        Set<String> pending = dozeStateStore.getAppliedKeys();
-        if (onlyKeys != null) {
-            pending.retainAll(onlyKeys);
-        }
-        if (pending.isEmpty()) {
-            return;
-        }
-        Log.i(TAG, "DEVICE_STATE_RESTORE_STARTED reason=" + reason + " keys=" + pending);
-        DiagnosticLogger.i("STATE", "DEVICE_STATE_RESTORE_STARTED reason=" + reason + " keys=" + pending);
-        wakeTiming("device_state_restore_started");
-
         Context appContext = context.getApplicationContext();
         int dispatched = 0;
-        for (final String key : pending) {
-            // One outstanding command per key. Without this, SCREEN_ON followed closely by
-            // USER_PRESENT would send two commands for the same radio.
-            if (!stateRestoreInFlight.add(key)) {
-                log("RESTORE_PENDING " + key + " (already in flight)");
-                continue;
+        // Selecting the keys, snapshotting them and enqueueing their restores is ONE critical
+        // section, from the journal listing onwards. Listing outside the monitor and only locking
+        // around the dispatch loop is not enough: the listing carries key names, not generations,
+        // so a maintenance re-entry taking the lock in between could markApplied() a newer
+        // generation and enqueue its restriction, and this pass would then snapshot that newer
+        // generation, enqueue its restore behind the restriction, and go on to compare-clear a
+        // marker that was never its own. Both protections - physical ordering and generation
+        // ownership - depend on there being no release/reacquire gap here.
+        //
+        // Whichever side takes the monitor first completes its journal selection and its enqueue
+        // before the other begins, and the per-toggle StateOpSlot preserves that order physically
+        // from there. Only dispatch happens inside; no shell completion is waited on, and callers
+        // already holding the monitor re-enter it, which Java permits.
+        synchronized (physicalEntryLock) {
+            Set<String> pending = dozeStateStore.getAppliedKeys();
+            if (onlyKeys != null) {
+                pending.retainAll(onlyKeys);
             }
-            Log.i(TAG, "RESTORE_PENDING " + key);
-            DiagnosticLogger.i("STATE", "RESTORE_PENDING " + key);
-            try {
-                performRestore(appContext, key, (commandCode, exitCode, stdout, stderr) ->
-                        onRestoreFinished(key, exitCode));
-                dispatched++;
-            } catch (Exception e) {
-                stateRestoreInFlight.remove(key);
-                Log.e(TAG, "RESTORE_FAILED " + key + " error=" + e.getClass().getSimpleName());
+            if (pending.isEmpty()) {
+                return;
+            }
+            Log.i(TAG, "DEVICE_STATE_RESTORE_STARTED reason=" + reason + " keys=" + pending);
+            DiagnosticLogger.i("STATE", "DEVICE_STATE_RESTORE_STARTED reason=" + reason + " keys=" + pending);
+            wakeTiming("device_state_restore_started");
+
+            for (final String key : pending) {
+                // One outstanding command per key. Without this, SCREEN_ON followed closely by
+                // USER_PRESENT would send two commands for the same radio.
+                if (!stateRestoreInFlight.add(key)) {
+                    log("RESTORE_PENDING " + key + " (already in flight)");
+                    continue;
+                }
+                // Captured before anything is dispatched, and carried through the whole operation.
+                // Reading the pre-Doze value later, at command time, let a newer markApplied() replace
+                // it first, so an older restore could put back a value that no longer belonged to it;
+                // taking the generation in the same read is what lets the completion prove the marker
+                // it is about to clear is still its own.
+                DozeStateStore.AppliedKeySnapshot snapshot =
+                        dozeStateStore.getAppliedKeySnapshot(key, defaultPreDozeValueFor(key));
+                if (snapshot == null) {
+                    // Cleared before this pass took the monitor; nothing is owed. Retained as a
+                    // defensive check - the listing and this read are now one critical section.
+                    stateRestoreInFlight.remove(key);
+                    log("RESTORE_SKIPPED " + key + " (no longer applied)");
+                    DiagnosticLogger.i("STATE", "RESTORE_SKIPPED " + key + " reason=no_longer_applied");
+                    continue;
+                }
+                final long generation = snapshot.generation;
+                Log.i(TAG, "RESTORE_PENDING " + key);
+                DiagnosticLogger.i("STATE", "RESTORE_PENDING " + key + " gen=" + generation);
+                try {
+                    performRestore(appContext, key, snapshot.previousValue,
+                            (commandCode, exitCode, stdout, stderr) ->
+                                    onRestoreFinished(key, generation, exitCode));
+                    dispatched++;
+                } catch (Exception e) {
+                    stateRestoreInFlight.remove(key);
+                    Log.e(TAG, "RESTORE_FAILED " + key + " error=" + e.getClass().getSimpleName());
+                }
             }
         }
         Log.i(TAG, "DEVICE_STATE_RESTORE_DISPATCHED count=" + dispatched);
@@ -4715,11 +4786,28 @@ public class ForceDozeService extends Service {
     }
 
     /**
-     * Clears the durable marker only when the privileged command actually succeeded. A failure
-     * leaves it pending on purpose, so the next trigger - USER_PRESENT, a Shizuku reconnect, the
-     * next service start or the next boot - picks it up again.
+     * The default this service has always used when a key has no recorded pre-Doze value. Kept
+     * beside the snapshot read so the two cannot drift: the values here must match the defaults
+     * {@link #performRestore(Context, String, boolean, Shell.OnCommandResultListener2)} used to
+     * pass to getPreDozeValue().
      */
-    private void onRestoreFinished(String key, int exitCode) {
+    private static boolean defaultPreDozeValueFor(String key) {
+        switch (key) {
+            case DozeStateStore.KEY_AIRPLANE:
+            case DozeStateStore.KEY_BATTERY_SAVER:
+                return false;
+            default:
+                return true;
+        }
+    }
+
+    /**
+     * Clears the durable marker only when the privileged command actually succeeded, and only when
+     * the marker is still the one this restore was dispatched for. A failure leaves it pending on
+     * purpose, so the next trigger - USER_PRESENT, a Shizuku reconnect, the next service start or
+     * the next boot - picks it up again.
+     */
+    private void onRestoreFinished(String key, long generation, int exitCode) {
         try {
             if (exitCode == 0) {
                 // Cross-session guard for the keys whose commands a later session can outlive: an
@@ -4736,9 +4824,18 @@ public class ForceDozeService extends Service {
                     DiagnosticLogger.i("STATE", "RESTORE_SUPERSEDED " + key + " newSessionOwnsMarker=true");
                     return;
                 }
-                dozeStateStore.clearApplied(key);
-                Log.i(TAG, "RESTORE_SUCCESS " + key + " exit=0");
-                DiagnosticLogger.i("STATE", "RESTORE_SUCCESS " + key + " exit=0");
+                // Compare-and-clear against the generation this restore captured. A newer session
+                // - or a maintenance re-entry - that re-marked the key while this command was in
+                // flight owns the marker now, and its debt must survive.
+                if (dozeStateStore.clearAppliedIfGeneration(key, generation)) {
+                    Log.i(TAG, "RESTORE_SUCCESS " + key + " exit=0 gen=" + generation);
+                    DiagnosticLogger.i("STATE", "RESTORE_SUCCESS " + key + " exit=0 gen=" + generation);
+                } else {
+                    Log.i(TAG, "RESTORE_SUPERSEDED " + key + " gen=" + generation
+                            + ", a newer journal owner holds the marker");
+                    DiagnosticLogger.i("STATE", "RESTORE_SUPERSEDED " + key + " gen=" + generation
+                            + " newJournalOwner=true");
+                }
             } else {
                 Log.e(TAG, "RESTORE_FAILED " + key + " exit=" + exitCode + ", marker kept for retry");
                 DiagnosticLogger.e("STATE", "RESTORE_FAILED " + key + " exit=" + exitCode + " markerKept=true");
@@ -4753,7 +4850,7 @@ public class ForceDozeService extends Service {
         // while Shizuku was away could sit armed for ever, with no further screen-off or
         // availability callback coming to release it.
         maybeRetryDeferredShizukuEntry("restore_debt_cleared");
-        maybeConsumeOwnedReforceEntryIntent("restore_debt_cleared");
+        maybeConsumeDebtFreshEntryIntent("restore_debt_cleared");
     }
 
     /**
@@ -5557,35 +5654,42 @@ public class ForceDozeService extends Service {
         }
     }
 
-    private void performRestore(Context context, String key, Shell.OnCommandResultListener2 done) {
+    /**
+     * @param previousValue the value captured from the journal snapshot when this restore was
+     *                      dispatched. Deliberately not re-read here: between the snapshot and the
+     *                      command a newer session can have written its own pre-Doze value, and an
+     *                      older restore must put back what it actually owes.
+     */
+    private void performRestore(Context context, String key, boolean previousValue,
+                                Shell.OnCommandResultListener2 done) {
         switch (key) {
             case DozeStateStore.KEY_AIRPLANE:
-                setAirplaneState(context, dozeStateStore.getPreDozeValue(key, false), done);
+                setAirplaneState(context, previousValue, done);
                 break;
             case DozeStateStore.KEY_BLUETOOTH:
-                setBluetoothState(context, dozeStateStore.getPreDozeValue(key, true), done);
+                setBluetoothState(context, previousValue, done);
                 break;
             case DozeStateStore.KEY_GPS:
-                setGPSState(context, dozeStateStore.getPreDozeValue(key, true), done);
+                setGPSState(context, previousValue, done);
                 break;
             case DozeStateStore.KEY_WIFI:
-                setWiFiState(dozeStateStore.getPreDozeValue(key, true), done);
+                setWiFiState(previousValue, done);
                 break;
             case DozeStateStore.KEY_MOBILE_DATA:
-                setMobileDataState(dozeStateStore.getPreDozeValue(key, true), done);
+                setMobileDataState(previousValue, done);
                 break;
             case DozeStateStore.KEY_BATTERY_SAVER:
-                setBatterSaverState(context, dozeStateStore.getPreDozeValue(key, false), done);
+                setBatterSaverState(context, previousValue, done);
                 break;
             case DozeStateStore.KEY_ALL_SENSORS:
                 // Through the serializer so a temporary lock-screen command can never be applied
                 // after this one and leave the user with the wrong sensor state.
-                requestSensorState(dozeStateStore.getPreDozeValue(key, true), done, SENSOR_LABEL_FINAL);
+                requestSensorState(previousValue, done, SENSOR_LABEL_FINAL);
                 break;
             case DozeStateStore.KEY_BIOMETRICS:
                 // Through the serializer so a temporary lock-screen command can never be applied
                 // after this one and leave the user unable to unlock.
-                requestBiometricState(dozeStateStore.getPreDozeValue(key, true), done, BIOMETRIC_LABEL_FINAL);
+                requestBiometricState(previousValue, done, BIOMETRIC_LABEL_FINAL);
                 break;
             case DozeStateStore.KEY_MOTION_SENSORS:
                 // Through the serializer so an entry-side restrict cannot physically land after

@@ -52,6 +52,14 @@ public class DozeStateStore {
     private static final String PREFS_NAME = "enforcedoze_doze_state";
     private static final String PREFIX_PRE = "pre.";
     private static final String PREFIX_APPLIED = "applied.";
+    /**
+     * Monotonic id of the marker currently recorded for one key. Bumped by every markApplied() and
+     * deliberately never removed, so a generation can only move forward for the lifetime of the
+     * install: a stale restore that returns after a newer session re-marked the key compares
+     * against a number that has already moved on. Missing on installations that predate this and
+     * defaults to 0, which needs no migration.
+     */
+    private static final String PREFIX_GENERATION = "gen.";
     private static final String KEY_APPLIED_AT = "appliedAt";
     private static final String KEY_IN_DOZE = "inDoze";
     private static final String KEY_ENTRY_PENDING = "entryPending";
@@ -99,13 +107,88 @@ public class DozeStateStore {
      * the mark and the command still leaves us with a revert to perform (reverting something that
      * was never changed is harmless, forgetting a revert is not).
      */
-    public void markApplied(String key, boolean previousValue) {
+    public synchronized void markApplied(String key, boolean previousValue) {
+        // Read-modify-write of the generation, under the same monitor as the snapshot read and the
+        // compare-and-clear, so two markApplied() calls can never mint the same generation and a
+        // reader can never straddle the increment. All four values land in one commit, so a crash
+        // cannot leave a marker whose generation belongs to the previous owner.
+        long generation = prefs.getLong(PREFIX_GENERATION + key, 0L) + 1L;
         prefs.edit()
                 .putBoolean(PREFIX_PRE + key, previousValue)
                 .putBoolean(PREFIX_APPLIED + key, true)
+                .putLong(PREFIX_GENERATION + key, generation)
                 .putLong(KEY_APPLIED_AT, System.currentTimeMillis())
                 .commit();
-        logToLogcat(TAG, "Marked '" + key + "' as applied (pre-Doze value: " + previousValue + ")");
+        logToLogcat(TAG, "Marked '" + key + "' as applied (pre-Doze value: " + previousValue
+                + ", generation: " + generation + ")");
+    }
+
+    /**
+     * Everything a restore needs to own its work, read together: which value to put back, and which
+     * marker it is putting back.
+     */
+    public static final class AppliedKeySnapshot {
+        public final String key;
+        public final boolean previousValue;
+        public final long generation;
+
+        AppliedKeySnapshot(String key, boolean previousValue, long generation) {
+            this.key = key;
+            this.previousValue = previousValue;
+            this.generation = generation;
+        }
+    }
+
+    /**
+     * One atomic view of a pending applied key. The applied flag, the pre-Doze value and the
+     * generation are read under the same monitor because separate reads can straddle a markApplied()
+     * from a newer session: the restore would then put back one session's value while claiming
+     * another session's generation, and the compare-and-clear that is meant to protect the newer
+     * owner would be comparing the wrong number.
+     *
+     * @param defaultPreviousValue used only when the key has no recorded pre-Doze value, which is
+     *                             possible for markers written before this store recorded one. The
+     *                             caller passes the same default it has always used for that key.
+     * @return null when the key is no longer applied and there is nothing to restore
+     */
+    public synchronized AppliedKeySnapshot getAppliedKeySnapshot(String key, boolean defaultPreviousValue) {
+        if (!prefs.getBoolean(PREFIX_APPLIED + key, false)) {
+            return null;
+        }
+        return new AppliedKeySnapshot(key,
+                prefs.getBoolean(PREFIX_PRE + key, defaultPreviousValue),
+                prefs.getLong(PREFIX_GENERATION + key, 0L));
+    }
+
+    /**
+     * Clears an applied marker only if it is still the one the caller restored.
+     * <p>
+     * Device-state restores are asynchronous, and a new Doze session can begin - or a maintenance
+     * window can re-apply - while one is still outstanding. The old callback would then clear a
+     * marker that now records a debt the newer owner genuinely owes, and that debt would never be
+     * paid. Re-reading the generation under this monitor is what makes the check and the clear one
+     * operation rather than two.
+     * <p>
+     * The generation counter itself is left in place; only the applied flag is removed, so ids keep
+     * moving forward and a later stale callback still fails the comparison.
+     *
+     * @return true when this exact generation was cleared; false when the key is no longer applied
+     * or a newer owner has replaced it
+     */
+    public synchronized boolean clearAppliedIfGeneration(String key, long expectedGeneration) {
+        if (!prefs.getBoolean(PREFIX_APPLIED + key, false)) {
+            return false;
+        }
+        long current = prefs.getLong(PREFIX_GENERATION + key, 0L);
+        if (current != expectedGeneration) {
+            logToLogcat(TAG, "Not clearing '" + key + "': generation " + current
+                    + " has replaced " + expectedGeneration);
+            return false;
+        }
+        prefs.edit().remove(PREFIX_APPLIED + key).commit();
+        logToLogcat(TAG, "Cleared '" + key + "' (generation " + expectedGeneration
+                + "), nothing left to restore for it");
+        return true;
     }
 
     public boolean isApplied(String key) {
