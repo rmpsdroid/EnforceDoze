@@ -540,6 +540,30 @@ public class Utils {
     }
 
     /**
+     * Starts ForceDozeService with one explicit action without changing serviceEnabled.
+     *
+     * Recovery uses this when Shizuku itself wakes the app after a failed disabled-state restore.
+     * Background FGS restrictions can still reject the request, so failure is logged and returned
+     * to the caller rather than crashing the process.
+     */
+    public static boolean startForceDozeServiceAction(Context context, String action) {
+        try {
+            Intent serviceIntent = new Intent(context, ForceDozeService.class);
+            serviceIntent.setAction(action);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(serviceIntent);
+            } else {
+                context.startService(serviceIntent);
+            }
+            return true;
+        } catch (Exception e) {
+            logToLogcat("EnforceDoze",
+                    "Could not deliver " + action + " to the service: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Tells ForceDozeService that a preference changed.
      * <p>
      * Two channels on purpose. The LocalBroadcast reaches a live service instantly; the service
