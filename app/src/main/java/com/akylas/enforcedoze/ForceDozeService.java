@@ -268,6 +268,38 @@ public class ForceDozeService extends Service {
     private int entryAttemptToken = 0;
 
     /**
+     * Two-signal confirmation for a fresh privileged entry, guarded by {@link #physicalEntryLock}.
+     * <p>
+     * The device proved that a completed force-idle can report success while
+     * PowerManager.isDeviceIdleMode() is still false: the controller printed "Now forced in to deep
+     * idle mode", the command exited 0, the immediate read was false, and the transition became
+     * visible 47 ms later. Treating that single sample as proof of refusal aborted PREPARING and
+     * left the device forced with every durable flag clear - an orphaned force with nothing
+     * recording it.
+     * <p>
+     * A commit therefore needs both halves, for the same still-current attempt: the command must
+     * have been accepted, and deep idle must actually have been observed. Neither alone is enough.
+     * A broadcast on its own proves the device is idle but says nothing about the result of
+     * <em>this</em> command - the transition could be anyone's - so it is recorded and waited on
+     * rather than acted upon.
+     * <p>
+     * In memory only. {@link DozeStateStore#isEntryPending()} remains the durable record across
+     * process death, and its existing conservative recovery is unchanged.
+     */
+    private int pendingEntryConfirmToken = 0;
+    private boolean pendingEntryCommandAccepted = false;
+    private boolean pendingEntryIdleObserved = false;
+
+    /**
+     * What DeviceIdleController itself said about the force. Used only to tell a refusal apart from
+     * a transition that has not become visible yet - never to claim success, which always requires a
+     * real physical observation.
+     */
+    private static final int CONTROLLER_UNKNOWN = 0;
+    private static final int CONTROLLER_SUCCESS = 1;
+    private static final int CONTROLLER_REFUSED = 2;
+
+    /**
      * Phase of the owned-session physical reforce - the force-idle issued on behalf of a session
      * that is ALREADY committed, from the lock-screen resume and from recovery Mode A.
      * <p>
@@ -2441,6 +2473,11 @@ public class ForceDozeService extends Service {
             token = ++entryAttemptToken;
             physicalEntryPhase = PHASE_ATTEMPTING;
             entryAttemptAllowsReentry = allowPostCleanupReentry;
+            // Armed before dispatch, because the confirming broadcast can arrive before the command
+            // callback does. Both signals belong to this token and to no other attempt.
+            pendingEntryConfirmToken = token;
+            pendingEntryCommandAccepted = false;
+            pendingEntryIdleObserved = false;
         }
 
         releaseTempWakeLock();
@@ -2463,28 +2500,43 @@ public class ForceDozeService extends Service {
         boolean physicallyIdle = verifyPhysicalDozeEntered();
         boolean commandCompleted = (exitCode == 0);
         boolean stillWanted = isFreshEntryStillWanted(context);
+        int controllerResult = classifyControllerOutput(stdout, stderr);
 
-        // Exit code 0 is necessary but not sufficient. The device probe established one direction
-        // only - exit 0 with the device not idle is a semantic refusal - and says nothing about
-        // what a non-zero result means. ShizukuHandler reports -1 both when the command could not
-        // be started at all and when runCommandOnce threw partway through, so a non-zero result
-        // with the device idle cannot be read as a force this app owns, nor safely as one it does
-        // not. Those two cases are therefore separated below rather than collapsed into "success".
+        // Exit code 0 is necessary but not sufficient, and neither is one immediate idle sample.
+        // The device demonstrated a completed force that reported "Now forced in to deep idle mode"
+        // while isDeviceIdleMode() was still false, with the transition visible 47 ms later; calling
+        // that a refusal aborted the attempt and orphaned a real force. What the controller itself
+        // said is therefore consulted - but only to separate a refusal from a transition that has
+        // not surfaced yet. Success is still never claimed from text.
         String verdict;
-        if (commandCompleted && physicallyIdle) {
-            verdict = "verified_success";
-        } else if (commandCompleted) {
+        if (commandCompleted && controllerResult == CONTROLLER_REFUSED) {
+            // Tested before the idle sample, so the classifier's "refusal wins" rule holds at the
+            // verdict level too. An explicit refusal proves THIS command established no force; a
+            // deep idle observed at the same moment may belong to a natural transition or to
+            // somebody else, and adopting it would claim a session on someone else's state.
             verdict = "semantic_rejection";
-        } else if (!physicallyIdle) {
-            verdict = "transport_failure";
+        } else if (commandCompleted && physicallyIdle) {
+            verdict = "verified_success";
+        } else if (commandCompleted && controllerResult == CONTROLLER_SUCCESS) {
+            verdict = "accepted_pending_confirmation";
+        } else if (commandCompleted) {
+            verdict = "unknown_output";
         } else {
-            verdict = "ambiguous_idle_after_command_failure";
+            // Deliberately one verdict for both idle samples. A non-zero result does not prove the
+            // command never reached DeviceIdleController: ShizukuHandler reports -1 when execution
+            // could not start AND when runCommandOnce threw partway through, so the force may
+            // already have landed. Neither does an immediate idle=false sample, which this device
+            // has now shown can precede a real transition by tens of milliseconds. With both
+            // premises unproven the only honest description is that the physical outcome is
+            // unknown.
+            verdict = "transport_outcome_uncertain";
         }
         DiagnosticLogger.i("DOZE", "force_idle_result mode=fresh verdict=" + verdict
                 + " exit=" + exitCode + " idleMode=" + physicallyIdle
-                + " verifiedBy=exit_code+idle_mode");
+                + " controllerResult=" + controllerResultName(controllerResult)
+                + " verifiedBy=exit_code+idle_mode+controller_output");
         if ("semantic_rejection".equals(verdict)) {
-            // The only case with output worth reporting. Never an input to the decision.
+            // The only case with output worth reporting. Never an input to the success decision.
             DiagnosticLogger.i("DOZE", "force_idle_rejected stoppedAt="
                     + describeForceIdleFailure(stdout, stderr));
         }
@@ -2494,6 +2546,7 @@ public class ForceDozeService extends Service {
         boolean abort = false;
         boolean abortJournalClearFailed = false;
         boolean commitFailed = false;
+        boolean awaitConfirmation = false;
         String abortReason = verdict;
         synchronized (physicalEntryLock) {
             if (physicalEntryPhase == PHASE_CLEANING_UP) {
@@ -2501,23 +2554,76 @@ public class ForceDozeService extends Service {
                 // issuing a second one here would race it for the durable bit.
                 DiagnosticLogger.i("DOZE", "entry_result_ignored reason=cleanup_in_flight success="
                         + physicallyIdle);
-            } else if (!physicallyIdle) {
-                // Semantic rejection or transport failure. Either way the device is not idle, so
-                // Android is holding nothing on this app's behalf and there is nothing to undo.
-                // The durable bit is cleared inside the lock, before the phase is released, so a
-                // fresh entry can never find PHASE_NONE while entryPending is still set and refuse
-                // itself for a reason that has already stopped being true.
-                abortJournalClearFailed = !dozeStateStore.abortForceIdleAttempt();
-                abort = true;
-                physicalEntryPhase = PHASE_NONE;
             } else if (!commandCompleted) {
-                // Ambiguous: the command did not report completion, yet the device is idle. That
-                // idle state may be this app's doing or may not, and it is not a basis for claiming
-                // a session. Treated as a possibly-owned physical force and conservatively undone -
-                // an unforce on an idle device this app did not force clears a flag that was
-                // already false, so the cautious choice is also the cheap one.
+                // Physical outcome unknown, whatever the idle sample said. The force may already
+                // have been applied, so the marker must survive: it is the only record that would
+                // let anything undo a force that becomes visible later. Clearing it here on the
+                // strength of an immediate idle=false read is precisely how a force was orphaned
+                // with every durable flag clear. The uncertainty is neutralised by a real unforce
+                // instead, and KEY_ENTRY_PENDING is cleared only by that cleanup's checked path.
+                //
+                // Controller success text is deliberately not consulted here either: with no
+                // completed command it cannot establish a logical success, so cleanup remains the
+                // conservative choice.
                 cleanup = true;
                 cleanupAllowsReentry = entryAttemptAllowsReentry;
+                clearPendingFreshEntryConfirmationLocked();
+                physicalEntryPhase = PHASE_CLEANING_UP;
+            } else if ("semantic_rejection".equals(verdict)) {
+                // The one result strong enough to clear PREPARING without neutralising anything:
+                // the command completed AND the controller said in as many words that it refused.
+                // Only then is it established that no force exists to undo.
+                abortJournalClearFailed = !dozeStateStore.abortForceIdleAttempt();
+                abort = true;
+                clearPendingFreshEntryConfirmationLocked();
+                physicalEntryPhase = PHASE_NONE;
+            } else if ("accepted_pending_confirmation".equals(verdict)) {
+                // The controller accepted the force; only its visibility is outstanding. PREPARING
+                // is deliberately kept: the durable marker is the sole record that the device is
+                // being forced, and clearing it here is exactly what orphaned the force on the
+                // device. Nothing is committed yet either - no session, no epoch, no generation, no
+                // ENTER - because a session must not exist until deep idle has actually been seen.
+                if (token != entryAttemptToken || physicalEntryPhase != PHASE_ATTEMPTING
+                        || !stillWanted) {
+                    // Nobody wants it any more, and the controller says the device is forced, so
+                    // the force is undone rather than left behind.
+                    cleanup = true;
+                    cleanupAllowsReentry = entryAttemptAllowsReentry;
+                    clearPendingFreshEntryConfirmationLocked();
+                    physicalEntryPhase = PHASE_CLEANING_UP;
+                } else {
+                    pendingEntryCommandAccepted = true;
+                    if (pendingEntryIdleObserved) {
+                        // The confirming broadcast already arrived while the command was finishing.
+                        // Both halves are in, so this is the commit - and it follows the same
+                        // pattern as the immediate verified-success path below, setting the session
+                        // up before the barrier is released. Splitting the two would let SCREEN_ON
+                        // see inDoze=true, run a complete owned exit, and leave this thread to
+                        // establish an epoch, an ENTER row and restrictions for a session that had
+                        // already finished.
+                        if (dozeStateStore.commitDozeSession()) {
+                            physicalEntryPhase = PHASE_NONE;
+                            clearPendingFreshEntryConfirmationLocked();
+                            DiagnosticLogger.i("DOZE", "entry_committed token=" + token
+                                    + " confirmedBy=callback");
+                            commitFreshDozeSession(context);
+                            return;
+                        }
+                        commitFailed = true;
+                        clearPendingFreshEntryConfirmationLocked();
+                        physicalEntryPhase = PHASE_CLEANING_UP;
+                    } else {
+                        awaitConfirmation = true;
+                    }
+                }
+            } else if ("unknown_output".equals(verdict)) {
+                // The command completed, the device is not visibly idle, and the controller said
+                // nothing this build recognises. That is not evidence of refusal and must never be
+                // read as success, so the physical state is treated as uncertain and neutralised
+                // before the marker is allowed to clear.
+                cleanup = true;
+                cleanupAllowsReentry = entryAttemptAllowsReentry;
+                clearPendingFreshEntryConfirmationLocked();
                 physicalEntryPhase = PHASE_CLEANING_UP;
             } else if (token != entryAttemptToken || physicalEntryPhase != PHASE_ATTEMPTING
                     || !stillWanted) {
@@ -2525,6 +2631,7 @@ public class ForceDozeService extends Service {
                 // forced, and only this branch will take it back out.
                 cleanup = true;
                 cleanupAllowsReentry = entryAttemptAllowsReentry;
+                clearPendingFreshEntryConfirmationLocked();
                 physicalEntryPhase = PHASE_CLEANING_UP;
             } else if (!dozeStateStore.commitDozeSession()) {
                 // The force succeeded but the ownership transition did not reach disk, so this is
@@ -2535,9 +2642,11 @@ public class ForceDozeService extends Service {
                 // same way an invalidated attempt does - unforce, and leave the marker to be
                 // cleared only when that completes. Persistence is not retried here.
                 commitFailed = true;
+                clearPendingFreshEntryConfirmationLocked();
                 physicalEntryPhase = PHASE_CLEANING_UP;
             } else {
                 physicalEntryPhase = PHASE_NONE;
+                clearPendingFreshEntryConfirmationLocked();
                 DiagnosticLogger.i("DOZE", "entry_committed token=" + token);
                 // Deliberately inside the lock. Committing and then setting the session up outside
                 // it left a window where SCREEN_ON could see inDoze=true, run a complete owned exit
@@ -2559,6 +2668,12 @@ public class ForceDozeService extends Service {
             }
         }
 
+        if (awaitConfirmation) {
+            // PREPARING stays, and so does the durable marker. The confirming broadcast, a
+            // lifecycle cancellation or recovery will resolve it; nothing is polled or timed.
+            DiagnosticLogger.i("DOZE", "entry_awaiting_idle_confirmation token=" + token);
+            return;
+        }
         if (abort) {
             // A clean end. Deliberately no retry: an entry refused because a user alarm falls
             // inside min_time_to_alarm must stay refused until the next genuine lifecycle event.
@@ -2578,8 +2693,9 @@ public class ForceDozeService extends Service {
             return;
         }
         if (cleanup) {
-            String detail = !commandCompleted ? "ambiguous_result"
-                    : (stillWanted ? "attempt_superseded" : "precondition_changed");
+            String detail = !commandCompleted ? "transport_outcome_uncertain"
+                    : ("unknown_output".equals(verdict) ? "unrecognised_controller_output"
+                    : (stillWanted ? "attempt_superseded" : "precondition_changed"));
             DiagnosticLogger.i("DOZE", "entry_cleanup_started reason=possible_owned_force detail="
                     + detail + " token=" + token);
             dispatchPhysicalForceCleanup(cleanupAllowsReentry);
@@ -2629,6 +2745,128 @@ public class ForceDozeService extends Service {
             Log.e(TAG, "Could not read device idle mode: " + e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * Classifies what the controller reported, conservatively.
+     * <p>
+     * Only the two forms observed on the device are recognised. Anything else is UNKNOWN and is
+     * never read as success: an OEM or version that words its output differently must fall into the
+     * conservative path, not into a claimed session. The raw output is not persisted; only this
+     * bounded classification is logged.
+     */
+    private int classifyControllerOutput(List<String> stdout, List<String> stderr) {
+        List<String> lines = new ArrayList<>();
+        if (stdout != null) {
+            lines.addAll(stdout);
+        }
+        if (stderr != null) {
+            lines.addAll(stderr);
+        }
+        boolean refused = false;
+        boolean success = false;
+        for (String line : lines) {
+            if (line == null) {
+                continue;
+            }
+            String normalised = line.toLowerCase(Locale.US);
+            if (normalised.contains("unable to go deep idle") || normalised.contains("stopped at ")) {
+                refused = true;
+            } else if (normalised.contains("now forced in to deep idle mode")
+                    || normalised.contains("now forced into deep idle mode")) {
+                success = true;
+            }
+        }
+        // Refusal wins if both somehow appear: never upgrade an ambiguous result to success.
+        if (refused) {
+            return CONTROLLER_REFUSED;
+        }
+        return success ? CONTROLLER_SUCCESS : CONTROLLER_UNKNOWN;
+    }
+
+    private static String controllerResultName(int result) {
+        switch (result) {
+            case CONTROLLER_SUCCESS:
+                return "success";
+            case CONTROLLER_REFUSED:
+                return "refused";
+            default:
+                return "unknown";
+        }
+    }
+
+    /** Caller must hold {@link #physicalEntryLock}. */
+    private void clearPendingFreshEntryConfirmationLocked() {
+        pendingEntryConfirmToken = 0;
+        pendingEntryCommandAccepted = false;
+        pendingEntryIdleObserved = false;
+    }
+
+    /**
+     * The second of the two signals: deep idle has actually been observed.
+     * <p>
+     * On its own this proves only that the device is idle, not that this app's command caused it -
+     * the transition could be anyone's. So it is recorded against the exact attempt and the commit
+     * still waits for the command to report acceptance. A stale token never commits, and an
+     * observation arriving after cancellation cannot resurrect an abandoned attempt.
+     *
+     * @return true when the observation belonged to a current fresh attempt
+     */
+    private boolean onDeepIdleObservedForFreshEntry() {
+        boolean commitFailed = false;
+        boolean cleanupUnwanted = false;
+        int token;
+        synchronized (physicalEntryLock) {
+            if (!isPendingFreshEntryConfirmationLocked()) {
+                return false;
+            }
+            token = pendingEntryConfirmToken;
+            pendingEntryIdleObserved = true;
+            if (!pendingEntryCommandAccepted) {
+                // Broadcast first. Hold the observation; the command result decides.
+                DiagnosticLogger.i("DOZE", "entry_idle_observed token=" + token
+                        + " awaiting=command_result");
+                return true;
+            }
+            if (!isFreshEntryStillWanted(getApplicationContext())) {
+                // Both halves are in but the session is no longer wanted, and the device really is
+                // forced, so it must be taken back out rather than committed or abandoned.
+                clearPendingFreshEntryConfirmationLocked();
+                physicalEntryPhase = PHASE_CLEANING_UP;
+                cleanupUnwanted = true;
+            } else if (dozeStateStore.commitDozeSession()) {
+                physicalEntryPhase = PHASE_NONE;
+                clearPendingFreshEntryConfirmationLocked();
+                DiagnosticLogger.i("DOZE", "entry_committed token=" + token
+                        + " confirmedBy=idle_broadcast");
+                // Inside the barrier, exactly as the callback routes do: the durable
+                // PREPARING -> ACTIVE transition and the session setup it implies must not be
+                // separable by a lifecycle event.
+                commitFreshDozeSession(getApplicationContext());
+                return true;
+            } else {
+                clearPendingFreshEntryConfirmationLocked();
+                physicalEntryPhase = PHASE_CLEANING_UP;
+                commitFailed = true;
+            }
+        }
+
+        if (cleanupUnwanted) {
+            DiagnosticLogger.i("DOZE", "entry_cleanup_started reason=possible_owned_force"
+                    + " detail=precondition_changed token=" + token);
+            dispatchPhysicalForceCleanup(false);
+        } else if (commitFailed) {
+            DiagnosticLogger.e("DOZE", "entry_commit_failed action=physical_cleanup token=" + token);
+            dispatchPhysicalForceCleanup(false);
+        }
+        return true;
+    }
+
+    /** Caller must hold {@link #physicalEntryLock}. */
+    private boolean isPendingFreshEntryConfirmationLocked() {
+        return physicalEntryPhase == PHASE_ATTEMPTING
+                && pendingEntryConfirmToken != 0
+                && pendingEntryConfirmToken == entryAttemptToken;
     }
 
     /**
@@ -2688,7 +2926,19 @@ public class ForceDozeService extends Service {
      * across a locked wake is not affected.
      */
     private void invalidateDesiredEntry(String reason) {
+        boolean abandonConfirmation = false;
         synchronized (physicalEntryLock) {
+            if (physicalEntryPhase == PHASE_ATTEMPTING && pendingEntryCommandAccepted) {
+                // The command already reported acceptance, so the callback that would normally
+                // settle this attempt has already run and nothing else is coming for it. The
+                // controller said the device is forced, so the force is undone rather than left to
+                // an observation that may never arrive. Done before the token moves, so the state
+                // being abandoned is unambiguous.
+                clearPendingFreshEntryConfirmationLocked();
+                physicalEntryPhase = PHASE_CLEANING_UP;
+                abandonConfirmation = true;
+                DiagnosticLogger.i("DOZE", "entry_confirmation_abandoned reason=" + reason);
+            }
             entryAttemptToken++;
             // A deferred fresh entry is pending-entry state like any other: the screen coming on, a
             // call taking over, the charger policy or the custom period ending, a session ending and
@@ -2702,6 +2952,10 @@ public class ForceDozeService extends Service {
             if (physicalEntryPhase == PHASE_ATTEMPTING) {
                 DiagnosticLogger.i("DOZE", "entry_invalidated reason=" + reason);
             }
+        }
+        if (abandonConfirmation) {
+            // Dispatch only; nothing is waited on, and the monitor above has been released.
+            dispatchPhysicalForceCleanup(false);
         }
     }
 
@@ -5372,7 +5626,12 @@ public class ForceDozeService extends Service {
                     // started. The next physical IDLE would then write ENTER_MAINTENANCE and run
                     // the network entry work on top of nothing. The physical state above is still
                     // recorded; only the bookkeeping is gated.
-                    if (!dozeStateStore.isInDoze()) {
+                    // Before the ownership gate below: during PREPARING no session exists yet, so
+                    // that gate would discard the very signal that proves the entry worked. This is
+                    // the confirming half of the fresh-entry latch.
+                    if (inDeepIdle && onDeepIdleObservedForFreshEntry()) {
+                        // Consumed by a current fresh attempt; no maintenance bookkeeping applies.
+                    } else if (!dozeStateStore.isInDoze()) {
                         DiagnosticLogger.i("DOZE", "device_idle_mode_changed_ignored"
                                 + " reason=no_owned_session deepIdle=" + inDeepIdle);
                     } else if (!inDeepIdle) {
