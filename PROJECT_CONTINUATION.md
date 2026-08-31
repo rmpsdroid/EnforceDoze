@@ -1,8 +1,8 @@
 # EnforceDoze Fork — Authoritative Project Continuation
 
-**Updated:** 2026-08-28 (Asia/Kolkata)
+**Updated:** 2026-08-31 (Asia/Kolkata)
 **Repository:** `rmpsdroid/EnforceDoze`
-**Current authoritative master:** `94e70f6`
+**Current authoritative master:** `48f7d30`
 **Purpose:** single source of truth for continuing this project in a new ChatGPT window without restarting the investigation.
 
 ---
@@ -170,42 +170,46 @@ Do not assume version metadata changed unless verified from the current source/b
 
 ---
 
-# 5. CURRENT GIT STATE — 2026-08-28 END OF SESSION
+# 5. CURRENT GIT STATE — 2026-08-31
 
-Current branch:
+Authoritative functional branch:
 
 `master`
 
-Current local HEAD:
+Latest functional baseline:
 
-`94e70f6`
+`48f7d30`
 
-Current remote:
+Current remote functional baseline:
 
-`origin/master = 94e70f6`
+`origin/master = 48f7d30`
 
-Verified final log:
+Verified latest functional commits:
 
 ```text
-94e70f6 (HEAD -> master, origin/master, origin/fix/boot-disabled-restore-liveness-v1, origin/HEAD, fix/boot-disabled-restore-liveness-v1) Fix disabled boot restore after late Shizuku start
-9b88c55 (origin/fix/shizuku-mode-switch-recovery-v1, fix/shizuku-mode-switch-recovery-v1) Fix restore retry after execution mode switch
-78f21e0 (origin/fix/shizuku-recovery-leave-doze-v1, fix/shizuku-recovery-leave-doze-v1) Fix durable Shizuku Doze exit recovery
+48f7d30 Exclude recovery journal from Android backup
+b013a48 Fix disabled recovery service settlement
+94e70f6 Fix disabled boot restore after late Shizuku start
+9b88c55 Fix restore retry after execution mode switch
+78f21e0 Fix durable Shizuku Doze exit recovery
 ```
 
-The latest merge/push sequence was explicitly approved and completed:
+`48f7d30` is the current authoritative functional baseline.
 
-- feature branch `fix/boot-disabled-restore-liveness-v1`;
-- commit `94e70f6`;
-- branch pushed;
-- fast-forward merged to `master`;
-- `master` pushed;
-- local `master` and `origin/master` synchronized.
+The latest functional fix was reviewed, committed on its feature branch, pushed, fast-forward merged to `master`, and `master` was pushed.
 
-Therefore any older handoff statement saying `master` is still at `a5b7c4a...`, that `master` has not been changed, or that these fixes are branch-only is **historical**.
+Local `master` and `origin/master` were verified synchronized at `48f7d30`.
+
+Documentation remains intentionally separate on:
+
+`docs/continuation-20260828`
+
+Do **not** merge the documentation branch to `master` unless explicitly approved.
 
 Historical custom audit baseline remains relevant for provenance:
 
 `audit/claude-current`
+
 `fda26b14176480927db22271644a7096bbc9c285`
 
 ---
@@ -243,66 +247,37 @@ Stage source/document files explicitly by path.
 
 Primary validation device:
 
-**Samsung Galaxy S26 Ultra**
+**Samsung Galaxy S26 Ultra, API 36, One UI**
 
-- Android API 36
-- Samsung One UI
-- Shizuku preferred backend
+Preferred execution mode:
 
-Latest working wireless ADB endpoint after the final reboot test:
+`shizuku`
 
-`30.30.30.234:38481`
-
-Older endpoints may remain listed as `offline`.
-
-**Do not treat the port as permanent.** After reboot, first run:
-
-`C:\adb\adb.exe devices`
-
-and use the row whose state is `device`.
-
-Shizuku process name:
-
-`shizuku_server`
-
-PowerShell note:
-
-`$PID` is a reserved automatic variable. When storing the Shizuku PID, use something like:
-
-`$shizukuPid`
-
-Normal user preference:
+Normal preference:
 
 `waitForUnlock=true`
 
-Execution mode during the latest test:
+Latest known wireless ADB endpoint from the current testing session:
 
-`executionMode=shizuku`
+`30.30.30.234:44461`
 
-Important current device-setting note:
+Wireless debugging ports are dynamic. Always verify with `adb devices` after reconnect/reboot rather than assuming this endpoint remains valid.
 
-The final boot-recovery reproduction deliberately left:
+Current clean post-regression state:
 
-`serviceEnabled=false`
-
-The EnforceDoze main switch was turned OFF as part of the test. Before normal use or a new ordinary Doze regression, verify whether the user wants the service re-enabled.
-
-Final observed post-recovery device state:
-
-- Shizuku running;
-- `ForceDozeService` stopped;
 - `serviceEnabled=false`;
-- `executionMode=shizuku`;
-- `inDoze=false`;
-- `ownedReforcePending=false`;
-- `entryPending=false`;
-- suspended-package debt cleared;
+- `ForceDozeService` stopped;
 - `mForceIdle=false`;
-- `mState=ACTIVE`;
-- `mLightState=ACTIVE`;
-- ChatGPT package `suspended=false`.
+- device ACTIVE after final unlock;
+- `inDoze=false`;
+- `entryPending=false`;
+- `ownedReforcePending=false`;
+- `sessionPhysicalMode=0`;
+- no `appliedSuspendedPackages` set remains;
+- `appliedSuspendedPackagesGeneration=420` remains as the generation counter;
+- temporary screen timeout used for Regression 2 was restored from `15000` to `600000` ms.
 
-The generation metadata value `231` remained in the journal as historical generation metadata; the applied suspended-package set itself was cleared.
+Before a new ordinary Doze regression, enable EnforceDoze through its normal UI path and establish a clean unlocked baseline first.
 
 ---
 
@@ -358,13 +333,21 @@ The historical snapshots later in this file contain the full earlier chronology.
 - Generation-safe device-state restores:
   - `d369e4e490a0cb5cd02c3eb4d5ee2fdf594ce4f8`
 
-## Latest three Shizuku/recovery commits now on `master`
+## Latest functional commits now on `master`
 
 1. `78f21e0` — **Fix durable Shizuku Doze exit recovery**
 2. `9b88c55` — **Fix restore retry after execution mode switch**
 3. `94e70f6` — **Fix disabled boot restore after late Shizuku start**
+4. `b013a48` — **Fix disabled recovery service settlement**
+5. `48f7d30` — **Exclude recovery journal from Android backup**
 
-The latest three are described in detail below.
+Latest functional baseline:
+
+`48f7d30`
+
+The first three recovery commits are described in detail below.
+
+The Stage19 settlement fix, closed regressions, and Android backup-safety fix are summarized in Section 14.
 
 ---
 
@@ -899,43 +882,149 @@ The GitHub continuation document should summarize evidence, while raw logs remai
 
 ---
 
-# 14. IMPORTANT FOLLOW-UP AFTER `94e70f6` — NOT A CONFIRMED BUG
+# 14. 2026-08-31 PHASE 0 CLOSURES AFTER `94e70f6`
 
-One regression remains worth testing before considering the application-level late-Shizuku trigger completely closed under all boot orderings:
+Several items that were still open in the 2026-08-28 handoff are now closed.
 
-## Disabled boot + durable debt + Shizuku already available
+## 14.1 Stage19 - disabled recovery settlement - `b013a48`
 
-Reason:
+Confirmed pre-fix reliability bug:
 
-During boot, `Application.onCreate()` runs before/around `BootCompleteReceiver`.
+- application disabled;
+- durable package recovery debt exists;
+- Shizuku starts temporary recovery foreground service;
+- batch unsuspend fails and asynchronous per-package fallback begins;
+- old fixed 3-second `stopSelf()` could destroy the service/process before fallback settled;
+- callback could therefore fail to clear the durable journal.
 
-If all of these are true:
+Fix:
 
-- Shizuku mode selected;
-- `serviceEnabled=false`;
-- durable package/state debt exists;
-- Shizuku is already available at application startup;
+`b013a48 Fix disabled recovery service settlement`
 
-then:
+The disabled recovery service now remains alive until recovery work actually settles.
 
-1. `MyApplication` may see debt and immediately start `ACTION_RESTORE_STATE`;
-2. `BootCompleteReceiver` may also detect the same debt and start `ACTION_RESTORE_STATE`.
+The fix also prevents disabled recovery teardown from redispatching into a fresh Doze entry.
 
-This could cause duplicate recovery delivery.
+Decisive device evidence:
 
-No harmful duplicate behavior has been proven.
+```text
+final_unsuspend_success count=232 gen=419 durationMs=8594
+disabled_restore_stop_settled ... stopped=true
+disabled_restore_teardown_no_redispatch
+```
 
-Do **not** label it a bug yet.
+Verdict:
 
-It should be treated as:
+**PASS / FIXED / COMMITTED / PUSHED / MERGED**
 
-**FOLLOW-UP REGRESSION / SOURCE-AUDIT ITEM**
+## 14.2 Regression 1 - duplicate recovery starts
 
-Test/read source before changing code.
+Concern:
 
-Avoid using unreliable `Utils.isMyServiceRunning()` as a correctness gate merely to suppress duplicate starts; earlier source comments indicate One UI can misreport running-service state.
+`MyApplication.onCreate()` and `BootCompleteReceiver` may both create recovery opportunities for the same durable debt.
 
-Possible duplicate delivery may already be harmless because restore operations/journals are guarded/serialized, but this should be proven rather than assumed.
+Controlled testing produced:
+
+- service recreation recovery;
+- two `ACTION_RESTORE_STATE` deliveries;
+- same generation-419 recovery debt;
+- only one physical final unsuspend transaction.
+
+The exact Samsung boot ordering with Shizuku already available at earliest startup was not naturally reproduced.
+
+However, the relevant concurrency/idempotency condition was exercised and duplicate logical starts safely coalesced.
+
+Verdict:
+
+**PASS / NO CODE CHANGE WARRANTED**
+
+Do not reopen this regression without new evidence.
+
+## 14.3 Regression 2 - locked-wake same-session reforce
+
+Normal preference:
+
+`waitForUnlock=true`
+
+Exact sequence tested:
+
+```text
+owned Doze
+-> screen ON while still locked
+-> physical forced idle released
+-> logical owned session retained
+-> natural screen timeout OFF while still locked
+-> SAME SESSION re-forced idle
+-> USER_PRESENT final exit and restore
+```
+
+Key invariants:
+
+- logical session remained owned during locked wake;
+- generation remained `420`;
+- no fresh generation `421` was created;
+- same session physically re-entered forced idle after locked timeout;
+- final USER_PRESENT restored packages and ended the session.
+
+Final evidence included:
+
+```text
+owned_session_resumed reason=screen off
+owned_session_reforce_idle reason=screen off plan=shizuku
+force_idle_attempt_start mode=resume
+force_idle_result mode=resume success=true
+final_unsuspend_success count=232 gen=420 durationMs=6302
+```
+
+Final durable state:
+
+- `inDoze=false`;
+- `ownedReforcePending=false`;
+- `entryPending=false`;
+- `sessionPhysicalMode=0`;
+- no `appliedSuspendedPackages` set remained.
+
+Verdict:
+
+**PASS / SAME-SESSION REFORCE VERIFIED / NO CODE CHANGE WARRANTED**
+
+## 14.4 Android backup recovery-journal safety - `48f7d30`
+
+Release audit confirmed:
+
+- `android:allowBackup="true"`;
+- no platform backup exclusion rules;
+- durable recovery journal stored in private SharedPreferences `enforcedoze_doze_state`.
+
+That journal is valid for same-installation crash/reboot recovery but must not migrate through Android cloud backup or device transfer.
+
+Fix:
+
+`48f7d30 Exclude recovery journal from Android backup`
+
+Added:
+
+- API 23-30 `fullBackupContent` rules;
+- Android 12+ `dataExtractionRules`;
+- cloud-backup exclusion for `enforcedoze_doze_state.xml`;
+- device-transfer exclusion for `enforcedoze_doze_state.xml`;
+- ordinary user preferences remain backup-eligible.
+
+Validation:
+
+- XML parse PASS;
+- UTF-8 no-BOM PASS;
+- `git diff --check` PASS;
+- debug build SUCCESS;
+- merged manifest contains both backup-rule attributes.
+
+Verdict:
+
+**CONFIRMED RELEASE BLOCKER / FIXED / BUILT / VERIFIED / COMMITTED / PUSHED / MERGED**
+
+Latest functional baseline:
+
+`48f7d30`
 
 ---
 
@@ -1113,6 +1202,8 @@ Important architecture:
 
 - handleScreenOn/session-exit barrier — PASS / NO FIX
 - sensor serializer narrow concurrency — PASS / NO FIX
+- duplicate recovery-start coalescing after `94e70f6` — PASS / NO FIX
+- exact same-session lockscreen timeout reforce — PASS / NO FIX
 
 ## Completed / fixed
 
@@ -1124,31 +1215,39 @@ Important architecture:
 - Shizuku durable physical exit recovery
 - restore retry after execution-mode switch
 - disabled boot restore after late Shizuku start
+- disabled recovery service settlement — `b013a48`
+- Android backup/device-transfer exclusion for durable recovery journal — `48f7d30`
 
 ## Follow-up / deferred
 
-Priority should be adjusted by evidence, but current useful order is:
+The two 2026-08-28 regressions and the Android backup blocker are now closed.
 
-1. `94e70f6` regression: disabled boot + durable debt + Shizuku already available; prove whether duplicate `ACTION_RESTORE_STATE` delivery is harmless or needs gating.
-2. Same-session lockscreen timeout reforce regression, if still not subsequently proven.
-3. Generic SharedPreferences commit-result handling.
-4. Maintenance async restore/reapply behavior.
-5. Maintenance process-death recovery.
-6. Shizuku `newProcess` deprecation / newer Android API behavior.
-7. stdout/stderr pipe deadlock risk.
-8. broader `onDestroy` async restore / boot timing audit beyond the now-fixed late-Shizuku liveness case.
-9. notification blocklist exact-set correctness.
-10. notification-only boot/process-death restoration durability.
-11. biometric pre-state assumptions.
-12. root orphan processes.
-13. `getPlayingPackageName` missing callback.
-14. root child-process survival.
+Phase 0 is **not yet declared fully complete**. Continue the final blocker inventory one candidate at a time, read-only before making changes.
+
+Current priority order:
+
+1. `DozeStateStore.setInDoze(false)` calls outside the intended lifecycle/barrier path.
+2. Motion-sensor `onDestroy()` safety-net behavior.
+3. R0-1: dead or unreachable `leaveDoze` behavior.
+4. R0-3: ambiguous legacy final-exit ownership.
+5. R0-4: media/getPlayingPackageName path that may fail to invoke its callback.
+6. R0-5: root child-process survival/orphan behavior.
+7. Generic SharedPreferences commit-result handling.
+8. Maintenance async restore/reapply behavior.
+9. Maintenance process-death recovery.
+10. Shizuku `newProcess` deprecation / newer Android API behavior.
+11. stdout/stderr pipe deadlock risk.
+12. notification blocklist exact-set correctness.
+13. notification-only boot/process-death restoration durability.
+14. biometric pre-state assumptions.
 15. pre-N tracked release protocol.
 16. tunable callback absence.
 17. marker-stuck edge cases.
 18. PREPARING phantom-boot risk.
 
-Do not treat this order as immutable.
+These are audit candidates, not confirmed bugs. Independently verify each from current source before adopting or changing code.
+
+Do not treat this order as immutable when stronger evidence changes priority.
 
 ---
 
@@ -4056,77 +4155,119 @@ Do **not** make me restate completed history.
 - Fork: `rmpsdroid/EnforceDoze`
 - Local repo: `D:\AndroidProjects\EnforceDoze`
 - Package: `com.akylas.enforcedoze.fork`
-- Current branch: `master`
-- Current authoritative HEAD: `94e70f6`
-- `origin/master`: `94e70f6`
+- Authoritative functional branch: `master`
+- Latest functional baseline: `48f7d30`
+- `origin/master`: `48f7d30`
+- Documentation branch: `docs/continuation-20260828`
+- Do **not** merge the documentation branch to `master` unless explicitly approved.
 
-Latest commits on master:
+Latest functional commits:
 
 ```text
+48f7d30 Exclude recovery journal from Android backup
+b013a48 Fix disabled recovery service settlement
 94e70f6 Fix disabled boot restore after late Shizuku start
 9b88c55 Fix restore retry after execution mode switch
 78f21e0 Fix durable Shizuku Doze exit recovery
 ```
 
-### Latest fix status
+### Latest Phase 0 closures
 
-`94e70f6` is:
+`b013a48`:
 
 **REPRODUCED / FIXED / BUILD PASS / DEVICE TEST PASS / COMMITTED / PUSHED / MERGED**
 
-It fixed:
+It fixes disabled recovery service/process liveness ending before asynchronous durable restore work settles.
 
-**service disabled + durable boot restore debt + Shizuku unavailable during finite boot recovery + Shizuku starts later**
+Decisive recovery evidence:
 
-New event-driven behavior:
+```text
+final_unsuspend_success count=232 gen=419 durationMs=8594
+disabled_restore_stop_settled ... stopped=true
+disabled_restore_teardown_no_redispatch
+```
 
-**ShizukuProvider wakes EnforceDoze -> binder received -> temporary `ACTION_RESTORE_STATE` FGS -> durable package restore succeeds -> disabled service stops again.**
+Regression 1:
 
-No polling and no permanently resident disabled service.
+**PASS / NO FIX**
 
-### Latest decisive device evidence
+Duplicate logical recovery starts safely coalesced for the same generation-419 durable debt.
 
-Initial boot restore:
+The exact earliest-boot Samsung ordering with Shizuku already available was not naturally reproduced, so do not claim that exact timing was deterministic.
 
-- `BOOT_RECOVERY_PENDING ... suspendedPackages=232`
-- Shizuku unavailable
-- restore failed `exit=-1`
-- debt retained
+Regression 2:
 
-Later:
+**PASS / NO FIX**
 
-- Android started EnforceDoze PID `25867` specifically for:
-  - `rikka.shizuku.ShizukuProvider`
-- `ShizukuHandler: Shizuku binder received`
-- Android allowed `ACTION_RESTORE_STATE`
-- `HARD_BLOCK_BATCH unsuspend count=232 exit=0`
-- `HARD_BLOCK_RESTORE_COMMAND_FINISHED exit=0 count=232`
-- service stopped again after its disabled-state grace period
-- final ChatGPT `suspended=false`
-- final `mForceIdle=false`
-- final `mState=ACTIVE`
+Exact sequence verified:
 
-### Important current phone setting
+```text
+owned Doze
+-> locked wake physical unforce
+-> same logical session retained
+-> natural locked timeout OFF
+-> same-session physical reforce
+-> USER_PRESENT final cleanup
+```
 
-The reproduction left the EnforceDoze main service switch OFF:
+Generation remained `420`; no generation `421` was created.
 
-`serviceEnabled=false`
+Final package restore:
+
+```text
+final_unsuspend_success count=232 gen=420 durationMs=6302
+```
+
+`48f7d30`:
+
+**CONFIRMED RELEASE BLOCKER / FIXED / BUILD PASS / VERIFIED / COMMITTED / PUSHED / MERGED**
+
+It excludes the durable recovery journal `enforcedoze_doze_state.xml` from:
+
+- API 23-30 Android Auto Backup;
+- Android 12+ cloud backup;
+- Android 12+ device-to-device transfer.
+
+Normal user preferences remain backup-eligible.
+
+### Current clean phone state
+
+Primary device:
+
+**Samsung Galaxy S26 Ultra, API 36, One UI**
 
 Execution mode:
 
 `shizuku`
 
-Before ordinary Doze testing, verify whether it should be re-enabled.
+Normal preference:
+
+`waitForUnlock=true`
+
+Post-regression cleanup:
+
+```text
+serviceEnabled=false
+ForceDozeService stopped
+mForceIdle=false
+inDoze=false
+entryPending=false
+ownedReforcePending=false
+sessionPhysicalMode=0
+no appliedSuspendedPackages set
+generation counter=420
+screen_off_timeout=600000
+```
 
 ### Current ADB
 
-Latest endpoint from the final reboot:
+Latest known endpoint:
 
-`30.30.30.234:38481`
+`30.30.30.234:44461`
 
-But wireless debugging ports change.
+Wireless debugging ports change.
 
-Always run `adb devices` first after reboot and use the endpoint whose state is `device`.
+Always run `adb devices` after reconnect/reboot and use the endpoint whose state is `device`.
 
 ### Protected untracked files
 
@@ -4151,23 +4292,34 @@ Never use `git add .`.
 
 Start read-only.
 
-First verify Git state before any change.
+First verify Git state and confirm the latest functional baseline remains:
 
-The most direct follow-up is:
+`48f7d30`
 
-**Regression/source audit for disabled boot + durable debt when Shizuku is ALREADY available at startup.**
+Do **not** reopen these completed regressions without new evidence:
 
-Question to answer:
+1. duplicate recovery-start coalescing;
+2. exact same-session lockscreen timeout reforce;
+3. Android backup recovery-journal exclusion.
 
-> Can `MyApplication.onCreate()` and `BootCompleteReceiver` both deliver `ACTION_RESTORE_STATE` for the same durable debt, and if so, is duplicate delivery already harmless/serialized or does it require a narrow idempotency gate?
+Phase 0 is **not yet fully closed**.
 
-Do not assume there is a bug.
+Next audit candidate:
 
-Do not use unreliable `isMyServiceRunning()` as a correctness fix merely to suppress duplication.
+**`DozeStateStore.setInDoze(false)` calls outside the intended lifecycle/barrier path.**
 
-If this regression is clean, continue the deferred audit list in PART I.
+Determine from current source:
 
-Also keep the older unclosed same-session lockscreen timeout reforce regression on the backlog unless evidence shows it was completed later.
+- every call site of `setInDoze(false)`;
+- what lifecycle state and ownership each call represents;
+- whether any call can clear durable `inDoze` state before physical/package restoration has safely settled;
+- whether existing barriers/serializers already make those calls safe.
+
+Treat this as an audit candidate, not a confirmed bug.
+
+Do not change code until source evidence demonstrates a concrete invariant violation and the rollback/test plan is understood.
+
+After that candidate, continue the remaining Phase 0 blocker list in Section 18.
 
 ### How to work with me
 
