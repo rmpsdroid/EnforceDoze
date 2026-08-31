@@ -485,6 +485,16 @@ public class ForceDozeService extends Service {
     private volatile boolean serviceStopping = false;
 
     /**
+     * ACTION_RESTORE_STATE can run as a temporary foreground service while EnforceDoze itself is
+     * disabled. Keep that process alive until the asynchronous recovery commands have genuinely
+     * settled; otherwise Android can kill the process after physical restoration but before the
+     * durable completion callbacks clear their journal records.
+     */
+    private final AtomicBoolean disabledRecoveryStopArmed = new AtomicBoolean(false);
+    private final AtomicBoolean disabledRecoverySettledStop = new AtomicBoolean(false);
+    private volatile int disabledRecoveryStartId = 0;
+
+    /**
      * "A fresh entry became due, and the selected Shizuku backend was not there."
      * <p>
      * Armed in exactly one place: the backend decision inside enterDoze(), which is only ever
@@ -1153,6 +1163,8 @@ public class ForceDozeService extends Service {
         // Before anything below can dispatch a command whose callback might want to start a new
         // entry on a service that is going away.
         serviceStopping = true;
+        final boolean settledDisabledRecoveryStop =
+                disabledRecoverySettledStop.getAndSet(false);
         log("Stopping service and enabling sensors");
         DiagnosticLogger.i("APP", "onDestroy");
         unregisterReceiverQuietly(localDozeReceiver);
@@ -1181,7 +1193,7 @@ public class ForceDozeService extends Service {
         // Nothing here blocks the main thread waiting for it, and no ENTER or EXIT row is written
         // for an attempt that never became a session.
         invalidateDesiredEntry("service destroyed");
-        if (dozeStateStore.isEntryPending()) {
+        if (!settledDisabledRecoveryStop && dozeStateStore.isEntryPending()) {
             cleanupPendingPhysicalForce("service destroyed");
         }
         // One non-blocking opportunity to discharge an owned-reforce debt while the shell backends
@@ -1189,14 +1201,22 @@ public class ForceDozeService extends Service {
         // neither duplicates a cleanup nor issues an unforce beside a force whose callback owns the
         // classification. Nothing is waited on, the marker is never cleared optimistically, and the
         // continuation is suppressed because serviceStopping is already set.
-        if (dozeStateStore.isOwnedReforcePending()) {
-            maybeResolveOwnedReforceDebt("service destroyed");
-        }
+        if (!settledDisabledRecoveryStop) {
+            if (dozeStateStore.isOwnedReforcePending()) {
+                maybeResolveOwnedReforceDebt("service destroyed");
+            }
 
-        // Put back everything we changed for Doze; without this a service stopped while dozing
-        // would leave airplane mode on and the sensors off with nobody left to revert them.
-        restoreSuspendedPackages("service destroyed");
-        restoreDeviceStates(getApplicationContext(), "service destroyed");
+            // Put back everything we changed for Doze; without this a service stopped while dozing
+            // would leave airplane mode on and the sensors off with nobody left to revert them.
+            restoreSuspendedPackages("service destroyed");
+            restoreDeviceStates(getApplicationContext(), "service destroyed");
+        } else {
+            // The temporary recovery stop gate already waited for the commands from this recovery
+            // attempt to settle. Failed durable markers stay for a later trigger rather than
+            // immediately beginning another asynchronous attempt during teardown.
+            DiagnosticLogger.i("RECOVERY",
+                    "disabled_restore_teardown_no_redispatch");
+        }
         //ensure we exit doze if stopped from background
         if (dozeStateStore.isInDoze()) {
             exitDoze(getDeviceIdleState());
@@ -1224,6 +1244,9 @@ public class ForceDozeService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         super.onStartCommand(intent, flags, startId);
+        // A newer start owns the service lifetime. If an older temporary recovery had already
+        // requested a controlled stop, that teardown classification no longer applies.
+        disabledRecoverySettledStop.set(false);
         log("Service has now started");
         DiagnosticLogger.i("APP", "onStartCommand action=" + (intent != null ? intent.getAction() : "null")
                 + " flags=" + flags + " startId=" + startId);
@@ -1247,7 +1270,7 @@ public class ForceDozeService extends Service {
                     return START_STICKY;
                 case ACTION_RESTORE_STATE:
                     ensureForegroundNotification();
-                    handleRestoreStateRequest();
+                    handleRestoreStateRequest(startId);
                     return START_STICKY;
             }
         }
@@ -1294,7 +1317,7 @@ public class ForceDozeService extends Service {
      * Restores whatever Doze left applied and, when EnforceDoze itself is switched off, stops again
      * afterwards - the service was started purely to get the device back to normal.
      */
-    private void handleRestoreStateRequest() {
+    private void handleRestoreStateRequest(int startId) {
         DiagnosticLogger.i("RECOVERY", "ACTION_RESTORE_STATE received");
         dozeStateStore.setInDoze(false);
         // ACTION_RESTORE_STATE means "put back everything EnforceDoze owns", so the persisted
@@ -1305,12 +1328,88 @@ public class ForceDozeService extends Service {
         restoreDeviceStates(getApplicationContext(), "restore requested");
 
         if (!getDefaultSharedPreferences(getApplicationContext()).getBoolean("serviceEnabled", false)) {
-            log("EnforceDoze is disabled, stopping once the reversion has been given time to run");
-            // Brief grace period so the fire-and-forget shell commands have left the process.
-            new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                log("Reversion issued, stopping the service again");
-                stopSelf();
-            }, 3000);
+            disabledRecoveryStartId = startId;
+            disabledRecoveryStopArmed.set(true);
+            log("EnforceDoze is disabled, keeping the temporary recovery service alive until recovery work settles");
+            maybeStopDisabledRecoveryService("restore requested");
+        }
+    }
+
+    /**
+     * True only while a privileged recovery transaction still has a real command callback
+     * outstanding. Durable debt itself is deliberately not part of this test: a failed command keeps
+     * its marker for the next recovery opportunity, but must not keep a disabled foreground service
+     * resident forever.
+     */
+    private boolean hasDisabledRecoveryWorkInFlight() {
+        synchronized (packageOpLock) {
+            if (inFlightPackageOp != null || pendingPackageOp != null) {
+                return true;
+            }
+        }
+
+        if (!stateRestoreInFlight.isEmpty()) {
+            return true;
+        }
+
+        synchronized (notificationOpLock) {
+            if (notificationOpInFlight || pendingNotificationCommand != null) {
+                return true;
+            }
+        }
+
+        synchronized (physicalEntryLock) {
+            // PHASE_ATTEMPTING is intentionally excluded. Once the force command has returned it
+            // can remain there while waiting only for idle confirmation, which is durable recovery
+            // state rather than an outstanding privileged command.
+            return physicalEntryPhase == PHASE_CLEANING_UP
+                    || ownedReforcePhase == REFORCE_FORCING
+                    || ownedReforcePhase == REFORCE_CLEANUP_IN_FLIGHT
+                    || lockedWakeReleasePhase == RELEASE_IN_FLIGHT;
+        }
+    }
+
+    /**
+     * Stops a temporary disabled ACTION_RESTORE_STATE service only after its asynchronous recovery
+     * commands have genuinely settled. Completion callbacks re-evaluate this gate; there is no
+     * polling loop or arbitrary grace period.
+     */
+    private void maybeStopDisabledRecoveryService(String reason) {
+        if (!disabledRecoveryStopArmed.get() || serviceStopping) {
+            return;
+        }
+
+        // If the user enables EnforceDoze while recovery is running, ordinary enabled-service
+        // lifetime owns the process from that point onward.
+        if (getDefaultSharedPreferences(getApplicationContext())
+                .getBoolean("serviceEnabled", false)) {
+            disabledRecoveryStopArmed.set(false);
+            return;
+        }
+
+        if (hasDisabledRecoveryWorkInFlight()) {
+            DiagnosticLogger.i("RECOVERY",
+                    "disabled_restore_stop_deferred reason=" + reason);
+            return;
+        }
+
+        if (!disabledRecoveryStopArmed.compareAndSet(true, false)) {
+            return;
+        }
+
+        int startId = disabledRecoveryStartId;
+        disabledRecoverySettledStop.set(true);
+
+        log("Temporary disabled recovery work settled, stopping service");
+        boolean stopped = stopSelfResult(startId);
+        DiagnosticLogger.i("RECOVERY",
+                "disabled_restore_stop_settled reason=" + reason
+                        + " startId=" + startId
+                        + " stopped=" + stopped);
+
+        // A newer startId means this recovery request no longer owns shutdown.
+        if (!stopped) {
+            disabledRecoverySettledStop.set(false);
         }
     }
 
@@ -1814,6 +1913,7 @@ public class ForceDozeService extends Service {
 
         if (!cleared) {
             maybeResolveOwnedReforceDebt("locked-wake release unresolved");
+            maybeStopDisabledRecoveryService("locked-wake release settled");
             return;
         }
         // The shared marker gates fresh entry, so while this release held it a legitimate new
@@ -1826,6 +1926,7 @@ public class ForceDozeService extends Service {
         if (reevaluate) {
             ensureOwnedDozePhysicalState("locked-wake release settled", capturedEpoch);
         }
+        maybeStopDisabledRecoveryService("locked-wake release settled");
     }
 
     private static String sessionWorkStateName(int state) {
@@ -2068,6 +2169,7 @@ public class ForceDozeService extends Service {
             // owned it is allowed to have it back, once.
             onOwnedReforceSettled(true);
         }
+        maybeStopDisabledRecoveryService("owned reforce cleanup settled");
     }
 
     /**
@@ -3193,6 +3295,11 @@ public class ForceDozeService extends Service {
      * working.
      */
     private boolean isFreshEntryStillWanted(Context context) {
+        // A temporary recovery service may be alive while EnforceDoze itself is disabled;
+        // recovery completion must never turn that service lifetime into a fresh Doze entry.
+        if (!getDefaultSharedPreferences(context).getBoolean("serviceEnabled", false)) {
+            return false;
+        }
         if (Utils.isScreenOn(context)) {
             return false;
         }
@@ -3344,6 +3451,7 @@ public class ForceDozeService extends Service {
                     if (cleared && allowReentry) {
                         reevaluateEntryAfterCleanup();
                     }
+                    maybeStopDisabledRecoveryService("entry cleanup settled");
                 }, false);
     }
 
@@ -4124,6 +4232,7 @@ public class ForceDozeService extends Service {
             // Only the real callback releases the next request, so ordering follows completion
             // rather than dispatch. Works identically on the root backend.
             dispatchPendingNotificationOp();
+            maybeStopDisabledRecoveryService("notification restore settled");
         }, false);
     }
 
@@ -4513,6 +4622,7 @@ public class ForceDozeService extends Service {
         // thing standing between a deferred entry and its retry.
         maybeRetryDeferredShizukuEntry("package_debt_cleared");
         maybeConsumeDebtFreshEntryIntent("package_debt_cleared");
+        maybeStopDisabledRecoveryService("package restore settled");
     }
 
     public String getDeviceIdleState() {
@@ -5044,6 +5154,7 @@ public class ForceDozeService extends Service {
         // availability callback coming to release it.
         maybeRetryDeferredShizukuEntry("restore_debt_cleared");
         maybeConsumeDebtFreshEntryIntent("restore_debt_cleared");
+        maybeStopDisabledRecoveryService("device-state restore settled");
     }
 
     /**
@@ -5364,6 +5475,7 @@ public class ForceDozeService extends Service {
             // reforce gets its chance, subject to any restore debt still outstanding.
             onOwnedReforceSettled(false);
         }
+        maybeStopDisabledRecoveryService("owned reforce result settled");
     }
 
     /**
