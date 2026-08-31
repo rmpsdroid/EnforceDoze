@@ -1026,6 +1026,43 @@ Latest functional baseline:
 
 `48f7d30`
 
+## 14.5 Candidate 2 - raw `setInDoze(false)` lifecycle/barrier audit
+
+Audit target:
+
+`DozeStateStore.setInDoze(false)` calls outside the normal transactional session-finalization path.
+
+Current source contains only two raw `setInDoze(false)` call sites:
+
+- `BootCompleteReceiver.recoverStateAfterBoot()`;
+- `ForceDozeService.handleRestoreStateRequest()`.
+
+The audit established that `inDoze` represents logical session ownership, while recovery debt is independently durable:
+
+- `entryPending` / `ownedReforcePending` track physical force/unforce debt;
+- `appliedSuspendedPackages` tracks package restoration debt;
+- applied state keys track device-state restoration debt.
+
+Fresh entry does not become legal merely because `inDoze=false`.
+
+Both privileged and tunable fresh-entry paths refuse entry while package or device-state restore debt exists. Deferred Shizuku entry applies the same recovery-priority rule before retrying.
+
+The late-Shizuku `ACTION_RESTORE_STATE` trigger in `MyApplication` is additionally restricted to:
+
+- configured Shizuku mode;
+- `serviceEnabled=false`;
+- actual package or device-state recovery debt.
+
+`ForceDozeService` is `android:exported="false"`, so another application cannot directly inject `ACTION_RESTORE_STATE`.
+
+Boot clearing of `inDoze` is therefore intentional: reboot ends the old logical session, while any restrictions that survive reboot remain independently journalled and continue to block fresh entry until recovery settles.
+
+Verdict:
+
+**PASS / NO FIX**
+
+No code change, build, APK install or device test was warranted for this source-audit candidate.
+
 ---
 
 # 15. SEPARATE NOTIFICATION BOOT-RECOVERY OBSERVATION
@@ -1204,6 +1241,7 @@ Important architecture:
 - sensor serializer narrow concurrency — PASS / NO FIX
 - duplicate recovery-start coalescing after `94e70f6` — PASS / NO FIX
 - exact same-session lockscreen timeout reforce — PASS / NO FIX
+- raw `DozeStateStore.setInDoze(false)` lifecycle/barrier audit — PASS / NO FIX
 
 ## Completed / fixed
 
@@ -1226,24 +1264,23 @@ Phase 0 is **not yet declared fully complete**. Continue the final blocker inven
 
 Current priority order:
 
-1. `DozeStateStore.setInDoze(false)` calls outside the intended lifecycle/barrier path.
-2. Motion-sensor `onDestroy()` safety-net behavior.
-3. R0-1: dead or unreachable `leaveDoze` behavior.
-4. R0-3: ambiguous legacy final-exit ownership.
-5. R0-4: media/getPlayingPackageName path that may fail to invoke its callback.
-6. R0-5: root child-process survival/orphan behavior.
-7. Generic SharedPreferences commit-result handling.
-8. Maintenance async restore/reapply behavior.
-9. Maintenance process-death recovery.
-10. Shizuku `newProcess` deprecation / newer Android API behavior.
-11. stdout/stderr pipe deadlock risk.
-12. notification blocklist exact-set correctness.
-13. notification-only boot/process-death restoration durability.
-14. biometric pre-state assumptions.
-15. pre-N tracked release protocol.
-16. tunable callback absence.
-17. marker-stuck edge cases.
-18. PREPARING phantom-boot risk.
+1. Motion-sensor `onDestroy()` safety-net behavior.
+2. R0-1: dead or unreachable `leaveDoze` behavior.
+3. R0-3: ambiguous legacy final-exit ownership.
+4. R0-4: media/getPlayingPackageName path that may fail to invoke its callback.
+5. R0-5: root child-process survival/orphan behavior.
+6. Generic SharedPreferences commit-result handling.
+7. Maintenance async restore/reapply behavior.
+8. Maintenance process-death recovery.
+9. Shizuku `newProcess` deprecation / newer Android API behavior.
+10. stdout/stderr pipe deadlock risk.
+11. notification blocklist exact-set correctness.
+12. notification-only boot/process-death restoration durability.
+13. biometric pre-state assumptions.
+14. pre-N tracked release protocol.
+15. tunable callback absence.
+16. marker-stuck edge cases.
+17. PREPARING phantom-boot risk.
 
 These are audit candidates, not confirmed bugs. Independently verify each from current source before adopting or changing code.
 
@@ -4304,16 +4341,22 @@ Do **not** reopen these completed regressions without new evidence:
 
 Phase 0 is **not yet fully closed**.
 
+The `DozeStateStore.setInDoze(false)` lifecycle/barrier audit is now closed:
+
+**PASS / NO FIX**
+
+The raw clears end logical session ownership only. Independent durable physical/package/device-state recovery markers continue to block fresh entry until their recovery settles.
+
 Next audit candidate:
 
-**`DozeStateStore.setInDoze(false)` calls outside the intended lifecycle/barrier path.**
+**Motion-sensor `onDestroy()` safety-net behavior.**
 
 Determine from current source:
 
-- every call site of `setInDoze(false)`;
-- what lifecycle state and ownership each call represents;
-- whether any call can clear durable `inDoze` state before physical/package restoration has safely settled;
-- whether existing barriers/serializers already make those calls safe.
+- every motion-sensor restore or re-enable path reached from service teardown;
+- whether `onDestroy()` can restore sensor state while a logical owned Doze session is intentionally continuing;
+- whether process/service recreation can cause the safety-net to race normal session ownership or durable recovery;
+- whether existing epoch, lifecycle and journal guards already make the behavior safe.
 
 Treat this as an audit candidate, not a confirmed bug.
 
