@@ -1162,6 +1162,204 @@ Master merge commit / current functional baseline: `e4bb9ca`
 
 ---
 
+## 14.7 Candidate 4 - failed-open `rootSession` lifecycle / teardown safety
+
+Audit target:
+
+`ForceDozeService.rootSession` publication and teardown safety when libsuperuser
+`.useSU().open(...)` fails before the interactive shell is fully initialized.
+
+Candidate 3 testing had independently exposed a real crash:
+
+```text
+java.lang.RuntimeException: Unable to stop service ...
+Caused by: java.lang.NullPointerException
+    at eu.chainfire.libsuperuser.Shell$Interactive.closeImmediately(...)
+    at eu.chainfire.libsuperuser.Shell$Interactive.close(...)
+    at com.akylas.enforcedoze.ForceDozeService.onDestroy(...)
+```
+
+Root cause analysis of `eu.chainfire:libsuperuser:1.1.0.201907261845` established:
+
+- `Shell.Builder.open(listener)` may return a partially initialized
+  `Shell.Interactive`;
+- an early low-level open failure reports reason `-3`;
+- because `rootShellExecutor` has no Looper/Handler, that `-3` callback can run
+  synchronously before `.open(listener)` returns;
+- the historical code assigned the returned object directly to static
+  `rootSession`;
+- `rootSession != null` therefore did not prove that the interactive shell was
+  safe to close;
+- `Shell.Interactive.close()` delegates to `closeImmediately()`;
+- `closeImmediately()` assumes process/stdin/stdout/stderr were initialized and
+  can throw `NullPointerException` for an early failed-open object.
+
+A simple `onDestroy()` exception guard was rejected as the production fix because
+it would only mask the invalid lifecycle state.
+
+`waitForOpened(null)` was also rejected. A low-level initialization failure can
+occur after a process object exists but before libsuperuser marks the shell
+running; waiting for the open state in that condition can block indefinitely.
+
+Production candidate invariant:
+
+**Do not publish an early failed-open `Shell.Interactive` into static
+`rootSession`.**
+
+All three `ForceDozeService` root-open paths now use the same non-blocking
+callback handshake:
+
+```text
+rootShellExecutor task
+-> reuse rootSession only when non-null and isRunning()
+-> otherwise clear rootSession
+-> create local candidate with open callback
+-> callback records the open result and queues continuation on rootShellExecutor
+-> publish candidate only while result is unknown or SHELL_RUNNING
+-> synchronous early failure (-3) is therefore never published
+-> asynchronous failure clears rootSession only when it still references that
+   exact candidate
+-> success dispatches the command on that exact opened candidate
+```
+
+The identity check prevents a delayed failure callback from clearing a newer
+replacement shell.
+
+Scope remained intentionally narrow:
+
+- only `ForceDozeService.rootSession` lifecycle was changed;
+- Shizuku command behavior was preserved;
+- Candidate 3 motion-shell behavior was preserved;
+- `nonRootSession` was not changed;
+- Activity-local shell implementations were not changed;
+- executor shutdown/lifecycle redesign was not added.
+
+Source validation:
+
+- branch: `fix/root-session-failed-open-v1`;
+- only tracked production file modified:
+  `app/src/main/java/com/akylas/enforcedoze/ForceDozeService.java`;
+- all three direct historical `rootSession = new Shell.Builder...` publication
+  patterns were replaced by the callback handshake;
+- no `waitForOpened` remains in `ForceDozeService`;
+- `git diff --check` PASS;
+- final production-candidate diff:
+  `149 insertions(+), 50 deletions(-)`;
+- final source diff is identical to the protected pre-runtime audit snapshot
+  `candidate4-current-review.diff`.
+
+Candidate 3 regression protection:
+
+The motion helper remains:
+
+```text
+Shizuku -> existing executeCommand path
+non-Shizuku -> dedicated useSH() Interactive shell
+watchdog -> 5 seconds
+detectOpen -> false
+real callback -> preserved
+cleanup -> closeWhenIdle()
+```
+
+Clean build:
+
+```text
+BUILD SUCCESSFUL
+38 actionable tasks: 38 executed
+```
+
+Production-candidate debug APK:
+
+```text
+app/build/outputs/apk/debug/app-debug.apk
+SHA-256:
+6BF751F1E885B3CD3D414F6B8DC2F37FFD7912C015A89D0D0ED6679AA34549D6
+```
+
+Normal Shizuku smoke test passed before root-failure testing.
+
+Deterministic failed-open validation used the API 36 test device with
+`executionMode=root` while `su` was genuinely unavailable:
+
+```text
+/system/bin/sh: su: inaccessible or not found
+```
+
+The target early failure was reached repeatedly:
+
+```text
+Error opening root shell: exitCode -3
+```
+
+Multiple later commands in the same app process produced fresh `-3` open
+failures, proving the poisoned failed-open candidate was not retained/reused as
+`rootSession`.
+
+Normal service teardown was then invoked through the app UID:
+
+```text
+run-as com.akylas.enforcedoze.fork
+/system/bin/am stopservice --user 0
+-n com.akylas.enforcedoze.fork/com.akylas.enforcedoze.ForceDozeService
+```
+
+Android reported:
+
+```text
+Service stopped
+```
+
+The service entered its destruction path:
+
+```text
+Stopping service and enabling sensors
+HARD_BLOCK_RESTORE_START reason=service destroyed count=232
+```
+
+Teardown itself continued to issue root commands and received controlled
+`exitCode -3` failures.
+
+Critically, the teardown evidence contained no:
+
+```text
+Unable to stop service
+closeImmediately
+FATAL EXCEPTION
+```
+
+`dumpsys activity services` confirmed `ForceDozeService` was gone after the
+normal stop, while the application process remained alive. This proves service
+teardown completed rather than being hidden by whole-process termination.
+
+Final normal configuration was restored:
+
+```text
+serviceEnabled=true
+executionMode=shizuku
+disableMotionSensors=false
+turnOffAllSensorsInDoze=true
+SensorService=Mode : NORMAL
+mForceIdle=false
+mScreenOn=true
+mScreenLocked=false
+mState=ACTIVE
+mLightState=ACTIVE
+ForceDozeService running
+```
+
+Separate follow-up:
+
+`nonRootSession` has structurally similar lifecycle questions, but no equivalent
+runtime failure was proven during Candidate 4. It remains outside this fix and
+must not be changed retrospectively without separate evidence.
+
+Verdict:
+
+**CONFIRMED RELEASE BLOCKER / FIXED / BUILT / DEVICE-VERIFIED**
+
+Functional commit: `75d2041`
+---
+
 # 15. SEPARATE NOTIFICATION BOOT-RECOVERY OBSERVATION
 
 During the boot-liveness source audit, notification restoration was examined.
@@ -1352,32 +1550,35 @@ Important architecture:
 - disabled boot restore after late Shizuku start
 - disabled recovery service settlement — `b013a48`
 - Android backup/device-transfer exclusion for durable recovery journal — `48f7d30`
+- Candidate 3: motion-sensor `onDestroy()` shell lifetime — `fa6fcc0`
+- Candidate 4: failed-open `rootSession` lifecycle / teardown safety — `75d2041`
 
 ## Follow-up / deferred
 
-The two 2026-08-28 regressions and the Android backup blocker are now closed.
+The two 2026-08-28 regressions, the Android backup blocker, Candidate 3 and the
+Candidate 4 failed-open `rootSession` release blocker are now functionally closed.
 
-Phase 0 is **not yet declared fully complete**. Continue the final blocker inventory one candidate at a time, read-only before making changes.
+Phase 0 is **not yet declared fully complete**. Continue the final blocker inventory
+one candidate at a time, read-only before making changes.
 
 Current priority order:
 
-1. Motion-sensor `onDestroy()` safety-net behavior.
-2. R0-1: dead or unreachable `leaveDoze` behavior.
-3. R0-3: ambiguous legacy final-exit ownership.
-4. R0-4: media/getPlayingPackageName path that may fail to invoke its callback.
-5. R0-5: root child-process survival/orphan behavior.
-6. Generic SharedPreferences commit-result handling.
-7. Maintenance async restore/reapply behavior.
-8. Maintenance process-death recovery.
-9. Shizuku `newProcess` deprecation / newer Android API behavior.
-10. stdout/stderr pipe deadlock risk.
-11. notification blocklist exact-set correctness.
-12. notification-only boot/process-death restoration durability.
-13. biometric pre-state assumptions.
-14. pre-N tracked release protocol.
-15. tunable callback absence.
-16. marker-stuck edge cases.
-17. PREPARING phantom-boot risk.
+1. R0-1: dead or unreachable `leaveDoze` behavior.
+2. R0-3: ambiguous legacy final-exit ownership.
+3. R0-4: media/getPlayingPackageName path that may fail to invoke its callback.
+4. R0-5: root child-process survival/orphan behavior.
+5. Generic SharedPreferences commit-result handling.
+6. Maintenance async restore/reapply behavior.
+7. Maintenance process-death recovery.
+8. Shizuku `newProcess` deprecation / newer Android API behavior.
+9. stdout/stderr pipe deadlock risk.
+10. notification blocklist exact-set correctness.
+11. notification-only boot/process-death restoration durability.
+12. biometric pre-state assumptions.
+13. pre-N tracked release protocol.
+14. tunable callback absence.
+15. marker-stuck edge cases.
+16. PREPARING phantom-boot risk.
 
 These are audit candidates, not confirmed bugs. Independently verify each from current source before adopting or changing code.
 
@@ -4426,75 +4627,60 @@ Never use `git add .`.
 
 Start read-only.
 
-Candidate 3 completed branch:
+Candidate 4 active branch:
 
-`fix/motion-teardown-shell-v1`
+`fix/root-session-failed-open-v1`
 
-Functional commit:
+Current master baseline:
 
-`fa6fcc0`
+`e57c87e`
 
-Documentation commit:
+Candidate 4 - failed-open `rootSession` lifecycle / teardown safety - is now:
 
-`50221ed`
+**CONFIRMED RELEASE BLOCKER / FIXED / BUILT / DEVICE-VERIFIED**
 
-Current master baseline / merge commit:
+Functional commit: `75d2041`
 
-`e4bb9ca`
+The implemented invariant is:
 
-Candidate 3 - motion-sensor `onDestroy()` shell lifetime - is now:
+```text
+early failed-open Shell.Interactive
+-> callback records failure
+-> failed candidate is not published to static rootSession
+-> later root command performs a fresh open attempt
+-> normal onDestroy() does not close the poisoned partial candidate
+```
 
-**CONFIRMED RELEASE BLOCKER / FIXED / BUILT / DEVICE-VERIFIED / COMMITTED / PUSHED / MERGED / MASTER PUSHED**
+Deterministic device evidence repeatedly produced:
+
+```text
+Error opening root shell: exitCode -3
+```
+
+A subsequent normal app-UID `stopservice --user 0` returned `Service stopped`,
+entered the service-destroyed cleanup path, and produced no
+`closeImmediately`, `Unable to stop service`, or `FATAL EXCEPTION`.
+
+The production-candidate APK SHA-256 is:
+
+`6BF751F1E885B3CD3D414F6B8DC2F37FFD7912C015A89D0D0ED6679AA34549D6`
+
+Normal device configuration is restored to Shizuku and the device is ACTIVE with
+SensorService NORMAL.
 
 Do not reopen Candidate 3 without new evidence.
 
-The deterministic teardown race proved:
-
-```text
-physical RESTRICT
--> onDestroy()
--> real RESTRICT callback
--> pending ENABLE dispatch
--> real ENABLE callback
--> SensorService NORMAL
-```
-
-The clean production APK is installed and normal device configuration is restored.
-
-Candidate 3 is pushed, merged to `master`, and `origin/master` is synchronized at `e4bb9ca`.
+Do not broaden Candidate 4 retrospectively into `nonRootSession`, Activity-local
+shells or executor lifecycle without separate evidence.
 
 Phase 0 is **not yet fully closed**.
 
 Next audit candidate:
 
-**Failed-open `rootSession` lifecycle / teardown safety.**
+**R0-1: dead or unreachable `leaveDoze` behavior.**
 
-Candidate 3 testing independently proved that an unsuccessful libsuperuser `.useSU().open(...)` can leave static `rootSession` non-null even though the interactive shell is only partially initialized.
-
-A later `onDestroy()` reached:
-
-```text
-java.lang.NullPointerException
-at eu.chainfire.libsuperuser.Shell$Interactive.closeImmediately(...)
-at eu.chainfire.libsuperuser.Shell$Interactive.close(...)
-at com.akylas.enforcedoze.ForceDozeService.onDestroy(...)
-```
-
-Audit separately:
-
-- every assignment to `rootSession`;
-- whether assignment occurs before asynchronous open success/failure is known;
-- every path that treats `rootSession != null` as proof of a usable shell;
-- whether failed-open shells are cleared consistently;
-- every teardown path that calls `rootSession.close()`;
-- whether the same lifecycle problem can affect `nonRootSession`;
-- the smallest safe invariant, rollback plan and deterministic validation.
-
-Do not fold this retrospectively into Candidate 3.
-
-Do not change code until the failed-open lifecycle and cleanup behavior are fully understood.
-
-After that candidate, continue the remaining Phase 0 blocker list in Section 18.
+Begin read-only and independently verify the current source before deciding
+whether any code change is warranted.
 
 ### How to work with me
 

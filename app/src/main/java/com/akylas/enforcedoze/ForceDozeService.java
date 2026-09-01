@@ -59,7 +59,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -2122,23 +2124,48 @@ public class ForceDozeService extends Service {
         }
         DiagnosticLogger.i("DOZE", "owned_reforce_cleanup_backend=root");
         rootShellExecutor.execute(() -> {
-            if (rootSession != null) {
+            if (rootSession != null && rootSession.isRunning()) {
                 rootSession.addCommand(command, 0, listener);
-            } else {
-                rootSession = new Shell.Builder()
-                        .useSU()
-                        .setWatchdogTimeout(5)
-                        .setMinimalLogging(true)
-                        .open((success, reason) -> {
+                return;
+            }
+
+            // A failed libsuperuser open can return a partially initialized Interactive. Keep the
+            // opening candidate local until we know an early synchronous failure did not occur.
+            rootSession = null;
+            AtomicReference<Shell.Interactive> openingSession = new AtomicReference<>();
+            AtomicInteger openingResult = new AtomicInteger(Integer.MIN_VALUE);
+
+            Shell.Interactive candidate = new Shell.Builder()
+                    .useSU()
+                    .setWatchdogTimeout(5)
+                    .setMinimalLogging(true)
+                    .open((success, reason) -> {
+                        openingResult.set(reason);
+                        rootShellExecutor.execute(() -> {
+                            Shell.Interactive openedSession = openingSession.get();
                             if (reason != Shell.OnShellOpenResultListener.SHELL_RUNNING) {
+                                if (rootSession == openedSession) {
+                                    rootSession = null;
+                                }
                                 log("Error opening root shell for owned reforce cleanup: " + reason);
                                 // Reported rather than dropped: a lost callback would strand the
                                 // debt with nothing left to retry it in this process.
                                 onMarkerlessUnforceResult(-1);
-                            } else {
-                                rootSession.addCommand(command, 0, listener);
+                                return;
+                            }
+
+                            if (openedSession != null) {
+                                openedSession.addCommand(command, 0, listener);
                             }
                         });
+                    });
+
+            openingSession.set(candidate);
+
+            int result = openingResult.get();
+            if (result == Integer.MIN_VALUE
+                    || result == Shell.OnShellOpenResultListener.SHELL_RUNNING) {
+                rootSession = candidate;
             }
         });
     }
@@ -2431,29 +2458,65 @@ public class ForceDozeService extends Service {
             return;
         }
         rootShellExecutor.execute(() -> {
-            if (rootSession != null) {
+            if (rootSession != null && rootSession.isRunning()) {
                 rootSession.addCommand(command, 0, (Shell.OnCommandResultListener2)
                         (commandCode, exitCode, STDOUT, STDERR) -> {
                             DiagnosticLogger.i("DOZE", tag + " exit=" + exitCode);
                             onResult.onCommandResult(commandCode, exitCode, STDOUT, STDERR);
                         });
-            } else {
-                rootSession = new Shell.Builder()
-                        .useSU()
-                        .setWatchdogTimeout(5)
-                        .setMinimalLogging(true)
-                        .open((success, reason) -> {
+                return;
+            }
+
+            // Keep a new root shell local until an early synchronous open failure is ruled out.
+            // Later failures invalidate only the exact candidate that produced their callback.
+            rootSession = null;
+            AtomicReference<Shell.Interactive> openingSession = new AtomicReference<>();
+            AtomicInteger openingResult = new AtomicInteger(Integer.MIN_VALUE);
+
+            Shell.Interactive candidate = new Shell.Builder()
+                    .useSU()
+                    .setWatchdogTimeout(5)
+                    .setMinimalLogging(true)
+                    .open((success, reason) -> {
+                        openingResult.set(reason);
+                        rootShellExecutor.execute(() -> {
+                            Shell.Interactive openedSession = openingSession.get();
                             if (reason != Shell.OnShellOpenResultListener.SHELL_RUNNING) {
+                                if (rootSession == openedSession) {
+                                    rootSession = null;
+                                }
                                 log("Error opening root shell for " + tag + ": " + reason);
-                                onResult.onCommandResult(0, -1, new ArrayList<>(), new ArrayList<>());
-                            } else {
-                                rootSession.addCommand(command, 0, (Shell.OnCommandResultListener2)
-                                        (commandCode, exitCode, STDOUT, STDERR) -> {
-                                            DiagnosticLogger.i("DOZE", tag + " exit=" + exitCode);
-                                            onResult.onCommandResult(commandCode, exitCode, STDOUT, STDERR);
-                                        });
+                                onResult.onCommandResult(
+                                        0,
+                                        -1,
+                                        new ArrayList<>(),
+                                        new ArrayList<>());
+                                return;
+                            }
+
+                            if (openedSession != null) {
+                                openedSession.addCommand(command, 0,
+                                        (Shell.OnCommandResultListener2)
+                                                (commandCode, exitCode, STDOUT, STDERR) -> {
+                                                    DiagnosticLogger.i(
+                                                            "DOZE",
+                                                            tag + " exit=" + exitCode);
+                                                    onResult.onCommandResult(
+                                                            commandCode,
+                                                            exitCode,
+                                                            STDOUT,
+                                                            STDERR);
+                                                });
                             }
                         });
+                    });
+
+            openingSession.set(candidate);
+
+            int result = openingResult.get();
+            if (result == Integer.MIN_VALUE
+                    || result == Shell.OnShellOpenResultListener.SHELL_RUNNING) {
+                rootSession = candidate;
             }
         });
     }
@@ -3950,41 +4013,77 @@ public class ForceDozeService extends Service {
         }
 
         rootShellExecutor.execute(() -> {
-            if (rootSession != null) {
-                rootSession.addCommand(command, 0, (Shell.OnCommandResultListener2) (commandCode, exitCode, STDOUT, STDERR) -> {
-                    if (onResult != null) {
-                        onResult.onCommandResult(commandCode, exitCode, STDOUT, STDERR);
-                    }
-                    if (printOutput) {
-                        printShellOutput(STDOUT);
-                        printShellOutput(STDERR);
-                    }
-                });
-            } else {
-                rootSession = new Shell.Builder().
-                        useSU().
-                        setWatchdogTimeout(5).
-                        setMinimalLogging(true).
-                        open((success, reason) -> {
+            if (rootSession != null && rootSession.isRunning()) {
+                rootSession.addCommand(command, 0, (Shell.OnCommandResultListener2)
+                        (commandCode, exitCode, STDOUT, STDERR) -> {
+                            if (onResult != null) {
+                                onResult.onCommandResult(commandCode, exitCode, STDOUT, STDERR);
+                            }
+                            if (printOutput) {
+                                printShellOutput(STDOUT);
+                                printShellOutput(STDERR);
+                            }
+                        });
+                return;
+            }
+
+            // Keep a new root shell local until an early synchronous open failure is ruled out.
+            // Later failures invalidate only the exact candidate that produced their callback.
+            rootSession = null;
+            AtomicReference<Shell.Interactive> openingSession = new AtomicReference<>();
+            AtomicInteger openingResult = new AtomicInteger(Integer.MIN_VALUE);
+
+            Shell.Interactive candidate = new Shell.Builder()
+                    .useSU()
+                    .setWatchdogTimeout(5)
+                    .setMinimalLogging(true)
+                    .open((success, reason) -> {
+                        openingResult.set(reason);
+                        rootShellExecutor.execute(() -> {
+                            Shell.Interactive openedSession = openingSession.get();
                             if (reason != Shell.OnShellOpenResultListener.SHELL_RUNNING) {
+                                if (rootSession == openedSession) {
+                                    rootSession = null;
+                                }
                                 log("Error opening root shell: exitCode " + reason);
                                 if (onResult != null) {
                                     // Report the failure instead of leaving the caller waiting
                                     // forever for a callback that will never come.
-                                    onResult.onCommandResult(0, -1, new ArrayList<>(), new ArrayList<>());
+                                    onResult.onCommandResult(
+                                            0,
+                                            -1,
+                                            new ArrayList<>(),
+                                            new ArrayList<>());
                                 }
-                            } else {
-                                rootSession.addCommand(command, 0, (Shell.OnCommandResultListener2) (commandCode, exitCode, STDOUT, STDERR) -> {
-                                    if (onResult != null) {
-                                        onResult.onCommandResult(commandCode, exitCode, STDOUT, STDERR);
-                                    }
-                                    if (printOutput) {
-                                        printShellOutput(STDOUT);
-                                        printShellOutput(STDERR);
-                                    }
-                                });
+                                return;
+                            }
+
+                            if (openedSession != null) {
+                                openedSession.addCommand(command, 0,
+                                        (Shell.OnCommandResultListener2)
+                                                (commandCode, exitCode, STDOUT, STDERR) -> {
+                                                    if (onResult != null) {
+                                                        onResult.onCommandResult(
+                                                                commandCode,
+                                                                exitCode,
+                                                                STDOUT,
+                                                                STDERR);
+                                                    }
+                                                    if (printOutput) {
+                                                        printShellOutput(STDOUT);
+                                                        printShellOutput(STDERR);
+                                                    }
+                                                });
                             }
                         });
+                    });
+
+            openingSession.set(candidate);
+
+            int result = openingResult.get();
+            if (result == Integer.MIN_VALUE
+                    || result == Shell.OnShellOpenResultListener.SHELL_RUNNING) {
+                rootSession = candidate;
             }
         });
     }
