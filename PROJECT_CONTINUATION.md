@@ -1150,9 +1150,15 @@ That issue is real but is not part of Candidate 3. The temporary guard used duri
 
 Verdict:
 
-**CONFIRMED RELEASE BLOCKER / FIXED / BUILT / DEVICE-VERIFIED / COMMITTED**
+**CONFIRMED RELEASE BLOCKER / FIXED / BUILT / DEVICE-VERIFIED / COMMITTED / PUSHED / MERGED / MASTER PUSHED**
 
-Push and merge remain pending their separate approval gates.
+Candidate 3 was pushed and merged successfully.
+
+Functional commit: `fa6fcc0`
+
+Documentation commit: `50221ed`
+
+Master merge commit / current functional baseline: `e4bb9ca`
 
 ---
 
@@ -4420,17 +4426,25 @@ Never use `git add .`.
 
 Start read-only.
 
-Current Candidate 3 branch:
+Candidate 3 completed branch:
 
 `fix/motion-teardown-shell-v1`
 
-Current HEAD:
+Functional commit:
 
 `fa6fcc0`
 
+Documentation commit:
+
+`50221ed`
+
+Current master baseline / merge commit:
+
+`e4bb9ca`
+
 Candidate 3 - motion-sensor `onDestroy()` shell lifetime - is now:
 
-**CONFIRMED RELEASE BLOCKER / FIXED / BUILT / DEVICE-VERIFIED / COMMITTED**
+**CONFIRMED RELEASE BLOCKER / FIXED / BUILT / DEVICE-VERIFIED / COMMITTED / PUSHED / MERGED / MASTER PUSHED**
 
 Do not reopen Candidate 3 without new evidence.
 
@@ -4447,7 +4461,7 @@ physical RESTRICT
 
 The clean production APK is installed and normal device configuration is restored.
 
-Push and merge are still pending their explicit approval gates.
+Candidate 3 is pushed, merged to `master`, and `origin/master` is synchronized at `e4bb9ca`.
 
 Phase 0 is **not yet fully closed**.
 
