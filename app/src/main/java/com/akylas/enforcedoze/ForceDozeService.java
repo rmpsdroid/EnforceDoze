@@ -3803,6 +3803,81 @@ public class ForceDozeService extends Service {
         });
     }
 
+    /**
+     * Motion commands deliberately do not borrow nonRootSession. Service teardown closes that
+     * shared interactive shell immediately, while the motion serializer may dispatch its newest
+     * pending ENABLE only after an older RESTRICT reaches its real callback. Giving each non-Shizuku
+     * motion command its own shell lets that callback-driven continuation survive onDestroy().
+     *
+     * The command still carries a five-second watchdog and reports its real exit code, so a failure
+     * leaves the durable restore marker pending exactly as before.
+     */
+    private void executeMotionSensorCommand(final String command,
+                                            Shell.OnCommandResultListener2 onResult) {
+        if (Utils.isShizukuMode(getApplicationContext())) {
+            executeCommand(command, onResult, false);
+            return;
+        }
+
+        rootShellExecutor.execute(() -> {
+            final AtomicBoolean resultReported = new AtomicBoolean(false);
+            Shell.Interactive motionShell = null;
+
+            try {
+                motionShell = new Shell.Builder()
+                        .useSH()
+                        .setWatchdogTimeout(5)
+                        .setMinimalLogging(true)
+                        .setDetectOpen(false)
+                        .open();
+
+                final Shell.Interactive callbackShell = motionShell;
+                motionShell.addCommand(command, 0, (Shell.OnCommandResultListener2)
+                        (commandCode, exitCode, stdout, stderr) -> {
+                            try {
+                                if (resultReported.compareAndSet(false, true)) {
+                                    if (onResult != null) {
+                                        onResult.onCommandResult(
+                                                commandCode,
+                                                exitCode,
+                                                stdout,
+                                                stderr);
+                                    }
+                                }
+                            } finally {
+                                try {
+                                    callbackShell.closeWhenIdle();
+                                } catch (RuntimeException e) {
+                                    Log.e(TAG, "Motion sensor shell cleanup failed", e);
+                                }
+                            }
+                        });
+            } catch (RuntimeException e) {
+                if (resultReported.get()) {
+                    throw e;
+                }
+
+                Log.e(TAG, "Motion sensor shell failed", e);
+
+                if (motionShell != null) {
+                    try {
+                        motionShell.closeWhenIdle();
+                    } catch (RuntimeException cleanupException) {
+                        Log.e(TAG, "Motion sensor shell cleanup failed", cleanupException);
+                    }
+                }
+
+                if (resultReported.compareAndSet(false, true) && onResult != null) {
+                    onResult.onCommandResult(
+                            0,
+                            -1,
+                            new ArrayList<>(),
+                            new ArrayList<>());
+                }
+            }
+        });
+    }
+
     public interface OnGetFocusedApp {
         void onGetFocusedApps(HashSet<String> result);
     }
@@ -5585,14 +5660,14 @@ public class ForceDozeService extends Service {
         }
         log(restrict ? "Disabling motion sensors" : "Enabling motion sensors");
 
-        executeCommand(command, (commandCode, exitCode, stdout, stderr) -> {
+        executeMotionSensorCommand(command, (commandCode, exitCode, stdout, stderr) -> {
             DiagnosticLogger.i("MOTION", (restrict ? "restrict" : "enable")
                     + " label=" + label + " exit=" + exitCode);
             if (done != null) {
                 done.onCommandResult(commandCode, exitCode, stdout, stderr);
             }
             dispatchPendingMotionOp();
-        }, false);
+        });
     }
 
     /**
