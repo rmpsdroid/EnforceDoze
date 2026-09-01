@@ -1065,6 +1065,97 @@ No code change, build, APK install or device test was warranted for this source-
 
 ---
 
+## 14.6 Candidate 3 - motion-sensor `onDestroy()` shell-lifetime audit
+
+Audit target:
+
+Motion-sensor restore/re-enable behavior when service teardown occurs while a non-Shizuku motion command is still in flight.
+
+Source and libsuperuser analysis established a concrete lifetime violation:
+
+- the motion serializer keeps RESTRICT in flight until its real shell callback;
+- while RESTRICT is in flight, `onDestroy()` may queue ENABLE as the newest pending target;
+- service teardown closes the shared `rootSession` / `nonRootSession` shells;
+- the historical non-Shizuku motion path borrowed the shared `nonRootSession`;
+- callback-driven pending ENABLE could therefore be dispatched after teardown had already closed that shared shell;
+- libsuperuser can accept work on a closed interactive shell without physically dispatching that command.
+
+The Shizuku motion path does not have this shared-shell teardown lifetime dependency.
+
+Production fix:
+
+`fa6fcc0` - `Fix motion sensor teardown shell lifetime`
+
+Non-Shizuku motion commands now receive a dedicated `Shell.Interactive`:
+
+- `.useSH()` preserves the historical non-root backend;
+- five-second watchdog;
+- minimal logging;
+- `.setDetectOpen(false)`;
+- zero-argument `.open()`;
+- real exit code/stdout/stderr are forwarded unchanged;
+- `closeWhenIdle()` performs non-blocking cleanup after the real callback;
+- accepted/in-flight commands are not artificially completed;
+- the existing latest-wins motion serializer remains unchanged;
+- Shizuku continues through the existing `executeCommand()` path.
+
+Deterministic teardown-race validation:
+
+A temporary test-only hook physically applied RESTRICT and then held real command completion for 15 seconds. During that interval the service was stopped through the normal Android service lifecycle.
+
+Observed ordering:
+
+```text
+12:53:55.039  C3_RESTRICT_APPLIED rc=0
+12:53:55.244  APP | onDestroy
+12:54:10.052  MOTION | restrict label=motion_enter exit=0
+12:54:10.102  MOTION | enable label=motion_final_restore exit=0
+```
+
+The callback-driven ENABLE therefore survived service teardown and executed only after the older RESTRICT reached its real callback.
+
+Android recreated the service during the test and performed an additional early durable motion restore. That did not invalidate the lifetime proof: the original held RESTRICT still completed later and its serializer continuation successfully dispatched ENABLE.
+
+Final SensorService state:
+
+`Mode : NORMAL`
+
+Additional validation:
+
+- all temporary Candidate 3 race instrumentation was removed;
+- the temporary `rootSession` close guard was removed;
+- `git diff --check` PASS;
+- clean debug build PASS;
+- production APK installed successfully;
+- clean APK SHA-256: `46A8089F7F70956B55D355927D78AFAD88DE11095F2D1CA6D88F839BDDAA3174`;
+- the post-test clean APK was byte-for-byte identical to the pre-race production candidate;
+- normal device configuration was restored.
+
+Final normal configuration:
+
+```text
+serviceEnabled=true
+executionMode=shizuku
+disableMotionSensors=false
+turnOffAllSensorsInDoze=true
+SensorService=Mode : NORMAL
+device=ACTIVE
+```
+
+Separate finding:
+
+A failed-open libsuperuser `rootSession` can remain non-null and later throw `NullPointerException` from `Shell.Interactive.close()` during `onDestroy()`.
+
+That issue is real but is not part of Candidate 3. The temporary guard used during deterministic testing was removed before the production build and commit.
+
+Verdict:
+
+**CONFIRMED RELEASE BLOCKER / FIXED / BUILT / DEVICE-VERIFIED / COMMITTED**
+
+Push and merge remain pending their separate approval gates.
+
+---
+
 # 15. SEPARATE NOTIFICATION BOOT-RECOVERY OBSERVATION
 
 During the boot-liveness source audit, notification restoration was examined.
@@ -4329,38 +4420,65 @@ Never use `git add .`.
 
 Start read-only.
 
-First verify Git state and confirm the latest functional baseline remains:
+Current Candidate 3 branch:
 
-`48f7d30`
+`fix/motion-teardown-shell-v1`
 
-Do **not** reopen these completed regressions without new evidence:
+Current HEAD:
 
-1. duplicate recovery-start coalescing;
-2. exact same-session lockscreen timeout reforce;
-3. Android backup recovery-journal exclusion.
+`fa6fcc0`
+
+Candidate 3 - motion-sensor `onDestroy()` shell lifetime - is now:
+
+**CONFIRMED RELEASE BLOCKER / FIXED / BUILT / DEVICE-VERIFIED / COMMITTED**
+
+Do not reopen Candidate 3 without new evidence.
+
+The deterministic teardown race proved:
+
+```text
+physical RESTRICT
+-> onDestroy()
+-> real RESTRICT callback
+-> pending ENABLE dispatch
+-> real ENABLE callback
+-> SensorService NORMAL
+```
+
+The clean production APK is installed and normal device configuration is restored.
+
+Push and merge are still pending their explicit approval gates.
 
 Phase 0 is **not yet fully closed**.
 
-The `DozeStateStore.setInDoze(false)` lifecycle/barrier audit is now closed:
-
-**PASS / NO FIX**
-
-The raw clears end logical session ownership only. Independent durable physical/package/device-state recovery markers continue to block fresh entry until their recovery settles.
-
 Next audit candidate:
 
-**Motion-sensor `onDestroy()` safety-net behavior.**
+**Failed-open `rootSession` lifecycle / teardown safety.**
 
-Determine from current source:
+Candidate 3 testing independently proved that an unsuccessful libsuperuser `.useSU().open(...)` can leave static `rootSession` non-null even though the interactive shell is only partially initialized.
 
-- every motion-sensor restore or re-enable path reached from service teardown;
-- whether `onDestroy()` can restore sensor state while a logical owned Doze session is intentionally continuing;
-- whether process/service recreation can cause the safety-net to race normal session ownership or durable recovery;
-- whether existing epoch, lifecycle and journal guards already make the behavior safe.
+A later `onDestroy()` reached:
 
-Treat this as an audit candidate, not a confirmed bug.
+```text
+java.lang.NullPointerException
+at eu.chainfire.libsuperuser.Shell$Interactive.closeImmediately(...)
+at eu.chainfire.libsuperuser.Shell$Interactive.close(...)
+at com.akylas.enforcedoze.ForceDozeService.onDestroy(...)
+```
 
-Do not change code until source evidence demonstrates a concrete invariant violation and the rollback/test plan is understood.
+Audit separately:
+
+- every assignment to `rootSession`;
+- whether assignment occurs before asynchronous open success/failure is known;
+- every path that treats `rootSession != null` as proof of a usable shell;
+- whether failed-open shells are cleared consistently;
+- every teardown path that calls `rootSession.close()`;
+- whether the same lifecycle problem can affect `nonRootSession`;
+- the smallest safe invariant, rollback plan and deterministic validation.
+
+Do not fold this retrospectively into Candidate 3.
+
+Do not change code until the failed-open lifecycle and cleanup behavior are fully understood.
 
 After that candidate, continue the remaining Phase 0 blocker list in Section 18.
 
