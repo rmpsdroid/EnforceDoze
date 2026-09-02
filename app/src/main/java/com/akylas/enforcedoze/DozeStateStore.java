@@ -65,6 +65,7 @@ public class DozeStateStore {
     private static final String KEY_ENTRY_PENDING = "entryPending";
     private static final String KEY_OWNED_REFORCE_PENDING = "ownedReforcePending";
     private static final String KEY_SESSION_PHYSICAL_MODE = "sessionPhysicalMode";
+    private static final String KEY_FINAL_EXIT_PENDING = "finalExitPending";
 
     /**
      * Physical ownership semantics of the ACTIVE session: does ending it owe an explicit unforce?
@@ -365,12 +366,42 @@ public class DozeStateStore {
      * Survives process death so a recreated service knows it was mid-Doze and has to restore,
      * even when the screen turned back on while the process was gone.
      */
-    public void setInDoze(boolean inDoze) {
-        prefs.edit().putBoolean(KEY_IN_DOZE, inDoze).commit();
+    public synchronized void setInDoze(boolean inDoze) {
+        SharedPreferences.Editor editor = prefs.edit()
+                .putBoolean(KEY_IN_DOZE, inDoze);
+        if (!inDoze) {
+            editor.putBoolean(KEY_FINAL_EXIT_PENDING, false);
+        }
+        editor.commit();
     }
 
     public boolean isInDoze() {
         return prefs.getBoolean(KEY_IN_DOZE, false);
+    }
+
+    /**
+     * True only while an ACTIVE legacy session is waiting for its already-requested final exit to
+     * become physically classifiable. Missing on older installs means false.
+     */
+    public boolean isFinalExitPending() {
+        return prefs.getBoolean(KEY_IN_DOZE, false)
+                && prefs.getBoolean(KEY_FINAL_EXIT_PENDING, false);
+    }
+
+    /**
+     * Persists final-exit intent without dropping session ownership. Used only when a legacy
+     * UNKNOWN session cannot yet be distinguished from natural deep idle.
+     */
+    public synchronized boolean markFinalExitPending() {
+        if (!prefs.getBoolean(KEY_IN_DOZE, false)) {
+            return false;
+        }
+
+        // Always attempt the durable write. A previous commit may have failed after SharedPreferences
+        // updated its in-memory map, so seeing true locally is not proof that recovery can find it
+        // after process death. On failure the local true value is intentionally retained: this
+        // process must still honor the already-requested final exit while a later retry persists it.
+        return prefs.edit().putBoolean(KEY_FINAL_EXIT_PENDING, true).commit();
     }
 
     /**
@@ -432,6 +463,7 @@ public class DozeStateStore {
         if (prefs.edit()
                 .putBoolean(KEY_IN_DOZE, true)
                 .putBoolean(KEY_ENTRY_PENDING, false)
+                .putBoolean(KEY_FINAL_EXIT_PENDING, false)
                 .putInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_FORCED)
                 .commit()) {
             return true;
@@ -443,6 +475,7 @@ public class DozeStateStore {
         prefs.edit()
                 .putBoolean(KEY_IN_DOZE, false)
                 .putBoolean(KEY_ENTRY_PENDING, true)
+                .putBoolean(KEY_FINAL_EXIT_PENDING, false)
                 .putInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_UNKNOWN)
                 .commit();
         return false;
@@ -459,6 +492,7 @@ public class DozeStateStore {
     public synchronized boolean beginTunableDozeSession() {
         if (prefs.edit()
                 .putBoolean(KEY_IN_DOZE, true)
+                .putBoolean(KEY_FINAL_EXIT_PENDING, false)
                 .putInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_TUNABLE)
                 .commit()) {
             return true;
@@ -468,6 +502,7 @@ public class DozeStateStore {
         // ENTER row for ownership that no recovery could ever find.
         prefs.edit()
                 .putBoolean(KEY_IN_DOZE, false)
+                .putBoolean(KEY_FINAL_EXIT_PENDING, false)
                 .putInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_UNKNOWN)
                 .commit();
         return false;
@@ -488,6 +523,7 @@ public class DozeStateStore {
     public synchronized boolean endDozeSession(boolean claimUnforceDebt) {
         boolean previousInDoze = prefs.getBoolean(KEY_IN_DOZE, false);
         int previousMode = prefs.getInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_UNKNOWN);
+        boolean previousFinalExitPending = prefs.getBoolean(KEY_FINAL_EXIT_PENDING, false);
         boolean previousDebt = prefs.getBoolean(KEY_OWNED_REFORCE_PENDING, false);
 
         // Never written false. A locked-wake release or a reforce cleanup may already own the
@@ -497,6 +533,7 @@ public class DozeStateStore {
         if (prefs.edit()
                 .putBoolean(KEY_IN_DOZE, false)
                 .putInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_UNKNOWN)
+                .putBoolean(KEY_FINAL_EXIT_PENDING, false)
                 .putBoolean(KEY_OWNED_REFORCE_PENDING, debt)
                 .commit()) {
             return true;
@@ -506,6 +543,7 @@ public class DozeStateStore {
         prefs.edit()
                 .putBoolean(KEY_IN_DOZE, previousInDoze)
                 .putInt(KEY_SESSION_PHYSICAL_MODE, previousMode)
+                .putBoolean(KEY_FINAL_EXIT_PENDING, previousFinalExitPending)
                 .putBoolean(KEY_OWNED_REFORCE_PENDING, previousDebt)
                 .commit();
         return false;

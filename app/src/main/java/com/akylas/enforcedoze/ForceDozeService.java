@@ -548,6 +548,7 @@ public class ForceDozeService extends Service {
      * for its own async work instead.
      */
     private static final long EPOCH_NONE = 0L;
+    private static final long EPOCH_FINAL_EXIT_PENDING = -1L;
     private final AtomicLong activeSessionEpoch = new AtomicLong(EPOCH_NONE);
     private final AtomicLong sessionEpochCounter = new AtomicLong(EPOCH_NONE);
 
@@ -1486,14 +1487,19 @@ public class ForceDozeService extends Service {
         // A settings-mode change can make the selected privileged backend usable without producing
         // an availability transition. In particular, switching Root -> Shizuku while the Shizuku
         // binder is already alive updates the cached availability above, but no false->true listener
-        // callback occurs. If a finished session still owes package/device restoration, retry it now
-        // rather than leaving that durable debt stranded until some unrelated lifecycle event.
+        // callback occurs. Retry both a legacy session already awaiting its final exit and any
+        // package/device restoration debt from a finished session rather than stranding either until
+        // some unrelated lifecycle event.
         boolean selectedBackendAvailable = useShizuku ? isShizukuAvailable : isSuAvailable;
-        if (selectedBackendAvailable
-                && !dozeStateStore.isInDoze()
-                && (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasPendingRestore())) {
-            DiagnosticLogger.i("RECOVERY", "settings_reload_retry_pending_restore"
-                    + " executionMode=" + (useShizuku ? "shizuku" : "root"));
+        boolean pendingFinalExit = dozeStateStore.isFinalExitPending();
+        boolean finishedRestoreDebt = !dozeStateStore.isInDoze()
+                && (dozeStateStore.hasAppliedSuspendedPackages()
+                || dozeStateStore.hasPendingRestore());
+        if (selectedBackendAvailable && (pendingFinalExit || finishedRestoreDebt)) {
+            DiagnosticLogger.i("RECOVERY", "settings_reload_retry_recovery"
+                    + " executionMode=" + (useShizuku ? "shizuku" : "root")
+                    + " finalExitPending=" + pendingFinalExit
+                    + " finishedRestoreDebt=" + finishedRestoreDebt);
             applyRecoveryPolicy("SETTINGS_RELOAD_RECOVERY", "selected backend became usable");
         }
     }
@@ -1705,6 +1711,9 @@ public class ForceDozeService extends Service {
         if (!isActiveSessionEpoch(capturedEpoch)) {
             return WORK_STALE;
         }
+        if (dozeStateStore.isFinalExitPending()) {
+            return WORK_STALE;
+        }
         if (isCallActiveNow()) {
             return WORK_STALE;
         }
@@ -1733,13 +1742,19 @@ public class ForceDozeService extends Service {
      * callback then classifies as eligible and does both itself - one generation, one blocklist
      * snapshot, and no suspension while the lock screen is up.
      *
-     * @return the epoch of the session being continued, or {@link #EPOCH_NONE} when there is none
-     * and SCREEN_OFF should take its ordinary fresh-entry path
+     * @return the positive epoch of the session being continued, {@link #EPOCH_NONE} when there is
+     * no continuation and SCREEN_OFF may take its ordinary fresh-entry path, or
+     * {@link #EPOCH_FINAL_EXIT_PENDING} when ownership remains only for a pending final exit
      */
     private long claimOwnedSessionForScreenOff() {
         synchronized (physicalEntryLock) {
             if (!dozeStateStore.isInDoze()) {
                 return EPOCH_NONE;
+            }
+            if (dozeStateStore.isFinalExitPending()) {
+                DiagnosticLogger.i("DOZE",
+                        "screen_off_owned_claim_skipped reason=final_exit_pending");
+                return EPOCH_FINAL_EXIT_PENDING;
             }
             long epoch = activeSessionEpoch.get();
             if (!isActiveSessionEpoch(epoch)) {
@@ -3726,6 +3741,10 @@ public class ForceDozeService extends Service {
             plan = classifyFinalExitPlan();
             if (plan == FINAL_EXIT_DEFER_AMBIGUOUS) {
                 finalized = false;
+                if (!dozeStateStore.markFinalExitPending()) {
+                    DiagnosticLogger.e("DOZE",
+                            "final_exit_pending_journal_failed reason=legacy_unknown_ambiguous");
+                }
             } else {
                 finalized = dozeStateStore.endDozeSession(plan == FINAL_EXIT_FORCED);
                 if (finalized) {
@@ -4648,7 +4667,20 @@ public class ForceDozeService extends Service {
             isFinal = false;
         }
 
-        submitPackageOp(new PackageOp(suspend, isFinal, session.generation, session.packages, reason));
+        if (suspend) {
+            synchronized (physicalEntryLock) {
+                if (dozeStateStore.isFinalExitPending()) {
+                    DiagnosticLogger.i("HARD_BLOCK",
+                            "package_re_suspend_skipped reason=final_exit_pending");
+                    return;
+                }
+                submitPackageOp(new PackageOp(
+                        true, false, session.generation, session.packages, reason));
+            }
+            return;
+        }
+
+        submitPackageOp(new PackageOp(false, isFinal, session.generation, session.packages, reason));
     }
 
     /**
@@ -5371,6 +5403,10 @@ public class ForceDozeService extends Service {
             plan = classifyFinalExitPlan();
             if (plan == FINAL_EXIT_DEFER_AMBIGUOUS) {
                 finalized = false;
+                if (!dozeStateStore.markFinalExitPending()) {
+                    DiagnosticLogger.e("DOZE",
+                            "final_exit_pending_journal_failed reason=legacy_unknown_ambiguous");
+                }
             } else {
                 finalized = dozeStateStore.endDozeSession(plan == FINAL_EXIT_FORCED);
                 if (finalized) {
@@ -5426,7 +5462,9 @@ public class ForceDozeService extends Service {
         // continuation that passed them can be arbitrarily delayed - Mode A arrives on the Shizuku
         // listener thread - and the session it was servicing can end, and a different one begin,
         // before it acquires the lock.
-        if (!dozeStateStore.isInDoze() || Utils.isScreenOn(getApplicationContext())) {
+        if (!dozeStateStore.isInDoze()
+                || dozeStateStore.isFinalExitPending()
+                || Utils.isScreenOn(getApplicationContext())) {
             return;
         }
 
@@ -5442,6 +5480,12 @@ public class ForceDozeService extends Service {
                     || !isActiveSessionEpoch(expectedEpoch)) {
                 DiagnosticLogger.i("DOZE", "owned_session_reforce_skipped reason=stale_session"
                         + " expectedEpoch=" + expectedEpoch);
+                return;
+            }
+            if (dozeStateStore.isFinalExitPending()) {
+                DiagnosticLogger.i("DOZE",
+                        "owned_session_reforce_skipped reason=final_exit_pending"
+                                + " expectedEpoch=" + expectedEpoch);
                 return;
             }
             if (serviceStopping) {
@@ -5677,6 +5721,7 @@ public class ForceDozeService extends Service {
             if (expectedEpoch == EPOCH_NONE
                     || activeSessionEpoch.get() != expectedEpoch
                     || !isActiveSessionEpoch(expectedEpoch)
+                    || dozeStateStore.isFinalExitPending()
                     || Utils.isScreenOn(getApplicationContext())) {
                 DiagnosticLogger.i("DOZE", "owned_session_resume_skipped reason=stale_session"
                         + " expectedEpoch=" + expectedEpoch);
@@ -5867,8 +5912,15 @@ public class ForceDozeService extends Service {
             log("Temporarily restoring biometrics for the lock screen (" + reason + ")");
             requestBiometricState(preDoze, null, BIOMETRIC_LABEL_LOCKSCREEN_RESTORE);
         } else {
-            log("Re-applying the biometric restriction (" + reason + ")");
-            requestBiometricState(false, null, BIOMETRIC_LABEL_LOCKSCREEN_REAPPLY);
+            synchronized (physicalEntryLock) {
+                if (dozeStateStore.isFinalExitPending()) {
+                    DiagnosticLogger.i("LOCKSCREEN",
+                            "biometrics_reapply_skipped reason=final_exit_pending");
+                    return;
+                }
+                log("Re-applying the biometric restriction (" + reason + ")");
+                requestBiometricState(false, null, BIOMETRIC_LABEL_LOCKSCREEN_REAPPLY);
+            }
         }
     }
 
@@ -5989,9 +6041,17 @@ public class ForceDozeService extends Service {
             log("Temporarily restoring All Sensors for the lock screen (" + reason + ")");
             requestSensorState(preDoze, null, SENSOR_LABEL_LOCKSCREEN_RESTORE);
         } else {
-            // Screen off inside an owned session: sensors must be off, whatever happened before.
-            log("Re-applying the All Sensors restriction (" + reason + ")");
-            requestSensorState(false, null, SENSOR_LABEL_LOCKSCREEN_REAPPLY);
+            // Screen off inside an owned session: only re-apply while that session is still allowed
+            // to continue. The barrier orders this enqueue against creation of finalExitPending.
+            synchronized (physicalEntryLock) {
+                if (dozeStateStore.isFinalExitPending()) {
+                    DiagnosticLogger.i("LOCKSCREEN",
+                            "all_sensors_reapply_skipped reason=final_exit_pending");
+                    return;
+                }
+                log("Re-applying the All Sensors restriction (" + reason + ")");
+                requestSensorState(false, null, SENSOR_LABEL_LOCKSCREEN_REAPPLY);
+            }
         }
     }
 
@@ -6056,6 +6116,19 @@ public class ForceDozeService extends Service {
             DiagnosticLogger.i("RECOVERY", "RECOVERY_PREPARING prefix=" + logPrefix);
             // No ENTER, no EXIT and no statistics of any kind: PREPARING never became a session.
             cleanupPendingPhysicalForce(reason + " (preparing recovery)");
+            return;
+        }
+
+
+        // A legacy UNKNOWN session can retain ownership only because its final exit was already
+        // requested but physical ownership was not yet safely classifiable. Never continue such a
+        // session. Re-run the recovered finalizer on every recovery trigger; it either resolves now
+        // or preserves finalExitPending for the next physically meaningful event.
+        if (dozeStateStore.isFinalExitPending()) {
+            log(logPrefix + "_FINAL_EXIT_PENDING: retrying deferred legacy final exit");
+            DiagnosticLogger.i("RECOVERY",
+                    logPrefix + "_FINAL_EXIT_PENDING retry=true");
+            finalizeRecoveredOwnedSession(reason + " (pending final exit)");
             return;
         }
 
@@ -6392,7 +6465,12 @@ public class ForceDozeService extends Service {
                     } else {
                         log("Outside custom Doze periods, skip entering Doze");
                     }
-                } else if ((resumeEpoch = claimOwnedSessionForScreenOff()) != EPOCH_NONE) {
+                } else if ((resumeEpoch = claimOwnedSessionForScreenOff())
+                        == EPOCH_FINAL_EXIT_PENDING) {
+                    log("Owned session already has a pending final exit, not starting a fresh Doze entry");
+                    DiagnosticLogger.i("DOZE",
+                            "screen_off_fresh_entry_skipped reason=final_exit_pending");
+                } else if (resumeEpoch != EPOCH_NONE) {
                     // Owned-session continuation after a lock-screen wake.
                     //
                     // The branch condition itself is the barrier operation: whether a session is
@@ -6457,13 +6535,23 @@ public class ForceDozeService extends Service {
                     }
                 }
             } else if (action.equals(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)) {
-                if (!Utils.isScreenOn(context)) {
+                boolean screenOnForIdleChange = Utils.isScreenOn(context);
+                boolean inDeepIdle = pm.isDeviceIdleMode();
+
+                if (dozeStateStore.isFinalExitPending()) {
+                    log("ACTION_DEVICE_IDLE_MODE_CHANGED received with pending final exit");
+                    DiagnosticLogger.i("DOZE",
+                            "final_exit_pending_idle_change deepIdle=" + inDeepIdle
+                                    + " screenOn=" + screenOnForIdleChange);
+                    applyRecoveryPolicy(
+                            "FINAL_EXIT_PENDING_IDLE_CHANGE",
+                            "device idle mode changed");
+                } else if (!screenOnForIdleChange) {
                     log("ACTION_DEVICE_IDLE_MODE_CHANGED received");
                     // Leaving deep idle while the screen is still off means a maintenance window.
                     // Reading it from PowerManager works on every backend - the old code compared
                     // against a dumpsys-derived string that was never filled in Shizuku mode, so
                     // maintenance windows went unnoticed there.
-                    boolean inDeepIdle = pm.isDeviceIdleMode();
                     lastKnownState = getDeviceIdleState();
                     log("Current (Deep) state: " + lastKnownState + ", deep idle: " + inDeepIdle);
                     // Maintenance is a property of a session this app owns, so it needs durable
