@@ -2111,7 +2111,7 @@ public class ForceDozeService extends Service {
      * commitDozeSession, and never reads or writes the entry-pending key.
      */
     private void dispatchMarkerlessUnforce() {
-        final String command = "dumpsys deviceidle unforce";
+        final String command = wrapPhysicalDeviceIdleCommand("dumpsys deviceidle unforce");
         Shell.OnCommandResultListener2 listener =
                 (commandCode, exitCode, stdout, stderr) -> onMarkerlessUnforceResult(exitCode);
 
@@ -2460,8 +2460,9 @@ public class ForceDozeService extends Service {
      */
     private void dispatchOnCapturedPlan(int plan, String command, String tag, boolean printOutput,
                                         Shell.OnCommandResultListener2 onResult) {
+        String backendCommand = wrapPhysicalDeviceIdleCommand(command);
         if (plan == REFORCE_PLAN_SHIZUKU) {
-            shizukuHandler.executeCommand(command,
+            shizukuHandler.executeCommand(backendCommand,
                     (commandCode, exitCode, stdout, stderr) -> {
                         DiagnosticLogger.i("DOZE", tag + " exit=" + exitCode);
                         if (printOutput) {
@@ -2474,7 +2475,7 @@ public class ForceDozeService extends Service {
         }
         rootShellExecutor.execute(() -> {
             if (rootSession != null && rootSession.isRunning()) {
-                rootSession.addCommand(command, 0, (Shell.OnCommandResultListener2)
+                rootSession.addCommand(backendCommand, 0, (Shell.OnCommandResultListener2)
                         (commandCode, exitCode, STDOUT, STDERR) -> {
                             DiagnosticLogger.i("DOZE", tag + " exit=" + exitCode);
                             onResult.onCommandResult(commandCode, exitCode, STDOUT, STDERR);
@@ -2510,7 +2511,7 @@ public class ForceDozeService extends Service {
                             }
 
                             if (openedSession != null) {
-                                openedSession.addCommand(command, 0,
+                                openedSession.addCommand(backendCommand, 0,
                                         (Shell.OnCommandResultListener2)
                                                 (commandCode, exitCode, STDOUT, STDERR) -> {
                                                     DiagnosticLogger.i(
@@ -4004,6 +4005,29 @@ public class ForceDozeService extends Service {
         });
     }
 
+    /**
+     * Serializes physical DeviceIdle mutations across app-process lifetimes and privileged
+     * backends. PREPARING does not persist which backend dispatched the outstanding command, so
+     * both root and Shizuku must participate in the same kernel lock.
+     *
+     * Only the two fixed internal physical commands are wrapped; every other shell command is
+     * returned unchanged. The temporary umask lives inside the subshell and therefore cannot alter
+     * the persistent root shell state. The lock remains owned through the protected command because
+     * file descriptor 0 stays open until the nested shell exits, at which point the kernel releases
+     * it even if the originating app process no longer exists.
+     */
+    private static String wrapPhysicalDeviceIdleCommand(String command) {
+        if (!"dumpsys deviceidle force-idle deep".equals(command)
+                && !"dumpsys deviceidle unforce".equals(command)) {
+            return command;
+        }
+
+        String lockPath = "/data/local/tmp/" + BuildConfig.APPLICATION_ID + "-deviceidle.lock";
+        return "(umask 000; : >>" + lockPath
+                + "; sh -c 'toybox flock 0 || exit 91; " + command
+                + "' 0<>" + lockPath + ")";
+    }
+
     public void executeCommandWithRoot(final String command) {
         executeCommandWithRoot(command, null);
     }
@@ -4013,13 +4037,14 @@ public class ForceDozeService extends Service {
     }
 
     public void executeCommandWithRoot(final String command, Shell.OnCommandResultListener2 onResult, boolean printOutput) {
+        String backendCommand = wrapPhysicalDeviceIdleCommand(command);
         boolean useShizuku = Utils.isShizukuMode(getApplicationContext());
 
         if (useShizuku) {
             // Do not gate on the cached availability flag: ShizukuHandler waits for the binder and
             // retries by itself, so a command issued while Shizuku is briefly disconnected is
             // delivered once it comes back instead of being dropped.
-            shizukuHandler.executeCommand(command, (commandCode, exitCode, stdout, stderr) -> {
+            shizukuHandler.executeCommand(backendCommand, (commandCode, exitCode, stdout, stderr) -> {
                 if (onResult != null) {
                     onResult.onCommandResult(commandCode, exitCode, stdout, stderr);
                 }
@@ -4033,7 +4058,7 @@ public class ForceDozeService extends Service {
 
         rootShellExecutor.execute(() -> {
             if (rootSession != null && rootSession.isRunning()) {
-                rootSession.addCommand(command, 0, (Shell.OnCommandResultListener2)
+                rootSession.addCommand(backendCommand, 0, (Shell.OnCommandResultListener2)
                         (commandCode, exitCode, STDOUT, STDERR) -> {
                             if (onResult != null) {
                                 onResult.onCommandResult(commandCode, exitCode, STDOUT, STDERR);
@@ -4078,7 +4103,7 @@ public class ForceDozeService extends Service {
                             }
 
                             if (openedSession != null) {
-                                openedSession.addCommand(command, 0,
+                                openedSession.addCommand(backendCommand, 0,
                                         (Shell.OnCommandResultListener2)
                                                 (commandCode, exitCode, STDOUT, STDERR) -> {
                                                     if (onResult != null) {
