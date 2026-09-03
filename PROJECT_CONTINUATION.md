@@ -184,16 +184,20 @@ Commit subject:
 
 `Fix durable state journal commit handling`
 
-Current merged functional baseline:
+R0-6 local merge checkpoint:
 
-`master = 2297eca0feacc23c1df4149796c254c2048e1b63`
+`970b1b08683e92c5434a61d0eb3e8dd921963dd4`
 
-Current remote merged baseline:
+At that checkpoint, local `master` contained both R0-6 commits after a
+fast-forward merge.
+
+Pre-push remote baseline recorded at that checkpoint:
 
 `origin/master = 2297eca0feacc23c1df4149796c254c2048e1b63`
 
-Therefore R0-6 is committed on its feature branch but is **not yet merged to
-master and has not moved origin/master**.
+Push status remains a separate approval-controlled state. After reopening the
+project, verify live `master` and `origin/master` refs read-only rather than
+assuming they still match this checkpoint.
 
 Recent functional history:
 
@@ -1484,8 +1488,8 @@ Functional commit:
 
 `e2d914c0f2eaa44e3f3450f83849aae8d5fcedc5`
 
-This commit is not yet merged to `master` at the time of this documentation
-update.
+R0-6 was subsequently fast-forward merged to local `master`. Push status is
+separately approval-controlled and must be verified from the live Git refs.
 
 Confirmed defect classes:
 
@@ -1788,9 +1792,9 @@ Important architecture:
 
 Phase 0 is **not yet declared fully complete**.
 
-R0-1, R0-3, R0-4 and R0-5 are closed. R0-6 is technically validated and
-functionally committed, but is not yet merged to `master` at the time of this
-update.
+R0-1, R0-3, R0-4 and R0-5 are closed. R0-6 is technically validated,
+functionally committed, and was subsequently fast-forward merged to local
+`master`. Push status remains separately approval-controlled.
 
 Remaining Phase-0 backlog:
 
@@ -4734,13 +4738,14 @@ Do **not** make me restate completed history.
 - Current R0-6 branch: `fix/durable-state-journal-commit-v1`
 - R0-6 functional commit:
   `e2d914c0f2eaa44e3f3450f83849aae8d5fcedc5`
-- Current `master`:
-  `2297eca0feacc23c1df4149796c254c2048e1b63`
-- Current `origin/master`:
+- R0-6 local fast-forward merge checkpoint:
+  `970b1b08683e92c5434a61d0eb3e8dd921963dd4`
+- Pre-push `origin/master` checkpoint:
   `2297eca0feacc23c1df4149796c254c2048e1b63`
 
-R0-6 is functionally committed but is **not yet merged to master** in the state
-recorded by this document.
+R0-6 has been fast-forward merged to local `master`. A later documentation-only
+correction may advance local `master` beyond the merge checkpoint above, and
+push status may also change. Always verify the live refs read-only.
 
 The historical branch `docs/continuation-20260828` still exists but is not the
 active branch for R0-6 documentation.
