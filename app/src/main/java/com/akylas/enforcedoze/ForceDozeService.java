@@ -3665,8 +3665,8 @@ public class ForceDozeService extends Service {
 
     /** Unchanged entry work, factored out so both backends run exactly the same code. */
     private void applyEntryMotionAndNetwork(Context context, long sessionEpoch) {
-            if (disableMotionSensors) {
-                dozeStateStore.markApplied(DozeStateStore.KEY_MOTION_SENSORS, true);
+        if (disableMotionSensors) {
+            if (dozeStateStore.markApplied(DozeStateStore.KEY_MOTION_SENSORS, true)) {
                 disableSensorsTimer = new Timer();
                 disableSensorsTimer.schedule(new TimerTask() {
                     @Override
@@ -3695,8 +3695,13 @@ public class ForceDozeService extends Service {
                     }
                 }, 2000);
             } else {
-                log("Not disabling motion sensors because disableMotionSensors=false");
+                Log.e(TAG, "Motion-sensor journal commit failed; restriction not dispatched");
+                DiagnosticLogger.e("STATE",
+                        "motion_journal_failed restrictionNotDispatched=true");
             }
+        } else {
+            log("Not disabling motion sensors because disableMotionSensors=false");
+        }
         enterDozeHandleNetwork(context, sessionEpoch);
     }
 
@@ -4609,6 +4614,11 @@ public class ForceDozeService extends Service {
         // owed, so a package whose final un-suspend failed keeps its owner and is released later.
         DozeStateStore.SuspendedPackageSession session =
                 dozeStateStore.beginSuspendedPackageSession(valid);
+        if (session == null) {
+            Log.e(TAG, "HARD_BLOCK journal commit failed; package suspension not dispatched");
+            DiagnosticLogger.e("HARD_BLOCK", "session_journal_failed intended=" + valid.size());
+            return;
+        }
         DiagnosticLogger.i("HARD_BLOCK", "session_started gen=" + session.generation
                 + " owned=" + session.packages.size() + " intended=" + valid.size());
         if (!dispatchSuspend) {
@@ -5115,6 +5125,11 @@ public class ForceDozeService extends Service {
         }
     }
 
+    private void logJournalDispatchFailure(String key) {
+        Log.e(TAG, "Journal commit failed for " + key + "; physical change not dispatched");
+        DiagnosticLogger.e("STATE",
+                "journal_commit_failed key=" + key + " physicalChangeNotDispatched=true");
+    }
     public void actualEnterDozeHandleNetwork(Context context, String packageName) {
         log("playingPackageName: " + packageName);
         // Capture the CURRENT device state at the moment screen turns off
@@ -5132,54 +5147,78 @@ public class ForceDozeService extends Service {
 
         if (turnOffAllSensorsInDoze) {
             log("Disabling All sensors");
-            dozeStateStore.markApplied(DozeStateStore.KEY_ALL_SENSORS, true);
-            // Same serializer as every other sensor write, so a late command from the previous
-            // session cannot be applied on top of this one.
-            requestSensorState(false, null, SENSOR_LABEL_ENTER);
+            if (dozeStateStore.markApplied(DozeStateStore.KEY_ALL_SENSORS, true)) {
+                // Same serializer as every other sensor write, so a late command from the previous
+                // session cannot be applied on top of this one.
+                requestSensorState(false, null, SENSOR_LABEL_ENTER);
+            } else {
+                logJournalDispatchFailure(DozeStateStore.KEY_ALL_SENSORS);
+            }
         }
         if (turnOffBiometricsInDoze) {
             log("Disabling Biometrics");
-            dozeStateStore.markApplied(DozeStateStore.KEY_BIOMETRICS, true);
-            // Through the same serializer as every other biometric write. Bypassing it left the
-            // fresh disable racing an old session's final enable on independent Shizuku threads:
-            // the cross-session marker guard would correctly keep the new marker, but the stale
-            // enable could still land last and leave biometrics on for the new session.
-            requestBiometricState(false, null, BIOMETRIC_LABEL_ENTER);
+            if (dozeStateStore.markApplied(DozeStateStore.KEY_BIOMETRICS, true)) {
+                // Through the same serializer as every other biometric write. Bypassing it left the
+                // fresh disable racing an old session's final enable on independent Shizuku threads:
+                // the cross-session marker guard would correctly keep the new marker, but the stale
+                // enable could still land last and leave biometrics on for the new session.
+                requestBiometricState(false, null, BIOMETRIC_LABEL_ENTER);
+            } else {
+                logJournalDispatchFailure(DozeStateStore.KEY_BIOMETRICS);
+            }
         }
         if (turnOnBatterySaverInDoze && !wasBatterSaverOn) {
             log("Enabling Battery Saver");
-            dozeStateStore.markApplied(DozeStateStore.KEY_BATTERY_SAVER, false);
-            setBatterSaverState(context, true);
+            if (dozeStateStore.markApplied(DozeStateStore.KEY_BATTERY_SAVER, false)) {
+                setBatterSaverState(context, true);
+            } else {
+                logJournalDispatchFailure(DozeStateStore.KEY_BATTERY_SAVER);
+            }
         }
 
         if (turnOnAirplaneInDoze && (ignoreIfHotspot || !wasHotSpotTurnedOn) && !wasAirplaneOn && packageName == null) {
             log("Enabling airplane");
-            dozeStateStore.markApplied(DozeStateStore.KEY_AIRPLANE, false);
-            setAirplaneState(context, true);
+            if (dozeStateStore.markApplied(DozeStateStore.KEY_AIRPLANE, false)) {
+                setAirplaneState(context, true);
+            } else {
+                logJournalDispatchFailure(DozeStateStore.KEY_AIRPLANE);
+            }
         }
 
         if (turnOffBluetoothInDoze && wasBluetoothOn && packageName == null) {
             log("Disabling Bluetooth");
-            dozeStateStore.markApplied(DozeStateStore.KEY_BLUETOOTH, true);
-            setBluetoothState(context, false);
+            if (dozeStateStore.markApplied(DozeStateStore.KEY_BLUETOOTH, true)) {
+                setBluetoothState(context, false);
+            } else {
+                logJournalDispatchFailure(DozeStateStore.KEY_BLUETOOTH);
+            }
         }
 
         if (turnOffGPSInDoze && wasGPSOn && packageName == null) {
             log("Disabling GPS/Location");
-            dozeStateStore.markApplied(DozeStateStore.KEY_GPS, true);
-            setGPSState(context, false);
+            if (dozeStateStore.markApplied(DozeStateStore.KEY_GPS, true)) {
+                setGPSState(context, false);
+            } else {
+                logJournalDispatchFailure(DozeStateStore.KEY_GPS);
+            }
         }
 
         if (turnOffWiFiInDoze && (ignoreIfHotspot || !wasHotSpotTurnedOn) && wasWiFiTurnedOn && packageName == null) {
             log("Disabling WiFi");
-            dozeStateStore.markApplied(DozeStateStore.KEY_WIFI, true);
-            disableWiFi();
+            if (dozeStateStore.markApplied(DozeStateStore.KEY_WIFI, true)) {
+                disableWiFi();
+            } else {
+                logJournalDispatchFailure(DozeStateStore.KEY_WIFI);
+            }
         }
 
         if (turnOffDataInDoze && wasMobileDataTurnedOn && (ignoreIfHotspot || !wasHotSpotTurnedOn) && (packageName == null || wasWiFiTurnedOn)) {
             log("Disabling mobile data");
-            dozeStateStore.markApplied(DozeStateStore.KEY_MOBILE_DATA, true);
-            disableMobileData();
+            if (dozeStateStore.markApplied(DozeStateStore.KEY_MOBILE_DATA, true)) {
+                disableMobileData();
+            } else {
+                logJournalDispatchFailure(DozeStateStore.KEY_MOBILE_DATA);
+            }
         }
     }
 

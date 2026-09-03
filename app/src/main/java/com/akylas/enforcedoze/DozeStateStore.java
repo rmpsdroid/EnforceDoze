@@ -128,20 +128,67 @@ public class DozeStateStore {
      * the mark and the command still leaves us with a revert to perform (reverting something that
      * was never changed is harmless, forgetting a revert is not).
      */
-    public synchronized void markApplied(String key, boolean previousValue) {
-        // Read-modify-write of the generation, under the same monitor as the snapshot read and the
-        // compare-and-clear, so two markApplied() calls can never mint the same generation and a
-        // reader can never straddle the increment. All four values land in one commit, so a crash
-        // cannot leave a marker whose generation belongs to the previous owner.
-        long generation = prefs.getLong(PREFIX_GENERATION + key, 0L) + 1L;
-        prefs.edit()
-                .putBoolean(PREFIX_PRE + key, previousValue)
-                .putBoolean(PREFIX_APPLIED + key, true)
-                .putLong(PREFIX_GENERATION + key, generation)
+    public synchronized boolean markApplied(String key, boolean previousValue) {
+        String preKey = PREFIX_PRE + key;
+        String appliedKey = PREFIX_APPLIED + key;
+        String generationKey = PREFIX_GENERATION + key;
+
+        boolean hadPre = prefs.contains(preKey);
+        boolean oldPre = prefs.getBoolean(preKey, false);
+        boolean hadApplied = prefs.contains(appliedKey);
+        boolean oldApplied = prefs.getBoolean(appliedKey, false);
+        boolean hadGeneration = prefs.contains(generationKey);
+        long oldGeneration = prefs.getLong(generationKey, 0L);
+        boolean hadAppliedAt = prefs.contains(KEY_APPLIED_AT);
+        long oldAppliedAt = prefs.getLong(KEY_APPLIED_AT, 0L);
+
+        long generation = oldGeneration + 1L;
+        if (prefs.edit()
+                .putBoolean(preKey, previousValue)
+                .putBoolean(appliedKey, true)
+                .putLong(generationKey, generation)
                 .putLong(KEY_APPLIED_AT, System.currentTimeMillis())
-                .commit();
-        logToLogcat(TAG, "Marked '" + key + "' as applied (pre-Doze value: " + previousValue
-                + ", generation: " + generation + ")");
+                .commit()) {
+            logToLogcat(TAG, "Marked '" + key + "' as applied (pre-Doze value: " + previousValue
+                    + ", generation: " + generation + ")");
+            return true;
+        }
+
+        // commit() has already changed SharedPreferences' in-memory map even though the durable
+        // write failed. Restore the exact previous owner locally so callers cannot act on a
+        // journal entry that recovery after process death would never see.
+        SharedPreferences.Editor rollback = prefs.edit();
+
+        if (hadPre) {
+            rollback.putBoolean(preKey, oldPre);
+        } else {
+            rollback.remove(preKey);
+        }
+
+        if (hadApplied) {
+            rollback.putBoolean(appliedKey, oldApplied);
+        } else {
+            rollback.remove(appliedKey);
+        }
+
+        if (hadGeneration) {
+            rollback.putLong(generationKey, oldGeneration);
+        } else {
+            rollback.remove(generationKey);
+        }
+
+        if (hadAppliedAt) {
+            rollback.putLong(KEY_APPLIED_AT, oldAppliedAt);
+        } else {
+            rollback.remove(KEY_APPLIED_AT);
+        }
+
+        // Best effort for disk, but even another failed commit restores this process' cached view.
+        rollback.commit();
+
+        logToLogcat(TAG, "Could not durably mark '" + key
+                + "' as applied; physical change must not be dispatched");
+        return false;
     }
 
     /**
@@ -197,19 +244,30 @@ public class DozeStateStore {
      * or a newer owner has replaced it
      */
     public synchronized boolean clearAppliedIfGeneration(String key, long expectedGeneration) {
-        if (!prefs.getBoolean(PREFIX_APPLIED + key, false)) {
+        String appliedKey = PREFIX_APPLIED + key;
+        if (!prefs.getBoolean(appliedKey, false)) {
             return false;
         }
+
         long current = prefs.getLong(PREFIX_GENERATION + key, 0L);
         if (current != expectedGeneration) {
             logToLogcat(TAG, "Not clearing '" + key + "': generation " + current
                     + " has replaced " + expectedGeneration);
             return false;
         }
-        prefs.edit().remove(PREFIX_APPLIED + key).commit();
-        logToLogcat(TAG, "Cleared '" + key + "' (generation " + expectedGeneration
-                + "), nothing left to restore for it");
-        return true;
+
+        if (prefs.edit().remove(appliedKey).commit()) {
+            logToLogcat(TAG, "Cleared '" + key + "' (generation " + expectedGeneration
+                    + "), nothing left to restore for it");
+            return true;
+        }
+
+        // The failed remove already changed this process' SharedPreferences cache. Keep the debt
+        // visible locally as well as durably so callers cannot report a restore as fully settled.
+        prefs.edit().putBoolean(appliedKey, true).commit();
+        logToLogcat(TAG, "Could not durably clear '" + key + "' (generation "
+                + expectedGeneration + "); restore debt kept");
+        return false;
     }
 
     public boolean isApplied(String key) {
@@ -279,21 +337,52 @@ public class DozeStateStore {
      * submit its command from this, never by rebuilding the union afterwards
      */
     public synchronized SuspendedPackageSession beginSuspendedPackageSession(Collection<String> packages) {
-        Set<String> union = new LinkedHashSet<>(
+        boolean hadPackages = prefs.contains(KEY_APPLIED_SUSPENDED_PACKAGES);
+        Set<String> previousPackages = new LinkedHashSet<>(
                 prefs.getStringSet(KEY_APPLIED_SUSPENDED_PACKAGES, new LinkedHashSet<String>()));
+        boolean hadGeneration = prefs.contains(KEY_APPLIED_SUSPENDED_PACKAGES_GENERATION);
+        long previousGeneration =
+                prefs.getLong(KEY_APPLIED_SUSPENDED_PACKAGES_GENERATION, 0L);
+
+        Set<String> union = new LinkedHashSet<>(previousPackages);
         int previouslyOwed = union.size();
         if (packages != null) {
             union.addAll(packages);
         }
 
-        long next = prefs.getLong(KEY_APPLIED_SUSPENDED_PACKAGES_GENERATION, 0L) + 1;
-        prefs.edit()
+        long next = previousGeneration + 1L;
+        if (prefs.edit()
                 .putStringSet(KEY_APPLIED_SUSPENDED_PACKAGES, new LinkedHashSet<>(union))
                 .putLong(KEY_APPLIED_SUSPENDED_PACKAGES_GENERATION, next)
-                .commit();
-        logToLogcat(TAG, "Began suspended-package session generation=" + next
-                + " owned=" + union.size() + " previouslyOwed=" + previouslyOwed);
-        return new SuspendedPackageSession(next, Collections.unmodifiableSet(union));
+                .commit()) {
+            logToLogcat(TAG, "Began suspended-package session generation=" + next
+                    + " owned=" + union.size() + " previouslyOwed=" + previouslyOwed);
+            return new SuspendedPackageSession(next, Collections.unmodifiableSet(union));
+        }
+
+        // The failed commit has already changed this process' SharedPreferences cache. Restore
+        // exactly the owner that existed before the attempted generation so the caller cannot
+        // submit a package suspension that recovery after process death would not know about.
+        SharedPreferences.Editor rollback = prefs.edit();
+
+        if (hadPackages) {
+            rollback.putStringSet(KEY_APPLIED_SUSPENDED_PACKAGES,
+                    new LinkedHashSet<>(previousPackages));
+        } else {
+            rollback.remove(KEY_APPLIED_SUSPENDED_PACKAGES);
+        }
+
+        if (hadGeneration) {
+            rollback.putLong(KEY_APPLIED_SUSPENDED_PACKAGES_GENERATION, previousGeneration);
+        } else {
+            rollback.remove(KEY_APPLIED_SUSPENDED_PACKAGES_GENERATION);
+        }
+
+        // Best effort for disk; another failed commit still restores the current process' cache.
+        rollback.commit();
+
+        logToLogcat(TAG, "Could not durably begin suspended-package session; suspension must not be dispatched");
+        return null;
     }
 
     /**
@@ -335,9 +424,33 @@ public class DozeStateStore {
                     + expectedGeneration + " but the current owner is " + current);
             return false;
         }
-        prefs.edit().remove(KEY_APPLIED_SUSPENDED_PACKAGES).commit();
-        logToLogcat(TAG, "Cleared the suspended-package record for generation " + expectedGeneration);
-        return true;
+
+        boolean hadPackages = prefs.contains(KEY_APPLIED_SUSPENDED_PACKAGES);
+        Set<String> previousPackages = new LinkedHashSet<>(
+                prefs.getStringSet(KEY_APPLIED_SUSPENDED_PACKAGES, new LinkedHashSet<String>()));
+
+        if (prefs.edit().remove(KEY_APPLIED_SUSPENDED_PACKAGES).commit()) {
+            logToLogcat(TAG, "Cleared the suspended-package record for generation "
+                    + expectedGeneration);
+            return true;
+        }
+
+        // The failed remove already changed this process' SharedPreferences cache. Restore the
+        // previous ownership locally so recovery continues to see the outstanding package debt.
+        SharedPreferences.Editor rollback = prefs.edit();
+        if (hadPackages) {
+            rollback.putStringSet(KEY_APPLIED_SUSPENDED_PACKAGES,
+                    new LinkedHashSet<>(previousPackages));
+        } else {
+            rollback.remove(KEY_APPLIED_SUSPENDED_PACKAGES);
+        }
+
+        // Best effort for disk; another failed commit still restores this process' cached view.
+        rollback.commit();
+
+        logToLogcat(TAG, "Could not durably clear the suspended-package record for generation "
+                + expectedGeneration + "; restore debt kept");
+        return false;
     }
 
     /** The toggles that are still waiting to be reverted. */
