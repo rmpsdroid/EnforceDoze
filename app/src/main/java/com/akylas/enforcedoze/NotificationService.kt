@@ -13,6 +13,7 @@ import android.support.v4.media.session.MediaSessionCompat
 import androidx.media2.session.SessionCommandGroup
 import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class NotificationService : NotificationListenerService() {
 
@@ -33,6 +34,13 @@ class NotificationService : NotificationListenerService() {
         }
     }
     fun getPlayingPackageName(callback: (String?) -> (Unit?)) {
+        val completed = AtomicBoolean(false)
+
+        fun complete(packageName: String?) {
+            if (completed.compareAndSet(false, true)) {
+                callback(packageName)
+            }
+        }
         try {
             val notifications = getNotifications().filter {
                 it.notification.category == Notification.CATEGORY_TRANSPORT || it.notification.category == Notification.CATEGORY_SERVICE
@@ -42,27 +50,39 @@ class NotificationService : NotificationListenerService() {
             }
             if (notification != null) {
                 val token = notification.notification.extras[NotificationCompat.EXTRA_MEDIA_SESSION] as MediaSession.Token?
-                var mediaController: MediaController? = null
                 val mediaSessionCallback = object : MediaController.ControllerCallback() {
                     override fun onConnected(
                         controller: MediaController,
                         allowedCommands: SessionCommandGroup
                     ) {
                         super.onConnected(controller, allowedCommands)
-                        if (controller != mediaController) return
-                        if (controller.playerState == SessionPlayer.PLAYER_STATE_PLAYING) {
-                            callback(notification.packageName)
-                        } else {
-                            callback(null)
-                        }
-                        try {
-                            mediaController?.close()
+
+                        val playingPackageName = try {
+                            if (controller.playerState == SessionPlayer.PLAYER_STATE_PLAYING) {
+                                notification.packageName
+                            } else {
+                                null
+                            }
                         } catch (_: Exception) {
+                            null
+                        }
+
+                        try {
+                            complete(playingPackageName)
+                        } finally {
+                            try {
+                                controller.close()
+                            } catch (_: Exception) {
+                            }
                         }
                     }
 
+                    override fun onDisconnected(controller: MediaController) {
+                        super.onDisconnected(controller)
+                        complete(null)
+                    }
                 }
-                mediaController = MediaController.Builder(this)
+                MediaController.Builder(this)
                     .setSessionCompatToken(MediaSessionCompat.Token.fromToken(token))
                     .setControllerCallback(
                         Executors.newSingleThreadExecutor(),
@@ -70,10 +90,10 @@ class NotificationService : NotificationListenerService() {
                     )
                     .build()
             } else {
-                callback(null)
+                complete(null)
             }
         } catch (e: SecurityException) {
-            callback(null)
+            complete(null)
         }
     }
 
