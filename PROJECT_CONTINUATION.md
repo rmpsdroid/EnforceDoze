@@ -170,41 +170,53 @@ Do not assume version metadata changed unless verified from the current source/b
 
 ---
 
-# 5. CURRENT GIT STATE — 2026-08-31
+# 5. CURRENT GIT STATE — 2026-09-03
 
-Authoritative functional branch:
+Current R0-6 working branch:
 
-`master`
+`fix/durable-state-journal-commit-v1`
 
-Latest functional baseline:
+R0-6 functional commit:
 
-`48f7d30`
+`e2d914c0f2eaa44e3f3450f83849aae8d5fcedc5`
 
-Current remote functional baseline:
+Commit subject:
 
-`origin/master = 48f7d30`
+`Fix durable state journal commit handling`
 
-Verified latest functional commits:
+Current merged functional baseline:
+
+`master = 2297eca0feacc23c1df4149796c254c2048e1b63`
+
+Current remote merged baseline:
+
+`origin/master = 2297eca0feacc23c1df4149796c254c2048e1b63`
+
+Therefore R0-6 is committed on its feature branch but is **not yet merged to
+master and has not moved origin/master**.
+
+Recent functional history:
 
 ```text
-48f7d30 Exclude recovery journal from Android backup
-b013a48 Fix disabled recovery service settlement
-94e70f6 Fix disabled boot restore after late Shizuku start
-9b88c55 Fix restore retry after execution mode switch
-78f21e0 Fix durable Shizuku Doze exit recovery
+e2d914c Fix durable state journal commit handling
+2297eca Merge root physical DeviceIdle serialization fix
+0bd7bd4 Serialize physical DeviceIdle commands
+51209ab Merge media callback completion fix
+7ced75b Fix media callback completion
+cc83c7d Merge legacy pending final-exit recovery
+ff0c2a8 Fix legacy pending final-exit recovery
+d9c5ace Merge failed-open root session lifecycle fix
 ```
 
-`48f7d30` is the current authoritative functional baseline.
-
-The latest functional fix was reviewed, committed on its feature branch, pushed, fast-forward merged to `master`, and `master` was pushed.
-
-Local `master` and `origin/master` were verified synchronized at `48f7d30`.
-
-Documentation remains intentionally separate on:
+The historical documentation branch still exists:
 
 `docs/continuation-20260828`
 
-Do **not** merge the documentation branch to `master` unless explicitly approved.
+It is not the active branch for the current R0-6 documentation update.
+
+For R0-6, functional and documentation commits remain separate approval gates
+on the feature branch. Merge and push operations also require their own
+explicit approvals.
 
 Historical custom audit baseline remains relevant for provenance:
 
@@ -213,7 +225,6 @@ Historical custom audit baseline remains relevant for provenance:
 `fda26b14176480927db22271644a7096bbc9c285`
 
 ---
-
 # 6. PROTECTED UNTRACKED FILES — DO NOT COMMIT
 
 At the end of the latest session, `git status -sb` showed only these untracked artifacts:
@@ -1360,6 +1371,216 @@ Verdict:
 Functional commit: `75d2041`
 ---
 
+## 14.8 R0-1 - dead / unreachable `leaveDoze`
+
+Result:
+
+**PASS / NO CHANGE**
+
+The suspected dead or unreachable `leaveDoze` behavior was audited from current
+source and did not justify a production change.
+
+Do not reopen without new evidence.
+
+## 14.9 R0-3 - legacy ACTIVE + UNKNOWN final-exit ownership
+
+Result:
+
+**CONFIRMED / FIXED / BUILT / DEVICE-VALIDATED / MERGED / PUSHED**
+
+Branch:
+
+`fix/legacy-final-exit-pending-v1`
+
+Functional commit:
+
+`ff0c2a8`
+
+Merge:
+
+`cc83c7d`
+
+The fix preserves a durable pending final-exit obligation when legacy state
+cannot prove that physical DeviceIdle release completed.
+
+Validated APK SHA256:
+
+`A2DC07BEF39824952C26644E2B8FF0B7A21E110A8828261611D36AD9EC9D84AB`
+
+## 14.10 R0-4 - media callback completion
+
+Result:
+
+**CONFIRMED / FIXED / BUILT / DEVICE-VALIDATED / MERGED / PUSHED**
+
+Branch:
+
+`fix/media-callback-completion-v1`
+
+Functional commit:
+
+`7ced75b`
+
+Merge:
+
+`51209ab`
+
+`NotificationService.getPlayingPackageName()` now has an exactly-once
+completion gate so callback absence cannot leave the caller unresolved.
+No-media fallback and disconnect behavior were validated.
+
+Validated APK SHA256:
+
+`D6E36CBA3F291B6A3FAA8026295C0CF5FF37861AAB8349E5477D3B1D74131B6B`
+
+## 14.11 R0-5 - root child/orphan physical DeviceIdle serialization
+
+Result:
+
+**CONFIRMED / FIXED / BUILT / DEVICE-VALIDATED / MERGED / PUSHED**
+
+Branch:
+
+`fix/root-physical-serialization-v1`
+
+Functional commit:
+
+`0bd7bd45da079415cb8739bb231f17efa42cfe23`
+
+Merge:
+
+`2297eca0feacc23c1df4149796c254c2048e1b63`
+
+The confirmed defect was that a native/root child could outlive the app process
+and race durable recovery, potentially leaving markerless forced DeviceIdle.
+
+All physical:
+
+```text
+dumpsys deviceidle force-idle deep
+dumpsys deviceidle unforce
+```
+
+operations are now serialized across app processes and root/Shizuku using the
+Toybox advisory lock:
+
+`/data/local/tmp/com.akylas.enforcedoze.fork-deviceidle.lock`
+
+Validated APK SHA256:
+
+`9525C4341E3F5444E08E21AA45E8441A65C5093963EA85FADBA0E1FEFB211DA9`
+
+## 14.12 R0-6 - durable SharedPreferences state-journal commit handling
+
+Result:
+
+**CONFIRMED / FIXED / BUILD PASS / M30 RUNTIME VALIDATED / FUNCTIONALLY COMMITTED**
+
+Branch:
+
+`fix/durable-state-journal-commit-v1`
+
+Functional commit:
+
+`e2d914c0f2eaa44e3f3450f83849aae8d5fcedc5`
+
+This commit is not yet merged to `master` at the time of this documentation
+update.
+
+Confirmed defect classes:
+
+- `markApplied()` ignored the synchronous SharedPreferences commit result even
+  though durable ownership must exist before a physical state change;
+- `beginSuspendedPackageSession()` could allow physical package suspension
+  without durable package ownership;
+- `clearAppliedIfGeneration()` could report successful restore while failing
+  to durably clear recovery debt;
+- `clearAppliedSuspendedPackagesIfGeneration()` had the same conservative-clear
+  problem for package ownership.
+
+Production behavior now:
+
+- physical state changes are dispatched only after `markApplied()` durably
+  commits ownership;
+- package suspension is dispatched only after the package session is durably
+  committed;
+- failed commit attempts restore the exact previous in-process
+  SharedPreferences view;
+- generation-aware clear methods return success only after the durable clear
+  succeeds;
+- failed clears conservatively retain recovery debt.
+
+Two production files changed:
+
+```text
+app/src/main/java/com/akylas/enforcedoze/DozeStateStore.java
+app/src/main/java/com/akylas/enforcedoze/ForceDozeService.java
+```
+
+Functional diff:
+
+```text
+2 files changed, 205 insertions(+), 53 deletions(-)
+```
+
+Final runtime-validated diff SHA256:
+
+`289FCE18ADDEBA5C129D2ED7BBD968D15680A363436505E0F0542D45297DABD8`
+
+Validated Candidate 1 APK SHA256:
+
+`237F3DD236071CC60393A6122173FC2077B82501F5C5B76D6358FFE52C3496D8`
+
+Dynamically proven on the M30:
+
+- exact installed APK identity;
+- normal `markApplied()` success;
+- durable journal before physical motion restriction;
+- normal Doze entry and restore;
+- generation-aware motion clear;
+- a genuine filesystem-induced SharedPreferences `commit()==false`;
+- conservative ownership retention while persistence was unavailable;
+- successful convergence after persistence became writable again;
+- durable package journal before Spotify suspension;
+- Spotify suspension and unsuspension;
+- generation-aware package journal clear;
+- final neutral M30 restoration.
+
+The exact new Candidate-1 failure sub-branches were **not individually forced**
+at runtime:
+
+- exact `markApplied()` commit-failure branch;
+- exact `clearAppliedIfGeneration()` commit-failure branch;
+- exact `beginSuspendedPackageSession()` commit-failure branch;
+- exact suspended-package-clear commit-failure branch.
+
+Those paths are structurally reviewed and statically gated. Do not claim that
+they were individually hit dynamically, and do not add unsafe test hooks or
+increasingly invasive filesystem manipulation merely to force them.
+
+Important deferred durability item:
+
+`DozeStateStore.setInDoze(boolean)` still ignores its synchronous commit result.
+
+The earlier raw `setInDoze(false)` lifecycle/barrier audit remains valid for the
+narrow question it examined, but the newly identified persistence/durability
+question is separate and remains deferred for a focused Phase-0 audit.
+
+Final M30 package-test restoration:
+
+```text
+dozeAppBlockList = explicit empty set
+com.spotify.music installed=true
+com.spotify.music suspended=false
+```
+
+The pre-test absence of the blocklist key and the current explicit empty set are
+functionally equivalent for the current string-set loader. The live
+SharedPreferences XML was therefore not overwritten merely to remove the empty
+set.
+
+---
+
 # 15. SEPARATE NOTIFICATION BOOT-RECOVERY OBSERVATION
 
 During the boot-liveness source audit, notification restoration was examined.
@@ -1536,7 +1757,9 @@ Important architecture:
 - sensor serializer narrow concurrency — PASS / NO FIX
 - duplicate recovery-start coalescing after `94e70f6` — PASS / NO FIX
 - exact same-session lockscreen timeout reforce — PASS / NO FIX
-- raw `DozeStateStore.setInDoze(false)` lifecycle/barrier audit — PASS / NO FIX
+- earlier raw `DozeStateStore.setInDoze(false)` lifecycle/barrier audit —
+  PASS / NO FIX for that narrow lifecycle question
+- R0-1 dead or unreachable `leaveDoze` behavior — PASS / NO CHANGE
 
 ## Completed / fixed
 
@@ -1549,43 +1772,54 @@ Important architecture:
 - restore retry after execution-mode switch
 - disabled boot restore after late Shizuku start
 - disabled recovery service settlement — `b013a48`
-- Android backup/device-transfer exclusion for durable recovery journal — `48f7d30`
-- Candidate 3: motion-sensor `onDestroy()` shell lifetime — `fa6fcc0`
-- Candidate 4: failed-open `rootSession` lifecycle / teardown safety — `75d2041`
+- Android backup/device-transfer exclusion for durable recovery journal —
+  `48f7d30`
+- Candidate 3 motion-sensor `onDestroy()` shell lifetime — `fa6fcc0`
+- Candidate 4 failed-open `rootSession` lifecycle / teardown safety —
+  `75d2041`
+- R0-3 legacy final-exit ownership — `ff0c2a8`, merged by `cc83c7d`
+- R0-4 media callback completion — `7ced75b`, merged by `51209ab`
+- R0-5 root child/orphan DeviceIdle serialization — `0bd7bd4`, merged by
+  `2297eca`
+- R0-6 durable SharedPreferences state-journal commit handling —
+  `e2d914c` on `fix/durable-state-journal-commit-v1`
 
 ## Follow-up / deferred
 
-The two 2026-08-28 regressions, the Android backup blocker, Candidate 3 and the
-Candidate 4 failed-open `rootSession` release blocker are now functionally closed.
+Phase 0 is **not yet declared fully complete**.
 
-Phase 0 is **not yet declared fully complete**. Continue the final blocker inventory
-one candidate at a time, read-only before making changes.
+R0-1, R0-3, R0-4 and R0-5 are closed. R0-6 is technically validated and
+functionally committed, but is not yet merged to `master` at the time of this
+update.
 
-Current priority order:
+Remaining Phase-0 backlog:
 
-1. R0-1: dead or unreachable `leaveDoze` behavior.
-2. R0-3: ambiguous legacy final-exit ownership.
-3. R0-4: media/getPlayingPackageName path that may fail to invoke its callback.
-4. R0-5: root child-process survival/orphan behavior.
-5. Generic SharedPreferences commit-result handling.
-6. Maintenance async restore/reapply behavior.
-7. Maintenance process-death recovery.
-8. Shizuku `newProcess` deprecation / newer Android API behavior.
-9. stdout/stderr pipe deadlock risk.
-10. notification blocklist exact-set correctness.
-11. notification-only boot/process-death restoration durability.
-12. biometric pre-state assumptions.
-13. pre-N tracked release protocol.
-14. tunable callback absence.
-15. marker-stuck edge cases.
-16. PREPARING phantom-boot risk.
+1. maintenance async restore/reapply behavior;
+2. maintenance process-death behavior;
+3. Shizuku `newProcess` deprecation / newer Android API behavior;
+4. stdout/stderr pipe deadlock risk;
+5. notification blocklist exact-set correctness;
+6. notification-only boot/process-death restoration durability;
+7. biometric pre-state correctness;
+8. pre-N tracked release protocol;
+9. tunable callback absence;
+10. marker-stuck recovery;
+11. PREPARING phantom boot / stale-session behavior;
+12. focused `setInDoze(false)` durability/lifecycle audit.
 
-These are audit candidates, not confirmed bugs. Independently verify each from current source before adopting or changing code.
+The focused `setInDoze(false)` durability item is separate from the earlier
+narrow lifecycle/barrier PASS / NO FIX audit.
+
+These remaining entries are audit candidates or unresolved concerns, not
+automatically confirmed bugs. Independently verify each from current source
+before changing code.
+
+Do not invent a new R0 number without first checking the tracked roadmap and
+current documentation.
 
 Do not treat this order as immutable when stronger evidence changes priority.
 
 ---
-
 # 19. TESTING RULES
 
 Always verify real state.
@@ -1731,24 +1965,29 @@ Update the top authoritative sections with:
 
 ## Recommended documentation-commit discipline
 
-Do not mix documentation housekeeping into an unreviewed functional change.
+Do not mix documentation into an unreviewed functional change, but documentation
+does not need to wait for a separate historical docs-only branch.
 
-A clean approach after a functional fix is fully merged/pushed:
+Current controlled sequence:
 
-1. create a small docs-only branch from updated `master`, e.g.:
-   - `docs/continuation-20260828`
-2. update only `PROJECT_CONTINUATION.md`;
-3. run `git diff --check`;
-4. review;
-5. stage only the continuation file;
-6. explicit **approve commit**;
-7. commit;
-8. explicit **approve push**;
-9. push docs branch;
-10. merge to `master` only with explicit approval;
-11. push master only with explicit approval.
+1. complete final technical validation;
+2. obtain explicit **approve commit** for the functional change;
+3. stage only the exact production files and review the staged diff;
+4. create the functional commit;
+5. inventory and update the authoritative repository documentation;
+6. review the documentation diff;
+7. obtain a separate explicit **approve commit** for documentation;
+8. stage only `PROJECT_CONTINUATION.md`;
+9. create the documentation commit;
+10. obtain explicit **approve merge to master** before merging;
+11. obtain explicit **approve push** / **approve push master** before each
+    applicable push.
 
-This lets the document record the final functional commit SHA accurately without rewriting the functional commit.
+Functional commit, documentation commit, feature push, merge, and master push
+remain separate approval gates.
+
+The historical `docs/continuation-20260828` branch may remain for provenance but
+is not automatically the destination for new continuity updates.
 
 ## Raw logs
 
@@ -4479,9 +4718,10 @@ Copy/paste or point a new ChatGPT conversation to this section.
 
 ## CONTINUE ENFORCEDOZE FROM HERE
 
-I am continuing a long-running Android **EnforceDoze fork** audit/hardening project.
+I am continuing a long-running Android **EnforceDoze fork**
+reliability/correctness/hardening project.
 
-The attached `PROJECT_CONTINUATION.md` is the authoritative project handoff.
+The attached `PROJECT_CONTINUATION.md` is the authoritative repository handoff.
 
 Do **not** make me restate completed history.
 
@@ -4489,198 +4729,259 @@ Do **not** make me restate completed history.
 
 - Fork: `rmpsdroid/EnforceDoze`
 - Local repo: `D:\AndroidProjects\EnforceDoze`
-- Package: `com.akylas.enforcedoze.fork`
-- Authoritative functional branch: `master`
-- Latest functional baseline: `48f7d30`
-- `origin/master`: `48f7d30`
-- Documentation branch: `docs/continuation-20260828`
-- Do **not** merge the documentation branch to `master` unless explicitly approved.
+- Application ID: `com.akylas.enforcedoze.fork`
+- Java namespace: `com.akylas.enforcedoze`
+- Current R0-6 branch: `fix/durable-state-journal-commit-v1`
+- R0-6 functional commit:
+  `e2d914c0f2eaa44e3f3450f83849aae8d5fcedc5`
+- Current `master`:
+  `2297eca0feacc23c1df4149796c254c2048e1b63`
+- Current `origin/master`:
+  `2297eca0feacc23c1df4149796c254c2048e1b63`
 
-Latest functional commits:
+R0-6 is functionally committed but is **not yet merged to master** in the state
+recorded by this document.
+
+The historical branch `docs/continuation-20260828` still exists but is not the
+active branch for R0-6 documentation.
+
+Never assume merge/push status from this text alone after reopening the project.
+Verify Git refs read-only first.
+
+### Closed Phase-0 items in the latest sequence
+
+R0-1:
+
+**PASS / NO CHANGE**
+
+Dead or unreachable `leaveDoze` concern did not justify a production change.
+
+R0-3:
+
+**FIXED / VALIDATED / MERGED / PUSHED**
+
+- functional commit: `ff0c2a8`
+- merge: `cc83c7d`
+- issue: legacy ACTIVE + UNKNOWN final-exit ownership ambiguity
+
+R0-4:
+
+**FIXED / VALIDATED / MERGED / PUSHED**
+
+- functional commit: `7ced75b`
+- merge: `51209ab`
+- issue: media `getPlayingPackageName()` callback completion
+
+R0-5:
+
+**FIXED / VALIDATED / MERGED / PUSHED**
+
+- functional commit: `0bd7bd4`
+- merge: `2297eca`
+- issue: root child/orphan physical DeviceIdle serialization
+
+R0-6:
+
+**CONFIRMED / FIXED / BUILD PASS / M30 RUNTIME VALIDATED /
+FUNCTIONALLY COMMITTED**
+
+Functional commit:
+
+`e2d914c`
+
+Changed production files:
 
 ```text
-48f7d30 Exclude recovery journal from Android backup
-b013a48 Fix disabled recovery service settlement
-94e70f6 Fix disabled boot restore after late Shizuku start
-9b88c55 Fix restore retry after execution mode switch
-78f21e0 Fix durable Shizuku Doze exit recovery
+app/src/main/java/com/akylas/enforcedoze/DozeStateStore.java
+app/src/main/java/com/akylas/enforcedoze/ForceDozeService.java
 ```
 
-### Latest Phase 0 closures
+Final runtime-validated diff SHA256:
 
-`b013a48`:
+`289FCE18ADDEBA5C129D2ED7BBD968D15680A363436505E0F0542D45297DABD8`
 
-**REPRODUCED / FIXED / BUILD PASS / DEVICE TEST PASS / COMMITTED / PUSHED / MERGED**
+Candidate APK SHA256:
 
-It fixes disabled recovery service/process liveness ending before asynchronous durable restore work settles.
+`237F3DD236071CC60393A6122173FC2077B82501F5C5B76D6358FFE52C3496D8`
 
-Decisive recovery evidence:
+R0-6 fixes ignored SharedPreferences commit-result handling for critical durable
+recovery ownership:
+
+- `markApplied()` now gates physical state changes on durable journal success;
+- package-session creation gates physical suspension on durable ownership;
+- generation-aware marker clears no longer falsely report durable success;
+- failed commit attempts conservatively restore/retain local recovery debt.
+
+Dynamically proven:
+
+- candidate APK identity;
+- normal journal-before-motion-action ordering;
+- normal Doze entry and restore;
+- generation-aware motion clear;
+- genuine SharedPreferences `commit()==false`;
+- conservative ownership retention and later recovery;
+- package journal before Spotify suspension;
+- Spotify suspend/unsuspend;
+- package journal clear;
+- final neutral M30 restoration.
+
+Statically proven but not individually forced dynamically:
+
+- exact `markApplied()` commit-failure branch;
+- exact `clearAppliedIfGeneration()` commit-failure branch;
+- exact `beginSuspendedPackageSession()` commit-failure branch;
+- exact suspended-package-clear commit-failure branch.
+
+Do not claim those exact branches were dynamically hit.
+
+Do not create unsafe test hooks or increasingly invasive filesystem tests merely
+to hit them.
+
+### Important deferred item
+
+`DozeStateStore.setInDoze(boolean)` still ignores its synchronous commit result.
+
+This is a real durability concern discovered during R0-6 but was intentionally
+not broadened into R0-6 Candidate 1.
+
+The earlier raw `setInDoze(false)` lifecycle/barrier PASS / NO FIX result was a
+different, narrower audit question. Preserve that historical result while
+keeping the focused durability/lifecycle review open.
+
+### Current M30 test-device restoration
+
+M30:
+
+- Samsung SM-M305F
+- Android 10 / API 29
+- ADB serial: `30.30.30.70:5555`
+- Shizuku
+- no root
+- preferred synthetic test phone
+
+Current package-test restoration:
 
 ```text
-final_unsuspend_success count=232 gen=419 durationMs=8594
-disabled_restore_stop_settled ... stopped=true
-disabled_restore_teardown_no_redispatch
+dozeAppBlockList = explicit empty set
+com.spotify.music installed=true
+com.spotify.music suspended=false
 ```
 
-Regression 1:
-
-**PASS / NO FIX**
-
-Duplicate logical recovery starts safely coalesced for the same generation-419 durable debt.
-
-The exact earliest-boot Samsung ordering with Shizuku already available was not naturally reproduced, so do not claim that exact timing was deterministic.
-
-Regression 2:
-
-**PASS / NO FIX**
-
-Exact sequence verified:
+Current neutral physical state:
 
 ```text
-owned Doze
--> locked wake physical unforce
--> same logical session retained
--> natural locked timeout OFF
--> same-session physical reforce
--> USER_PRESENT final cleanup
-```
-
-Generation remained `420`; no generation `421` was created.
-
-Final package restore:
-
-```text
-final_unsuspend_success count=232 gen=420 durationMs=6302
-```
-
-`48f7d30`:
-
-**CONFIRMED RELEASE BLOCKER / FIXED / BUILD PASS / VERIFIED / COMMITTED / PUSHED / MERGED**
-
-It excludes the durable recovery journal `enforcedoze_doze_state.xml` from:
-
-- API 23-30 Android Auto Backup;
-- Android 12+ cloud backup;
-- Android 12+ device-to-device transfer.
-
-Normal user preferences remain backup-eligible.
-
-### Current clean phone state
-
-Primary device:
-
-**Samsung Galaxy S26 Ultra, API 36, One UI**
-
-Execution mode:
-
-`shizuku`
-
-Normal preference:
-
-`waitForUnlock=true`
-
-Post-regression cleanup:
-
-```text
-serviceEnabled=false
-ForceDozeService stopped
 mForceIdle=false
+mScreenOn=true
+mScreenLocked=false
+mState=ACTIVE
+mLightState=ACTIVE
+```
+
+Current durable state has no active recovery debt:
+
+```text
 inDoze=false
+sessionPhysicalMode=0
 entryPending=false
 ownedReforcePending=false
-sessionPhysicalMode=0
+finalExitPending=false
+gen.motionSensors=15
+appliedSuspendedPackagesGeneration=1
+no applied.motionSensors
 no appliedSuspendedPackages set
-generation counter=420
-screen_off_timeout=600000
 ```
 
-### Current ADB
+The generation values are historical counters, not active debt.
 
-Latest known endpoint:
+Do not overwrite the live SharedPreferences XML merely to turn the explicit
+empty `dozeAppBlockList` back into an absent key.
 
-`30.30.30.234:44461`
+### Primary S26 Ultra
 
-Wireless debugging ports change.
+The Samsung Galaxy S26 Ultra remains the normal-use device.
 
-Always run `adb devices` after reconnect/reboot and use the endpoint whose state is `device`.
+Do not perform synthetic failure tests on it unless specifically justified.
+Prefer the M30 for controlled failure testing.
 
-### Protected untracked files
+### Remaining Phase-0 backlog
 
-Never stage these accidentally:
+Do not start rebranding/UI yet.
+
+Remaining work:
+
+1. maintenance async restore/reapply;
+2. maintenance process-death behavior;
+3. Shizuku `newProcess` deprecation / newer Android API behavior;
+4. stdout/stderr deadlock;
+5. notification exact-set behavior;
+6. boot/process-death notification restore;
+7. biometric pre-state correctness;
+8. pre-N tracked release;
+9. tunable callback absence;
+10. marker-stuck recovery;
+11. PREPARING phantom boot / stale session;
+12. focused `setInDoze(false)` durability/lifecycle audit.
+
+Do not invent the next R0 number until the tracked roadmap/current
+documentation has been checked.
+
+### Current documentation / Git approval state
+
+Functional commit approval for R0-6 was already given and functional commit
+`e2d914c` was created.
+
+The documentation update is a separate commit.
+
+If this file is still modified but uncommitted when a session resumes:
+
+1. review the documentation diff;
+2. do not stage it until review passes;
+3. wait for explicit **approve commit**;
+4. stage only `PROJECT_CONTINUATION.md`;
+5. create the documentation commit.
+
+If the documentation commit already exists, first verify Git state and then
+continue from the appropriate approval gate.
+
+No merge to master without:
+
+**approve merge to master**
+
+No feature push without:
+
+**approve push**
+
+No master push without:
+
+**approve push master**
+
+Never combine these approval gates.
+
+### Protected evidence
+
+Never stage, overwrite, or delete audit evidence casually.
+
+All `r0-4-*`, `r0-5-*`, and `r0-6-*` evidence is protected.
+
+Important R0-6 protected evidence includes:
 
 ```text
-boot-restore-step1.txt
-boot-restore-step4.txt
-boot-restore-step5.txt
-boot-restore-step7.txt
-boot-restore-step8-shizuku-trigger.txt
-cls
-fresh-force-late-settle-review-v1.diff
-fresh-force-late-settle-review-v2.diff
-fresh-force-late-settle-review-v3.diff
-notification-toggle-race-v1-uncommitted.patch
+r0-6-candidate1-prebuild-review.diff
+r0-6-build-candidate1.txt
+r0-6-candidate1-postbuild-review.diff
+r0-6-candidate1-final-runtime-validated.diff
+r0-6-project-continuation-pre-doc-update.md
 ```
 
-Never use `git add .`.
+Protected pre-documentation backup SHA256:
 
-### Immediate follow-up
+`131BC07EC1F02B41390D33CFE7326335D15CCB28199959BDE6D4113FA4A3BD52`
 
-Start read-only.
+Never use:
 
-Candidate 4 active branch:
+`git add .`
 
-`fix/root-session-failed-open-v1`
-
-Current master baseline:
-
-`e57c87e`
-
-Candidate 4 - failed-open `rootSession` lifecycle / teardown safety - is now:
-
-**CONFIRMED RELEASE BLOCKER / FIXED / BUILT / DEVICE-VERIFIED**
-
-Functional commit: `75d2041`
-
-The implemented invariant is:
-
-```text
-early failed-open Shell.Interactive
--> callback records failure
--> failed candidate is not published to static rootSession
--> later root command performs a fresh open attempt
--> normal onDestroy() does not close the poisoned partial candidate
-```
-
-Deterministic device evidence repeatedly produced:
-
-```text
-Error opening root shell: exitCode -3
-```
-
-A subsequent normal app-UID `stopservice --user 0` returned `Service stopped`,
-entered the service-destroyed cleanup path, and produced no
-`closeImmediately`, `Unable to stop service`, or `FATAL EXCEPTION`.
-
-The production-candidate APK SHA-256 is:
-
-`6BF751F1E885B3CD3D414F6B8DC2F37FFD7912C015A89D0D0ED6679AA34549D6`
-
-Normal device configuration is restored to Shizuku and the device is ACTIVE with
-SensorService NORMAL.
-
-Do not reopen Candidate 3 without new evidence.
-
-Do not broaden Candidate 4 retrospectively into `nonRootSession`, Activity-local
-shells or executor lifecycle without separate evidence.
-
-Phase 0 is **not yet fully closed**.
-
-Next audit candidate:
-
-**R0-1: dead or unreachable `leaveDoze` behavior.**
-
-Begin read-only and independently verify the current source before deciding
-whether any code change is warranted.
+Stage only exact intended files.
 
 ### How to work with me
 
@@ -4689,47 +4990,46 @@ I am not an Android developer.
 Give:
 
 - exact commands;
-- one stage at a time;
+- one controlled stage at a time;
 - what the output means;
-- no giant future command dump.
+- no giant future command dumps.
 
-When I am at PowerShell:
+Repository work is PowerShell at:
 
 `PS D:\AndroidProjects\EnforceDoze>`
 
-give PowerShell commands.
-
-When I am at:
+ADB/device work is CMD at:
 
 `C:\adb>`
 
-give `adb.exe ...` commands.
-
-### Approval gates
-
-No commit unless I explicitly say:
-
-**approve commit**
-
-No push unless I explicitly say:
-
-**approve push**
-
-No merge to master unless I explicitly say:
-
-**approve merge to master**
-
-No push of master unless I explicitly say:
-
-**approve push master**
+Never use `monkey`.
 
 ### First action in a new chat
 
-Begin with read-only Git verification.
+Start read-only.
+
+Run:
+
+```powershell
+git branch --show-current
+git rev-parse HEAD
+git rev-parse master
+git rev-parse origin/master
+git status -sb --untracked-files=no
+```
+
+Determine whether:
+
+- the R0-6 documentation change is still uncommitted;
+- a documentation commit has already been created;
+- `master` contains `e2d914c`;
+- `origin/master` contains the eventual R0-6 merge.
 
 Do not restart the project explanation.
 
-Do not ask me to repeat prior history.
+Do not re-audit closed candidates without new evidence.
+
+Do not begin UI/rebranding while Phase 0 remains open.
 
 ---
 
