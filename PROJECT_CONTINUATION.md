@@ -1,8 +1,8 @@
 # EnforceDoze Fork — Authoritative Project Continuation
 
-**Updated:** 2026-08-31 (Asia/Kolkata)
+**Updated:** 2026-09-03 (Asia/Kolkata)
 **Repository:** `rmpsdroid/EnforceDoze`
-**Current authoritative master:** `48f7d30`
+**Current authoritative Git state:** verify live `master` and `origin/master` refs read-only; R0-6 functional baseline is `e2d914c`.
 **Purpose:** single source of truth for continuing this project in a new ChatGPT window without restarting the investigation.
 
 ---
@@ -355,17 +355,23 @@ The historical snapshots later in this file contain the full earlier chronology.
 3. `94e70f6` — **Fix disabled boot restore after late Shizuku start**
 4. `b013a48` — **Fix disabled recovery service settlement**
 5. `48f7d30` — **Exclude recovery journal from Android backup**
+6. `fa6fcc0` — **Fix motion-sensor teardown shell lifetime**
+7. `75d2041` — **Fix failed-open root session lifecycle**
+8. `ff0c2a8` — **Fix legacy pending final-exit recovery**
+9. `7ced75b` — **Fix media callback completion**
+10. `0bd7bd4` — **Serialize physical DeviceIdle commands**
+11. `e2d914c` — **Fix durable state journal commit handling**
 
 Latest functional baseline:
 
-`48f7d30`
+`e2d914c`
 
-The first three recovery commits are described in detail below.
+The earlier recovery commits are described in detail below.
 
-The Stage19 settlement fix, closed regressions, and Android backup-safety fix are summarized in Section 14.
+The later Phase-0 closures, including R0-1 through R0-6, are summarized in
+Section 14.
 
 ---
-
 # 9. `78f21e0` — DURABLE SHIZUKU DOZE EXIT RECOVERY
 
 Branch:
@@ -1037,7 +1043,7 @@ Verdict:
 
 **CONFIRMED RELEASE BLOCKER / FIXED / BUILT / VERIFIED / COMMITTED / PUSHED / MERGED**
 
-Latest functional baseline:
+Functional baseline at this checkpoint:
 
 `48f7d30`
 
@@ -4930,37 +4936,47 @@ Remaining work:
 Do not invent the next R0 number until the tracked roadmap/current
 documentation has been checked.
 
-### Current documentation / Git approval state
+### Current documentation / Git completion state
 
-Functional commit approval for R0-6 was already given and functional commit
-`e2d914c` was created.
+R0-6 is fully closed for the completed scope:
 
-The documentation update is a separate commit.
+**CONFIRMED / FIXED / BUILT / M30 VALIDATED / DOCUMENTED / COMMITTED /
+MERGED / FEATURE-PUSHED / MASTER-PUSHED**
 
-If this file is still modified but uncommitted when a session resumes:
+Functional commit:
 
-1. review the documentation diff;
-2. do not stage it until review passes;
-3. wait for explicit **approve commit**;
-4. stage only `PROJECT_CONTINUATION.md`;
-5. create the documentation commit.
+`e2d914c`
 
-If the documentation commit already exists, first verify Git state and then
-continue from the appropriate approval gate.
+R0-6 documentation commit:
 
-No merge to master without:
+`970b1b0`
 
-**approve merge to master**
+Post-merge continuation correction:
 
-No feature push without:
+`ae10255`
 
-**approve push**
+At the `ae10255` completion checkpoint, local `master` and `origin/master`
+were verified synchronized.
 
-No master push without:
+This final documentation synchronization may itself create a newer
+documentation-only commit after that checkpoint. Therefore, in every future
+session, verify the live Git refs read-only instead of assuming the checkpoint
+SHA is still HEAD.
 
-**approve push master**
+All R0-6 functional, documentation, merge, feature-push and master-push approval
+gates recorded above have been completed.
 
-Never combine these approval gates.
+The next project action is **not** another R0-6 operation. Continue Phase 0 from
+the remaining tracked backlog using read-only investigation first.
+
+Do not invent the next R0 number until the current roadmap/documentation has
+been checked.
+
+The first remaining backlog subject currently listed is:
+
+`maintenance async restore/reapply behavior`
+
+Treat it initially as an audit candidate, not as a confirmed bug.
 
 ### Protected evidence
 
