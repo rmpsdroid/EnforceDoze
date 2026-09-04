@@ -2,11 +2,12 @@
 
 **Updated:** 2026-09-04 (Asia/Kolkata)
 **Repository:** `rmpsdroid/EnforceDoze`
-**Current authoritative Git state:** maintenance async restore/reapply functional
-commit `434ce6508764bdcf2b34221f85858f9c0ce1a440` is on `fix/maintenance-async-reapply-v1`. At this documentation checkpoint local
-`master` and `origin/master` are both
-`885262e83b52b6bc03636b7f86e398da9f777d69`. The user has already granted the exact merge-to-master and
-master-push approvals, but those operations have not yet been executed.
+**Current authoritative Git state:** maintenance async restore/reapply is fully
+integrated on `master`. Functional commit
+`434ce6508764bdcf2b34221f85858f9c0ce1a440` and documentation commit
+`fbc41b67b8e17dcc47a6bab93ecc818a34430e6d` are both contained in local
+`master` and `origin/master`, which are synchronized at
+`fbc41b67b8e17dcc47a6bab93ecc818a34430e6d`.
 
 **Purpose:** single source of truth for continuing this project in a new ChatGPT window without restarting the investigation.
 
@@ -177,19 +178,39 @@ Do not assume version metadata changed unless verified from the current source/b
 
 # 5. CURRENT GIT STATE — 2026-09-04
 
-Current maintenance async restore/reapply branch:
+Current branch:
 
-`fix/maintenance-async-reapply-v1`
+`master`
 
-Functional commit:
+Current authoritative HEAD:
+
+`fbc41b67b8e17dcc47a6bab93ecc818a34430e6d`
+
+Maintenance async restore/reapply functional commit:
 
 `434ce6508764bdcf2b34221f85858f9c0ce1a440`
 
-Commit subject:
+Documentation commit:
 
-`Fix maintenance async restore reapply handling`
+`fbc41b67b8e17dcc47a6bab93ecc818a34430e6d`
 
-Exact production file changed:
+Current synchronized refs:
+
+```text
+HEAD          = fbc41b67b8e17dcc47a6bab93ecc818a34430e6d
+master        = fbc41b67b8e17dcc47a6bab93ecc818a34430e6d
+origin/master = fbc41b67b8e17dcc47a6bab93ecc818a34430e6d
+```
+
+The maintenance async restore/reapply change is therefore:
+
+**FUNCTIONALLY COMMITTED / DOCUMENTED / MERGED TO MASTER / MASTER PUSHED**
+
+The local feature branch `fix/maintenance-async-reapply-v1` also currently
+points to `fbc41b67b8e17dcc47a6bab93ecc818a34430e6d`. No feature-branch push was
+required for the completed master result.
+
+Functional production scope:
 
 `app/src/main/java/com/akylas/enforcedoze/ForceDozeService.java`
 
@@ -211,19 +232,10 @@ Frozen/installed Candidate-5 debug APK SHA256:
 
 `3585AF7EA96B071F3BBFC345066F7B6FF369E516FE73F564E11B668B2D52A0CD`
 
-At this documentation checkpoint:
-
-- feature-branch HEAD = `434ce6508764bdcf2b34221f85858f9c0ce1a440`;
-- local `master` = `885262e83b52b6bc03636b7f86e398da9f777d69`;
-- `origin/master` = `885262e83b52b6bc03636b7f86e398da9f777d69`;
-- the functional commit is not yet merged into `master`;
-- exact `approve merge to master` and `approve push master` approvals have
-  already been granted;
-- the documentation commit remains a separate approval gate.
-
 Recent history:
 
 ```text
+fbc41b6 Update continuation for maintenance async reapply
 434ce65 Fix maintenance async restore reapply handling
 885262e Finalize R0-6 continuation state
 ae10255 Update continuation after R0-6 merge
@@ -267,6 +279,8 @@ maintenance-async-reapply-candidate5-staged-final-review.diff
 maintenance-async-reapply-project-continuation-pre-doc-update.md
 maintenance-async-reapply-update-project-continuation.ps1
 maintenance-async-reapply-update-project-continuation-v2.ps1
+maintenance-async-reapply-project-continuation-pre-final-sync.md
+maintenance-async-reapply-finalize-project-continuation.ps1
 ```
 
 Protected maintenance pre-documentation backup SHA256:
@@ -1618,15 +1632,24 @@ set.
 
 Result:
 
-**CONFIRMED / FIXED / BUILD PASS / M30 RUNTIME VALIDATED / FUNCTIONALLY COMMITTED**
+**CONFIRMED / FIXED / BUILD PASS / M30 RUNTIME VALIDATED / DOCUMENTED /
+MERGED / MASTER PUSHED**
 
-Branch:
+Functional branch:
 
 `fix/maintenance-async-reapply-v1`
 
 Functional commit:
 
 `434ce6508764bdcf2b34221f85858f9c0ce1a440`
+
+Documentation commit:
+
+`fbc41b67b8e17dcc47a6bab93ecc818a34430e6d`
+
+Current integrated master:
+
+`fbc41b67b8e17dcc47a6bab93ecc818a34430e6d`
 
 Production scope:
 
@@ -1636,8 +1659,8 @@ No `DozeStateStore` production change was required.
 
 ### Confirmed defect
 
-Maintenance restoration is asynchronous. Six generic Doze reapply predicates could
-read the still-old physical Doze target while maintenance restoration was
+Maintenance restoration is asynchronous. Six generic Doze reapply predicates
+could read the still-old physical Doze target while maintenance restoration was
 outstanding:
 
 - airplane mode;
@@ -1649,17 +1672,6 @@ outstanding:
 
 That could cause maintenance exit to skip the new journal/reapply request
 entirely.
-
-Representative failure shape:
-
-1. Doze generation N owns a generic toggle;
-2. maintenance queues restoration to the pre-Doze value;
-3. deep idle returns before that restoration physically completes;
-4. the old implementation reads the still-Doze physical value;
-5. its normal entry predicate evaluates false;
-6. generation N+1 is never journaled or queued;
-7. the old maintenance restoration can then leave the owned Doze session in the
-   restored/non-Doze physical state.
 
 `ALL_SENSORS` is maintenance-restored but is not the exact predicate defect
 because its entry behavior is preference-driven.
@@ -1680,59 +1692,23 @@ physical state and protects stale callback/cycle boundaries:
 - `stateRestoreInFlight` tracks exact `(key, generation)` identities rather than
   only a key or only the newest generation.
 
-The exact-pair restore tracker permits a newer generation for the same key
-without making an older still-running generation disappear from the in-flight
-set.
-
 ### Static/build identity
 
 Final source SHA256:
 
 `41B99ED3C15B0FB7605081D67A63259AA537D08D968CBFF47EF84FDA1211ADF7`
 
-Candidate-5 prebuild diff SHA256:
+Candidate-5 prebuild/final-runtime/staged diff SHA256:
 
 `A3B351AA948998F5B05D9596B87B7C85702DD4735E806CF7284CA49B9769C6E3`
-
-Final runtime-validated diff SHA256:
-
-`A3B351AA948998F5B05D9596B87B7C85702DD4735E806CF7284CA49B9769C6E3`
-
-Staged final-review diff SHA256:
-
-`A3B351AA948998F5B05D9596B87B7C85702DD4735E806CF7284CA49B9769C6E3`
-
-Build:
-
-`BUILD SUCCESSFUL`
 
 Frozen/installed Candidate-5 debug APK SHA256:
 
 `3585AF7EA96B071F3BBFC345066F7B6FF369E516FE73F564E11B668B2D52A0CD`
 
-The installed M30 base APK was pulled back and independently matched that same
-hash.
-
 ### M30 runtime validation
 
 Battery Saver was used as the representative generic key.
-
-Controlled normal entry proved:
-
-- physical deep idle;
-- Battery Saver ON;
-- `inDoze=true`;
-- `pre.batterySaver=false`;
-- `applied.batterySaver=true`;
-- generation ownership created.
-
-Ordinary maintenance validation proved:
-
-- maintenance state reached;
-- Battery Saver restored OFF;
-- old applied generation cleared only after successful restore;
-- return to deep idle generated a newer Battery Saver owner;
-- Battery Saver was physically re-enabled.
 
 The defining asynchronous overlap was deliberately exercised with a rapid:
 
@@ -1742,22 +1718,12 @@ IDLE -> IDLE_MAINTENANCE -> IDLE
 
 cycle.
 
-Observed critical ordering:
+Observed ordering proved that deep idle returned while the old restore was still
+outstanding, generation 4 was still journaled/re-applied, the old maintenance
+restore physically turned Battery Saver OFF, and the newer Doze reapply then
+turned it ON.
 
-```text
-RESTORE_PENDING batterySaver                 generation 3
-Device entered Doze after maintenance        while restore still outstanding
-RESTORE_SUCCESS batterySaver exit=0 gen=3
-Marked batterySaver applied                  generation 4
-old maintenance physical restore             Battery Saver OFF
-new Doze physical reapply                    Battery Saver ON
-```
-
-This dynamically proves the defining race was reached: deep idle returned before
-the generation-3 maintenance restoration finished. Candidate 5 did not skip the
-reapply. Final owned state was generation 4 with Battery Saver ON.
-
-Final cleanup also passed:
+Final cleanup passed:
 
 ```text
 EnforceDoze process = stopped
@@ -1775,8 +1741,6 @@ no applied.batterySaver
 no applied.motionSensors
 ```
 
-Historical generation counters are not active debt.
-
 ### Evidence boundary
 
 The exact case of two different restore generations for the same key both
@@ -1788,8 +1752,8 @@ rather than separately forced as a dedicated runtime case.
 
 Do not exaggerate those narrower evidence boundaries.
 
-Maintenance **process-death behavior is separate** and remains the next Phase-0
-audit subject.
+Maintenance **process-death behavior is separate** and is the next Phase-0 audit
+subject.
 
 ---
 
@@ -1995,17 +1959,15 @@ Important architecture:
   `2297eca`
 - R0-6 durable SharedPreferences state-journal commit handling — `e2d914c`,
   fully closed and merged/pushed
-- maintenance async restore/reapply behavior — `434ce65` on
-  `fix/maintenance-async-reapply-v1`; M30 async-overlap runtime PASS
+- maintenance async restore/reapply behavior — functional `434ce65`,
+  documentation/master `fbc41b6`; M30 async-overlap runtime PASS; merged and
+  pushed to `master`
 
 ## Follow-up / deferred
 
 Phase 0 is **not yet declared fully complete**.
 
-The maintenance async restore/reapply functional fix is technically validated and
-committed. At this documentation checkpoint it has not yet been merged to
-`master`; documentation, merge, and master push remain separate
-approval-controlled completion steps.
+The maintenance async restore/reapply item is fully closed for its audited scope.
 
 Remaining Phase-0 backlog:
 
@@ -4946,27 +4908,23 @@ Do **not** make me restate completed history.
 - Local repo: `D:\AndroidProjects\EnforceDoze`
 - Application ID: `com.akylas.enforcedoze.fork`
 - Java namespace: `com.akylas.enforcedoze`
-- Current feature branch: `fix/maintenance-async-reapply-v1`
-- Maintenance async restore/reapply functional commit: `434ce6508764bdcf2b34221f85858f9c0ce1a440`
-- Local `master`: `885262e83b52b6bc03636b7f86e398da9f777d69`
-- `origin/master`: `885262e83b52b6bc03636b7f86e398da9f777d69`
+- Current branch: `master`
+- Maintenance async restore/reapply functional commit:
+  `434ce6508764bdcf2b34221f85858f9c0ce1a440`
+- Maintenance documentation/master commit:
+  `fbc41b67b8e17dcc47a6bab93ecc818a34430e6d`
+- Current `HEAD`, `master`, and `origin/master`:
+  `fbc41b67b8e17dcc47a6bab93ecc818a34430e6d`
 
-At the documentation checkpoint recorded here, the maintenance async
-restore/reapply functional commit is committed on the feature branch but is not
-yet merged to `master`.
+The maintenance async restore/reapply functional fix and its documentation are
+merged and pushed to `master`.
 
-The user has already supplied exact:
+The local feature branch `fix/maintenance-async-reapply-v1` also points to
+`fbc41b6`. It was not separately pushed, and no feature-branch push is required
+for the completed master result.
 
-```text
-approve merge to master
-approve push master
-```
-
-Those approvals may be used only after the separate documentation commit is
-reviewed and approved.
-
-Never assume merge/push status from this text alone after reopening the project.
-Verify Git refs read-only first.
+Always verify Git refs read-only after reopening rather than relying only on this
+recorded checkpoint.
 
 ### Closed Phase-0 items in the latest sequence
 
@@ -5016,22 +4974,21 @@ Do not reopen R0-1/R0-3/R0-4/R0-5/R0-6 without new evidence.
 
 Status:
 
-**CONFIRMED / FIXED / BUILD PASS / M30 RUNTIME VALIDATED / FUNCTIONALLY COMMITTED**
+**CONFIRMED / FIXED / BUILD PASS / M30 RUNTIME VALIDATED / DOCUMENTED /
+MERGED / MASTER PUSHED**
 
 Functional commit:
 
 `434ce6508764bdcf2b34221f85858f9c0ce1a440`
 
+Documentation/master commit:
+
+`fbc41b67b8e17dcc47a6bab93ecc818a34430e6d`
+
 Changed production file:
 
 ```text
 app/src/main/java/com/akylas/enforcedoze/ForceDozeService.java
-```
-
-Functional diff:
-
-```text
-1 file changed, 230 insertions(+), 24 deletions(-)
 ```
 
 Candidate-5 source SHA256:
@@ -5046,32 +5003,10 @@ Candidate-5 APK SHA256:
 
 `3585AF7EA96B071F3BBFC345066F7B6FF369E516FE73F564E11B668B2D52A0CD`
 
-The installed M30 base APK was pulled back and matched the frozen candidate APK
-hash exactly.
-
-Confirmed defect:
-
-Maintenance restore is asynchronous. For airplane, Bluetooth, GPS, Wi-Fi, mobile
-data and Battery Saver, ordinary re-entry predicates could read the still-old
-physical Doze target before maintenance restore completed and skip the newer
-reapply/journal request.
-
-Candidate 5 preserves exact maintenance-cycle/snapshot intent, invalidates stale
-network-entry callbacks, and tracks in-flight restores by exact
-`(key, generation)` identity.
-
-Dynamically proven on M30 with Battery Saver as the representative generic key:
-
-- normal Doze ownership and journal creation;
-- maintenance restoration to Battery Saver OFF;
-- ordinary maintenance reapply;
-- deliberate rapid `IDLE -> IDLE_MAINTENANCE -> IDLE` overlap;
-- deep idle returned while the old async restore was still outstanding;
-- old generation restore completed;
-- newer generation was still journaled and re-applied;
-- physical ordering reached old restore OFF followed by new reapply ON;
-- final owned state remained correct;
-- final session exit and cleanup restored neutral ownership.
+The defining maintenance async overlap was dynamically reached on M30 using
+Battery Saver. Deep idle returned while the old restore was still outstanding;
+the newer generation was still journaled/re-applied; physical ordering reached
+old restore OFF followed by new reapply ON.
 
 Evidence boundary:
 
@@ -5149,28 +5084,26 @@ has been checked.
 The next audit subject is **maintenance process-death behavior**. Treat it as an
 audit candidate first, not an automatically confirmed bug.
 
-### Current documentation / Git approval state
+### Current documentation / Git completion state
 
-The maintenance async restore/reapply functional commit is already created:
+Maintenance async restore/reapply is fully closed for the completed scope:
 
-`434ce6508764bdcf2b34221f85858f9c0ce1a440`
+```text
+functional commit = 434ce6508764bdcf2b34221f85858f9c0ce1a440
+documentation     = fbc41b67b8e17dcc47a6bab93ecc818a34430e6d
+HEAD               = fbc41b67b8e17dcc47a6bab93ecc818a34430e6d
+master             = fbc41b67b8e17dcc47a6bab93ecc818a34430e6d
+origin/master      = fbc41b67b8e17dcc47a6bab93ecc818a34430e6d
+```
 
-The documentation update is a separate commit.
+The prior merge and master-push approvals were consumed by the completed
+operations.
 
-If this file is modified but uncommitted when a session resumes:
+Any new documentation commit created after this checkpoint requires a new exact
+`approve commit`, and any subsequent master push requires a new exact
+`approve push master`.
 
-1. review the documentation diff;
-2. do not stage it until review passes;
-3. wait for explicit **approve commit**;
-4. stage only `PROJECT_CONTINUATION.md`;
-5. create the documentation commit.
-
-The exact merge-to-master and master-push approvals have already been granted in
-the current conversation, but do not execute them until the documentation commit
-gate has completed.
-
-Feature push remains a separate approval gate if a feature-branch push is
-desired.
+The next Phase-0 audit subject is **maintenance process-death behavior**.
 
 ### Protected evidence
 
