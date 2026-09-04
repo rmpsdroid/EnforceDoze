@@ -128,12 +128,68 @@ public class ForceDozeService extends Service {
     private PackageOp inFlightPackageOp = null;
     private boolean inFlightPackageFinal = false;
     private PackageOp pendingPackageOp = null;
-    /** Guards a device-state key while its restore command is outstanding. */
-    private final Set<String> stateRestoreInFlight =
-            Collections.newSetFromMap(new ConcurrentHashMap<String, Boolean>());
+    /**
+     * Identity of one outstanding device-state restore. Multiple generations for the same key may
+     * legitimately coexist: an older physical command can still be running while a newer journal
+     * generation is queued behind it.
+     */
+    private static final class StateRestoreToken {
+        final String key;
+        final long generation;
+
+        StateRestoreToken(String key, long generation) {
+            this.key = key;
+            this.generation = generation;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (this == other) {
+                return true;
+            }
+            if (!(other instanceof StateRestoreToken)) {
+                return false;
+            }
+            StateRestoreToken that = (StateRestoreToken) other;
+            return generation == that.generation && key.equals(that.key);
+        }
+
+        @Override
+        public int hashCode() {
+            int result = key.hashCode();
+            result = 31 * result + (int) (generation ^ (generation >>> 32));
+            return result;
+        }
+    }
+
+    /**
+     * Every restore transaction whose completion callback is still outstanding. Exact token
+     * equality suppresses a duplicate restore for one journal generation without hiding an older
+     * command that is still physically running.
+     */
+    private final Set<StateRestoreToken> stateRestoreInFlight =
+            Collections.newSetFromMap(
+                    new ConcurrentHashMap<StateRestoreToken, Boolean>());
     /** SystemClock.elapsedRealtime() of the last SCREEN_ON, for the WAKE_TIMING logs. */
     private volatile long wakeStartedAt = 0L;
     boolean maintenance = false;
+    /**
+     * Latest-wins identity for network-entry work. Guarded by physicalEntryLock. This is separate
+     * from the Doze-session epoch because one owned session can cross multiple maintenance windows.
+     */
+    private long networkEntryToken = 0L;
+    /**
+     * Identity of the current in-process maintenance context. Bumped when a window begins and when
+     * lifecycle handling invalidates it, so an asynchronous callback from an older window cannot act.
+     */
+    private long maintenanceCycle = 0L;
+    /**
+     * Exact journal owners temporarily restored by the current maintenance window. The previousValue
+     * is captured with the key rather than re-read later after asynchronous work has had time to run.
+     * Deliberately not durable: maintenance process-death behavior is audited separately.
+     */
+    private List<DozeStateStore.AppliedKeySnapshot> maintenanceReapplySnapshots =
+            Collections.emptyList();
     boolean setPendingDozeEnterAlarm = false;
     boolean disableStats = false;
     boolean disableLogcat = false;
@@ -879,7 +935,7 @@ public class ForceDozeService extends Service {
                 + " suspendedPackages=" + dozeStateStore.getAppliedSuspendedPackages().size());
 
         // A maintenance window cannot survive the session ending.
-        maintenance = false;
+        invalidateMaintenanceContext();
         DiagnosticLogger.i("CALL", "restore_dispatched keys=" + dozeStateStore.getAppliedKeys());
 
         if (inDoze) {
@@ -5130,7 +5186,50 @@ public class ForceDozeService extends Service {
         DiagnosticLogger.e("STATE",
                 "journal_commit_failed key=" + key + " physicalChangeNotDispatched=true");
     }
+
+    /** Caller must hold physicalEntryLock. */
+    private List<DozeStateStore.AppliedKeySnapshot> captureMaintenanceReapplySnapshotsLocked() {
+        List<DozeStateStore.AppliedKeySnapshot> snapshots = new ArrayList<>();
+        for (String key : MAINTENANCE_RESTORE_KEYS) {
+            DozeStateStore.AppliedKeySnapshot snapshot =
+                    dozeStateStore.getAppliedKeySnapshot(key, defaultPreDozeValueFor(key));
+            if (snapshot != null) {
+                snapshots.add(snapshot);
+            }
+        }
+        return snapshots;
+    }
+
+    private static boolean maintenanceSnapshotValue(
+            List<DozeStateStore.AppliedKeySnapshot> snapshots,
+            String key, boolean liveValue) {
+        for (DozeStateStore.AppliedKeySnapshot snapshot : snapshots) {
+            if (key.equals(snapshot.key)) {
+                return snapshot.previousValue;
+            }
+        }
+        return liveValue;
+    }
+
+    /**
+     * Invalidates only maintenance-specific asynchronous ownership. Ordinary session-scoped work
+     * keeps its existing lifecycle semantics.
+     */
+    private void invalidateMaintenanceContext() {
+        synchronized (physicalEntryLock) {
+            maintenanceCycle++;
+            maintenance = false;
+            maintenanceReapplySnapshots = Collections.emptyList();
+        }
+    }
+
     public void actualEnterDozeHandleNetwork(Context context, String packageName) {
+        actualEnterDozeHandleNetwork(context, packageName, Collections.emptyList());
+    }
+
+    private void actualEnterDozeHandleNetwork(
+            Context context, String packageName,
+            List<DozeStateStore.AppliedKeySnapshot> maintenanceSnapshots) {
         log("playingPackageName: " + packageName);
         // Capture the CURRENT device state at the moment screen turns off
         // These represent user's preference while screen was on.
@@ -5143,6 +5242,28 @@ public class ForceDozeService extends Service {
         boolean wasGPSOn = Utils.isLocationEnabled(getContentResolver());
         boolean wasHotSpotTurnedOn = Utils.isHotspotEnabled(context);
         boolean wasBatterSaverOn = Utils.isBatterSaverEnabled(getContentResolver());
+
+        if (!maintenanceSnapshots.isEmpty()) {
+            // Deep idle can return before the asynchronous maintenance restore physically finishes.
+            // For a key this exact window selected, evaluate the ordinary policy predicate against
+            // the value that restore is putting back, not against a transient live sample that may
+            // still show the Doze target.
+            wasWiFiTurnedOn = maintenanceSnapshotValue(
+                    maintenanceSnapshots, DozeStateStore.KEY_WIFI, wasWiFiTurnedOn);
+            wasMobileDataTurnedOn = maintenanceSnapshotValue(
+                    maintenanceSnapshots, DozeStateStore.KEY_MOBILE_DATA, wasMobileDataTurnedOn);
+            wasAirplaneOn = maintenanceSnapshotValue(
+                    maintenanceSnapshots, DozeStateStore.KEY_AIRPLANE, wasAirplaneOn);
+            wasBluetoothOn = maintenanceSnapshotValue(
+                    maintenanceSnapshots, DozeStateStore.KEY_BLUETOOTH, wasBluetoothOn);
+            wasGPSOn = maintenanceSnapshotValue(
+                    maintenanceSnapshots, DozeStateStore.KEY_GPS, wasGPSOn);
+            wasBatterSaverOn = maintenanceSnapshotValue(
+                    maintenanceSnapshots, DozeStateStore.KEY_BATTERY_SAVER, wasBatterSaverOn);
+            DiagnosticLogger.i("STATE",
+                    "maintenance_reapply_expected_state count=" + maintenanceSnapshots.size());
+        }
+
         dozeStateStore.recordPreDozeValue(DozeStateStore.KEY_HOTSPOT, wasHotSpotTurnedOn);
 
         if (turnOffAllSensorsInDoze) {
@@ -5228,10 +5349,28 @@ public class ForceDozeService extends Service {
      * maintenance is a continuation, so no new ENTER row, no package generation and no new epoch.
      */
     public void enterDozeHandleNetwork(Context context) {
-        enterDozeHandleNetwork(context, ensureActiveSessionEpoch("network entry"));
+        enterDozeHandleNetwork(context, ensureActiveSessionEpoch("network entry"),
+                0L, Collections.emptyList());
+    }
+
+    private void enterDozeHandleNetwork(
+            Context context, long maintenanceCycleToken,
+            List<DozeStateStore.AppliedKeySnapshot> maintenanceSnapshots) {
+        enterDozeHandleNetwork(context, ensureActiveSessionEpoch("network entry"),
+                maintenanceCycleToken, maintenanceSnapshots);
     }
 
     private void enterDozeHandleNetwork(Context context, long sessionEpoch) {
+        enterDozeHandleNetwork(context, sessionEpoch, 0L, Collections.emptyList());
+    }
+
+    private void enterDozeHandleNetwork(
+            Context context, long sessionEpoch, long maintenanceCycleToken,
+            List<DozeStateStore.AppliedKeySnapshot> maintenanceSnapshots) {
+        final long entryToken;
+        synchronized (physicalEntryLock) {
+            entryToken = ++networkEntryToken;
+        }
         if (whitelistMusicAppNetwork) {
             try {
                 NotificationService notifService = NotificationService.Companion.getInstance();
@@ -5247,7 +5386,24 @@ public class ForceDozeService extends Service {
                                 logStaleAsyncWork("network");
                                 return null;
                             }
-                            actualEnterDozeHandleNetwork(context, packageName);
+                            if (entryToken != networkEntryToken) {
+                                DiagnosticLogger.i("DOZE",
+                                        "async_session_work_skipped reason=superseded type=network");
+                                return null;
+                            }
+                            if (maintenance) {
+                                DiagnosticLogger.i("DOZE",
+                                        "async_session_work_skipped reason=maintenance_active type=network");
+                                return null;
+                            }
+                            if (maintenanceCycleToken != 0L
+                                    && maintenanceCycleToken != maintenanceCycle) {
+                                DiagnosticLogger.i("DOZE",
+                                        "async_session_work_skipped reason=stale_maintenance type=network");
+                                return null;
+                            }
+                            actualEnterDozeHandleNetwork(
+                                    context, packageName, maintenanceSnapshots);
                         }
                         return null;
                     });
@@ -5267,7 +5423,23 @@ public class ForceDozeService extends Service {
                 logStaleAsyncWork("network");
                 return;
             }
-            actualEnterDozeHandleNetwork(context, null);
+            if (entryToken != networkEntryToken) {
+                DiagnosticLogger.i("DOZE",
+                        "async_session_work_skipped reason=superseded type=network");
+                return;
+            }
+            if (maintenance) {
+                DiagnosticLogger.i("DOZE",
+                        "async_session_work_skipped reason=maintenance_active type=network");
+                return;
+            }
+            if (maintenanceCycleToken != 0L
+                    && maintenanceCycleToken != maintenanceCycle) {
+                DiagnosticLogger.i("DOZE",
+                        "async_session_work_skipped reason=stale_maintenance type=network");
+                return;
+            }
+            actualEnterDozeHandleNetwork(context, null, maintenanceSnapshots);
         }
     }
 
@@ -5318,12 +5490,6 @@ public class ForceDozeService extends Service {
             wakeTiming("device_state_restore_started");
 
             for (final String key : pending) {
-                // One outstanding command per key. Without this, SCREEN_ON followed closely by
-                // USER_PRESENT would send two commands for the same radio.
-                if (!stateRestoreInFlight.add(key)) {
-                    log("RESTORE_PENDING " + key + " (already in flight)");
-                    continue;
-                }
                 // Captured before anything is dispatched, and carried through the whole operation.
                 // Reading the pre-Doze value later, at command time, let a newer markApplied() replace
                 // it first, so an older restore could put back a value that no longer belonged to it;
@@ -5334,12 +5500,25 @@ public class ForceDozeService extends Service {
                 if (snapshot == null) {
                     // Cleared before this pass took the monitor; nothing is owed. Retained as a
                     // defensive check - the listing and this read are now one critical section.
-                    stateRestoreInFlight.remove(key);
                     log("RESTORE_SKIPPED " + key + " (no longer applied)");
                     DiagnosticLogger.i("STATE", "RESTORE_SKIPPED " + key + " reason=no_longer_applied");
                     continue;
                 }
                 final long generation = snapshot.generation;
+
+                // Suppress only an exact duplicate of this journal generation. A newer generation
+                // for the same key is legitimate and must reach the per-toggle serializer even while
+                // an older physical restore is still running.
+                final StateRestoreToken restoreToken =
+                        new StateRestoreToken(key, generation);
+                if (!stateRestoreInFlight.add(restoreToken)) {
+                    log("RESTORE_PENDING " + key + " gen=" + generation
+                            + " (same generation already in flight)");
+                    DiagnosticLogger.i("STATE", "RESTORE_PENDING " + key
+                            + " gen=" + generation
+                            + " duplicate=true");
+                    continue;
+                }
                 Log.i(TAG, "RESTORE_PENDING " + key);
                 DiagnosticLogger.i("STATE", "RESTORE_PENDING " + key + " gen=" + generation);
                 try {
@@ -5348,7 +5527,7 @@ public class ForceDozeService extends Service {
                                     onRestoreFinished(key, generation, exitCode));
                     dispatched++;
                 } catch (Exception e) {
-                    stateRestoreInFlight.remove(key);
+                    stateRestoreInFlight.remove(restoreToken);
                     Log.e(TAG, "RESTORE_FAILED " + key + " error=" + e.getClass().getSimpleName());
                 }
             }
@@ -5414,7 +5593,7 @@ public class ForceDozeService extends Service {
                 DiagnosticLogger.e("STATE", "RESTORE_FAILED " + key + " exit=" + exitCode + " markerKept=true");
             }
         } finally {
-            stateRestoreInFlight.remove(key);
+            stateRestoreInFlight.remove(new StateRestoreToken(key, generation));
             wakeTiming("device_state_restore_finished:" + key);
         }
         // After the marker and the in-flight record have both settled, so the debt test below sees
@@ -5437,7 +5616,7 @@ public class ForceDozeService extends Service {
         DiagnosticLogger.i("DOZE", "owned_session_final_exit reason=" + reason);
         cancelPendingEnterDoze();
         releaseTempWakeLock();
-        maintenance = false;
+        invalidateMaintenanceContext();
         exitDoze(getDeviceIdleState());
     }
 
@@ -5456,7 +5635,7 @@ public class ForceDozeService extends Service {
 
         cancelPendingEnterDoze();
         releaseTempWakeLock();
-        maintenance = false;
+        invalidateMaintenanceContext();
 
         // Durable flag first: the package generation clear and the KEY_ALL_SENSORS/KEY_BIOMETRICS
         // marker clears all refuse to release ownership while inDoze is true. Ownership and the
@@ -6404,8 +6583,8 @@ public class ForceDozeService extends Service {
         // physical debt left a crash window in which the only durable record of the session was
         // gone and no unforce was owed - the device stayed forced with every flag clear. exitDoze()
         // now owns the whole durable transition in one commit.
-        // A maintenance window cannot outlive the screen turning on
-        maintenance = false;
+        // A maintenance window cannot outlive the screen turning on.
+        invalidateMaintenanceContext();
         // Always drop a delayed enterDoze: it used to be cancelled only when the device was found
         // ACTIVE, so turning the screen on during the delay could still let Doze fire afterwards.
         cancelPendingEnterDoze();
@@ -6645,8 +6824,22 @@ public class ForceDozeService extends Service {
                                 saveDozeDataStats();
                             }
 
-                            restoreDeviceStates(context, "Doze maintenance window", MAINTENANCE_RESTORE_KEYS);
-                            maintenance = true;
+                            synchronized (physicalEntryLock) {
+                                maintenanceCycle++;
+                                maintenance = true;
+                                maintenanceReapplySnapshots =
+                                        captureMaintenanceReapplySnapshotsLocked();
+                                DiagnosticLogger.i("STATE",
+                                        "maintenance_restore_snapshot cycle=" + maintenanceCycle
+                                                + " count="
+                                                + maintenanceReapplySnapshots.size());
+
+                                // restoreDeviceStates() re-enters this monitor intentionally. Keeping
+                                // snapshot selection and restore dispatch in the same barrier means
+                                // both describe the same journal ownership.
+                                restoreDeviceStates(context, "Doze maintenance window",
+                                        MAINTENANCE_RESTORE_KEYS);
+                            }
                         }
                     } else if (lastKnownState.equals("IDLE")) {
                         if (maintenance) {
@@ -6656,8 +6849,21 @@ public class ForceDozeService extends Service {
                                 dozeUsageData.add(Long.toString(System.currentTimeMillis()).concat(",").concat(Float.toString(Utils.getBatteryLevel(getApplicationContext()))).concat(",").concat("ENTER_MAINTENANCE"));
                                 saveDozeDataStats();
                             }
-                            enterDozeHandleNetwork(context);
-                            maintenance = false;
+                            final long reapplyCycle;
+                            final List<DozeStateStore.AppliedKeySnapshot> reapplySnapshots;
+                            synchronized (physicalEntryLock) {
+                                reapplyCycle = maintenanceCycle;
+                                reapplySnapshots = maintenanceReapplySnapshots;
+                                maintenanceReapplySnapshots = Collections.emptyList();
+
+                                // Close the maintenance window and invalidate older network callbacks
+                                // atomically. Without this bump, an old music-package callback could
+                                // acquire the lock after maintenance became false but before the
+                                // maintenance re-entry allocated its own newer networkEntryToken.
+                                networkEntryToken++;
+                                maintenance = false;
+                            }
+                            enterDozeHandleNetwork(context, reapplyCycle, reapplySnapshots);
                         }
                     }
                 }
