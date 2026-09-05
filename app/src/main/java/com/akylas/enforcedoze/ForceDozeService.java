@@ -183,6 +183,26 @@ public class ForceDozeService extends Service {
      * lifecycle handling invalidates it, so an asynchronous callback from an older window cannot act.
      */
     private long maintenanceCycle = 0L;
+
+    /**
+     * In-process single-flight for a durable maintenance transaction being resumed after process
+     * recreation. The durable store remains authoritative; these fields only stop two recovery
+     * triggers in this process from dispatching the same generation concurrently.
+     *
+     * Guarded by physicalEntryLock.
+     */
+    private long recoveredMaintenanceReapplyGeneration = 0L;
+    private int recoveredMaintenanceReapplyOutstanding = 0;
+    private boolean recoveredMaintenanceReapplySchedulingComplete = false;
+
+    /**
+     * Non-zero only while this process is waiting for the physical end of a maintenance window that
+     * was reconstructed from durable state after process recreation. Guarded by physicalEntryLock.
+     * It is consumed when that window returns to deep IDLE and cleared by every lifecycle
+     * invalidation.
+     */
+    private long recoveredMaintenanceWindowGeneration = 0L;
+
     /**
      * Exact journal owners temporarily restored by the current maintenance window. The previousValue
      * is captured with the key rather than re-read later after asynchronous work has had time to run.
@@ -675,6 +695,20 @@ public class ForceDozeService extends Service {
      * are only re-disabled when a new Doze cycle begins, so restoring them here would leave them on
      * for the rest of the night.
      */
+    /**
+     * Generic state whose temporary maintenance restore must be durably re-applied before the
+     * maintenance transaction can settle. All Sensors is deliberately excluded: it already keeps its
+     * ordinary applied marker while inDoze and follows its existing lifecycle recovery.
+     */
+    private static final Set<String> MAINTENANCE_GENERIC_REAPPLY_KEYS =
+            new HashSet<>(Arrays.asList(
+                    DozeStateStore.KEY_AIRPLANE,
+                    DozeStateStore.KEY_BLUETOOTH,
+                    DozeStateStore.KEY_GPS,
+                    DozeStateStore.KEY_WIFI,
+                    DozeStateStore.KEY_MOBILE_DATA,
+                    DozeStateStore.KEY_BATTERY_SAVER));
+
     private static final Set<String> MAINTENANCE_RESTORE_KEYS = new HashSet<>(Arrays.asList(
             DozeStateStore.KEY_AIRPLANE, DozeStateStore.KEY_BLUETOOTH, DozeStateStore.KEY_GPS,
             DozeStateStore.KEY_WIFI, DozeStateStore.KEY_MOBILE_DATA,
@@ -1260,6 +1294,10 @@ public class ForceDozeService extends Service {
         // neither duplicates a cleanup nor issues an unforce beside a force whose callback owns the
         // classification. Nothing is waited on, the marker is never cleared optimistically, and the
         // continuation is suppressed because serviceStopping is already set.
+        // Service teardown invalidates all maintenance-specific in-process ownership, including a
+        // recovered window waiting for Android to return to deep IDLE.
+        invalidateMaintenanceContext();
+
         if (!settledDisabledRecoveryStop) {
             if (dozeStateStore.isOwnedReforcePending()) {
                 maybeResolveOwnedReforceDebt("service destroyed");
@@ -4089,6 +4127,53 @@ public class ForceDozeService extends Service {
                 + "' 0<>" + lockPath + ")";
     }
 
+    /**
+     * Serializes one generic state mutation across root-shell process lifetimes.
+     *
+     * Shizuku commands deliberately bypass this wrapper: its remote child is tied to the caller
+     * process, while libsuperuser's Runtime.exec-backed root shell is not guaranteed to disappear
+     * before an already-running child command lands.
+     *
+     * The state key is explicit rather than inferred from command text, so later shell formatting
+     * changes cannot silently bypass the ordering contract.
+     */
+    private static String wrapRootGenericStateCommand(String command, String stateKey) {
+        if (stateKey == null) {
+            return command;
+        }
+
+        final String lockSuffix;
+        switch (stateKey) {
+            case DozeStateStore.KEY_MOBILE_DATA:
+                lockSuffix = "mobile-data";
+                break;
+            case DozeStateStore.KEY_WIFI:
+                lockSuffix = "wifi";
+                break;
+            case DozeStateStore.KEY_BATTERY_SAVER:
+                lockSuffix = "battery-saver";
+                break;
+            case DozeStateStore.KEY_AIRPLANE:
+                lockSuffix = "airplane";
+                break;
+            case DozeStateStore.KEY_BLUETOOTH:
+                lockSuffix = "bluetooth";
+                break;
+            case DozeStateStore.KEY_GPS:
+                lockSuffix = "gps";
+                break;
+            default:
+                throw new IllegalArgumentException(
+                        "Unsupported root generic-state lock key: " + stateKey);
+        }
+
+        String lockPath = "/data/local/tmp/" + BuildConfig.APPLICATION_ID
+                + "-state-" + lockSuffix + ".lock";
+        return "(umask 000; : >>" + lockPath
+                + "; sh -c 'toybox flock 0 || exit 91; " + command
+                + "' 0<>" + lockPath + ")";
+    }
+
     public void executeCommandWithRoot(final String command) {
         executeCommandWithRoot(command, null);
     }
@@ -4098,6 +4183,14 @@ public class ForceDozeService extends Service {
     }
 
     public void executeCommandWithRoot(final String command, Shell.OnCommandResultListener2 onResult, boolean printOutput) {
+        executeCommandWithRoot(command, onResult, printOutput, null);
+    }
+
+    private void executeCommandWithRoot(
+            final String command,
+            Shell.OnCommandResultListener2 onResult,
+            boolean printOutput,
+            String rootStateLockKey) {
         String backendCommand = wrapPhysicalDeviceIdleCommand(command);
         boolean useShizuku = Utils.isShizukuMode(getApplicationContext());
 
@@ -4117,9 +4210,12 @@ public class ForceDozeService extends Service {
             return;
         }
 
+        final String rootBackendCommand =
+                wrapRootGenericStateCommand(backendCommand, rootStateLockKey);
+
         rootShellExecutor.execute(() -> {
             if (rootSession != null && rootSession.isRunning()) {
-                rootSession.addCommand(backendCommand, 0, (Shell.OnCommandResultListener2)
+                rootSession.addCommand(rootBackendCommand, 0, (Shell.OnCommandResultListener2)
                         (commandCode, exitCode, STDOUT, STDERR) -> {
                             if (onResult != null) {
                                 onResult.onCommandResult(commandCode, exitCode, STDOUT, STDERR);
@@ -4164,7 +4260,7 @@ public class ForceDozeService extends Service {
                             }
 
                             if (openedSession != null) {
-                                openedSession.addCommand(backendCommand, 0,
+                                openedSession.addCommand(rootBackendCommand, 0,
                                         (Shell.OnCommandResultListener2)
                                                 (commandCode, exitCode, STDOUT, STDERR) -> {
                                                     if (onResult != null) {
@@ -4985,7 +5081,11 @@ public class ForceDozeService extends Service {
     }
 
     private void applyMobileDataStateRaw(boolean enabled, Shell.OnCommandResultListener2 done) {
-        executeCommandWithRoot("svc data " + (enabled ? "enable" : "disable"), done, false);
+        executeCommandWithRoot(
+                "svc data " + (enabled ? "enable" : "disable"),
+                done,
+                false,
+                DozeStateStore.KEY_MOBILE_DATA);
     }
 
 
@@ -5004,7 +5104,11 @@ public class ForceDozeService extends Service {
 
     private void applyWiFiStateRaw(boolean enabled, Shell.OnCommandResultListener2 done) {
         if (isSuAvailable || isShizukuAvailable) {
-            executeCommandWithRoot("svc wifi " + (enabled ? "enable" : "disable"), done, false);
+            executeCommandWithRoot(
+                    "svc wifi " + (enabled ? "enable" : "disable"),
+                    done,
+                    false,
+                    DozeStateStore.KEY_WIFI);
             return;
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
@@ -5076,7 +5180,11 @@ public class ForceDozeService extends Service {
             notifyCommandFinished(done, -1);
             return;
         }
-        executeCommandWithRoot("settings put global low_power " + (enabled ? 1 : 0), done, false);
+        executeCommandWithRoot(
+                "settings put global low_power " + (enabled ? 1 : 0),
+                done,
+                false,
+                DozeStateStore.KEY_BATTERY_SAVER);
     }
 
     public void setAirplaneState(Context context, boolean enabled) {
@@ -5101,7 +5209,11 @@ public class ForceDozeService extends Service {
         String command = "settings put global airplane_mode_on " + (enabled ? 1 : 0)
                 + " && am broadcast -a android.intent.action.AIRPLANE_MODE --ez state "
                 + (enabled ? "true" : "false");
-        executeCommandWithRoot(command, done, false);
+        executeCommandWithRoot(
+                command,
+                done,
+                false,
+                DozeStateStore.KEY_AIRPLANE);
     }
 
     public void setBluetoothState(Context context, boolean enabled) {
@@ -5117,7 +5229,11 @@ public class ForceDozeService extends Service {
             notifyCommandFinished(done, -1);
             return;
         }
-        executeCommandWithRoot("svc bluetooth " + (enabled ? "enable" : "disable"), done, false);
+        executeCommandWithRoot(
+                "svc bluetooth " + (enabled ? "enable" : "disable"),
+                done,
+                false,
+                DozeStateStore.KEY_BLUETOOTH);
     }
 
     public void setGPSState(Context context, boolean enabled) {
@@ -5134,7 +5250,11 @@ public class ForceDozeService extends Service {
             return;
         }
         int locationMode = enabled ? Settings.Secure.LOCATION_MODE_HIGH_ACCURACY : Settings.Secure.LOCATION_MODE_OFF;
-        executeCommandWithRoot("settings put secure location_mode " + locationMode, done, false);
+        executeCommandWithRoot(
+                "settings put secure location_mode " + locationMode,
+                done,
+                false,
+                DozeStateStore.KEY_GPS);
     }
 
     /** Completes a callback for a path that never reached the shell. */
@@ -5188,6 +5308,182 @@ public class ForceDozeService extends Service {
     }
 
     /** Caller must hold physicalEntryLock. */
+    private boolean beginRecoveredMaintenanceReapplyLocked(long maintenanceGeneration) {
+        if (maintenanceGeneration == 0L) {
+            return false;
+        }
+
+        // True single-flight across generations. Replacing an active G1 claim with G2 would make
+        // callbacks already registered for G1 unable to release their outstanding accounting.
+        if (recoveredMaintenanceReapplyGeneration != 0L) {
+            return false;
+        }
+
+        recoveredMaintenanceReapplyGeneration = maintenanceGeneration;
+        recoveredMaintenanceReapplyOutstanding = 0;
+        recoveredMaintenanceReapplySchedulingComplete = false;
+        return true;
+    }
+
+    private boolean registerRecoveredMaintenanceOperation(long maintenanceGeneration) {
+        synchronized (physicalEntryLock) {
+            if (maintenanceGeneration == 0L
+                    || recoveredMaintenanceReapplyGeneration != maintenanceGeneration) {
+                return false;
+            }
+
+            recoveredMaintenanceReapplyOutstanding++;
+            return true;
+        }
+    }
+
+    private void finishRecoveredMaintenanceScheduling(long maintenanceGeneration) {
+        synchronized (physicalEntryLock) {
+            if (maintenanceGeneration == 0L
+                    || recoveredMaintenanceReapplyGeneration != maintenanceGeneration) {
+                return;
+            }
+
+            recoveredMaintenanceReapplySchedulingComplete = true;
+            maybeReleaseRecoveredMaintenanceReapplyLocked(maintenanceGeneration);
+        }
+    }
+
+    private void finishRecoveredMaintenanceOperation(long maintenanceGeneration) {
+        synchronized (physicalEntryLock) {
+            if (maintenanceGeneration == 0L
+                    || recoveredMaintenanceReapplyGeneration != maintenanceGeneration) {
+                return;
+            }
+
+            if (recoveredMaintenanceReapplyOutstanding <= 0) {
+                Log.e(TAG,
+                        "Recovered maintenance operation completed with no outstanding registration"
+                                + " maintenanceGen=" + maintenanceGeneration);
+                return;
+            }
+
+            recoveredMaintenanceReapplyOutstanding--;
+            maybeReleaseRecoveredMaintenanceReapplyLocked(maintenanceGeneration);
+        }
+    }
+
+    private void abandonRecoveredMaintenanceReapply(
+            long maintenanceGeneration, String reason) {
+        synchronized (physicalEntryLock) {
+            if (maintenanceGeneration == 0L
+                    || recoveredMaintenanceReapplyGeneration != maintenanceGeneration) {
+                return;
+            }
+
+            if (recoveredMaintenanceReapplyOutstanding != 0) {
+                DiagnosticLogger.i("RECOVERY",
+                        "maintenance_recovery_abandon_deferred maintenanceGen="
+                                + maintenanceGeneration
+                                + " outstanding="
+                                + recoveredMaintenanceReapplyOutstanding
+                                + " reason=" + reason);
+                recoveredMaintenanceReapplySchedulingComplete = true;
+                return;
+            }
+
+            DiagnosticLogger.i("RECOVERY",
+                    "maintenance_recovery_abandoned maintenanceGen="
+                            + maintenanceGeneration
+                            + " reason=" + reason);
+            clearRecoveredMaintenanceReapplyLocked();
+        }
+    }
+
+    /** Caller must hold physicalEntryLock. */
+    private void maybeReleaseRecoveredMaintenanceReapplyLocked(long maintenanceGeneration) {
+        if (maintenanceGeneration == 0L
+                || recoveredMaintenanceReapplyGeneration != maintenanceGeneration
+                || !recoveredMaintenanceReapplySchedulingComplete
+                || recoveredMaintenanceReapplyOutstanding != 0) {
+            return;
+        }
+
+        DiagnosticLogger.i("RECOVERY",
+                "maintenance_recovery_singleflight_released maintenanceGen="
+                        + maintenanceGeneration);
+        clearRecoveredMaintenanceReapplyLocked();
+    }
+
+    /** Caller must hold physicalEntryLock. */
+    private void clearRecoveredMaintenanceReapplyLocked() {
+        recoveredMaintenanceReapplyGeneration = 0L;
+        recoveredMaintenanceReapplyOutstanding = 0;
+        recoveredMaintenanceReapplySchedulingComplete = false;
+    }
+
+    private static final class RecoveredMaintenanceDebtView {
+        final Set<String> durableKeys;
+        final List<DozeStateStore.AppliedKeySnapshot> recoverableSnapshots;
+        final Set<String> unrecoverableKeys;
+
+        RecoveredMaintenanceDebtView(
+                Set<String> durableKeys,
+                List<DozeStateStore.AppliedKeySnapshot> recoverableSnapshots,
+                Set<String> unrecoverableKeys) {
+            this.durableKeys = Collections.unmodifiableSet(
+                    new LinkedHashSet<>(durableKeys));
+            this.recoverableSnapshots = Collections.unmodifiableList(
+                    new ArrayList<>(recoverableSnapshots));
+            this.unrecoverableKeys = Collections.unmodifiableSet(
+                    new LinkedHashSet<>(unrecoverableKeys));
+        }
+    }
+
+    /**
+     * Reconstructs only maintenance debt whose ordinary applied owner still exists. A durable
+     * maintenance key without that owner is deliberately not inferred from current physical state:
+     * recovery no longer has proof of the value/generation it owns, so the durable debt is retained
+     * for a later explicit recovery path rather than guessed.
+     *
+     * Caller must hold physicalEntryLock.
+     */
+    private RecoveredMaintenanceDebtView reconstructRecoveredMaintenanceDebtLocked(
+            DozeStateStore.MaintenanceReapplySnapshot durableMaintenance) {
+        List<DozeStateStore.AppliedKeySnapshot> recoverableSnapshots =
+                new ArrayList<>();
+        Set<String> unrecoverableKeys = new LinkedHashSet<>();
+
+        for (String key : durableMaintenance.keys) {
+            if (!MAINTENANCE_GENERIC_REAPPLY_KEYS.contains(key)) {
+                unrecoverableKeys.add(key);
+                DiagnosticLogger.e("RECOVERY",
+                        "maintenance_recovery_debt_unrecoverable key=" + key
+                                + " maintenanceGen=" + durableMaintenance.generation
+                                + " reason=unsupported_durable_key"
+                                + " debtKept=true");
+                continue;
+            }
+
+            DozeStateStore.AppliedKeySnapshot snapshot =
+                    dozeStateStore.getAppliedKeySnapshot(
+                            key, defaultPreDozeValueFor(key));
+
+            if (snapshot == null) {
+                unrecoverableKeys.add(key);
+                DiagnosticLogger.e("RECOVERY",
+                        "maintenance_recovery_debt_unrecoverable key=" + key
+                                + " maintenanceGen=" + durableMaintenance.generation
+                                + " reason=missing_applied_owner"
+                                + " debtKept=true");
+                continue;
+            }
+
+            recoverableSnapshots.add(snapshot);
+        }
+
+        return new RecoveredMaintenanceDebtView(
+                durableMaintenance.keys,
+                recoverableSnapshots,
+                unrecoverableKeys);
+    }
+
+    /** Caller must hold physicalEntryLock. */
     private List<DozeStateStore.AppliedKeySnapshot> captureMaintenanceReapplySnapshotsLocked() {
         List<DozeStateStore.AppliedKeySnapshot> snapshots = new ArrayList<>();
         for (String key : MAINTENANCE_RESTORE_KEYS) {
@@ -5198,6 +5494,17 @@ public class ForceDozeService extends Service {
             }
         }
         return snapshots;
+    }
+
+    private static Set<String> maintenanceGenericKeysFromSnapshots(
+            List<DozeStateStore.AppliedKeySnapshot> snapshots) {
+        Set<String> keys = new LinkedHashSet<>();
+        for (DozeStateStore.AppliedKeySnapshot snapshot : snapshots) {
+            if (MAINTENANCE_GENERIC_REAPPLY_KEYS.contains(snapshot.key)) {
+                keys.add(snapshot.key);
+            }
+        }
+        return keys;
     }
 
     private static boolean maintenanceSnapshotValue(
@@ -5211,6 +5518,225 @@ public class ForceDozeService extends Service {
         return liveValue;
     }
 
+    private static DozeStateStore.AppliedKeySnapshot maintenanceSnapshotForKey(
+            List<DozeStateStore.AppliedKeySnapshot> snapshots, String key) {
+        for (DozeStateStore.AppliedKeySnapshot snapshot : snapshots) {
+            if (key.equals(snapshot.key)) {
+                return snapshot;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Live maintenance may continue evaluating all current policy predicates. Process-death recovery
+     * is narrower: once it has claimed a durable generation, only keys whose exact ordinary owner was
+     * reconstructed may be touched. Missing owners are durable debt, not permission to infer state.
+     */
+    private boolean shouldEvaluateRecoveredMaintenanceKey(
+            long maintenanceGeneration,
+            List<DozeStateStore.AppliedKeySnapshot> maintenanceSnapshots,
+            String key) {
+        if (maintenanceGeneration == 0L) {
+            return true;
+        }
+
+        synchronized (physicalEntryLock) {
+            if (recoveredMaintenanceReapplyGeneration != maintenanceGeneration) {
+                return true;
+            }
+
+            if (maintenanceSnapshotForKey(maintenanceSnapshots, key) != null) {
+                return true;
+            }
+
+            DiagnosticLogger.i("RECOVERY",
+                    "maintenance_recovery_key_not_scheduled key=" + key
+                            + " maintenanceGen=" + maintenanceGeneration
+                            + " reason=no_recoverable_snapshot");
+            return false;
+        }
+    }
+
+    /**
+     * Sends one of the six generic state operations through its existing per-key serializer.
+     * Unsupported keys are programming errors: generic maintenance debt must never silently escape
+     * the serialization and root-lock contract.
+     */
+    private void requestGenericState(
+            Context context,
+            String key,
+            boolean enabled,
+            Shell.OnCommandResultListener2 done) {
+        switch (key) {
+            case DozeStateStore.KEY_MOBILE_DATA:
+                setMobileDataState(enabled, done);
+                return;
+            case DozeStateStore.KEY_WIFI:
+                setWiFiState(enabled, done);
+                return;
+            case DozeStateStore.KEY_BATTERY_SAVER:
+                setBatterSaverState(context, enabled, done);
+                return;
+            case DozeStateStore.KEY_AIRPLANE:
+                setAirplaneState(context, enabled, done);
+                return;
+            case DozeStateStore.KEY_BLUETOOTH:
+                setBluetoothState(context, enabled, done);
+                return;
+            case DozeStateStore.KEY_GPS:
+                setGPSState(context, enabled, done);
+                return;
+            default:
+                throw new IllegalArgumentException(
+                        "Unsupported generic maintenance key: " + key);
+        }
+    }
+
+    /**
+     * Settles only the durable maintenance obligation. The ordinary applied marker deliberately
+     * remains because the restriction is active again and must still be restored when Doze ends.
+     */
+    private Shell.OnCommandResultListener2 maintenanceReapplyCompletion(
+            String key, long maintenanceGeneration) {
+        return maintenanceReapplyCompletion(key, maintenanceGeneration, false);
+    }
+
+    private Shell.OnCommandResultListener2 maintenanceReapplyCompletion(
+            String key,
+            long maintenanceGeneration,
+            boolean recoveredOperation) {
+        return (commandCode, exitCode, stdout, stderr) -> {
+            try {
+                if (exitCode != 0) {
+                    Log.e(TAG, "MAINTENANCE_REAPPLY_FAILED " + key
+                            + " exit=" + exitCode
+                            + " maintenanceGen=" + maintenanceGeneration);
+                    DiagnosticLogger.e("STATE",
+                            "maintenance_reapply_failed key=" + key
+                                    + " exit=" + exitCode
+                                    + " maintenanceGen=" + maintenanceGeneration
+                                    + " debtKept=true");
+                    return;
+                }
+
+                if (dozeStateStore.clearMaintenanceReapplyKeyIfGeneration(
+                        key, maintenanceGeneration)) {
+                    Log.i(TAG, "MAINTENANCE_REAPPLY_SETTLED " + key
+                            + " maintenanceGen=" + maintenanceGeneration);
+                    DiagnosticLogger.i("STATE",
+                            "maintenance_reapply_settled key=" + key
+                                    + " maintenanceGen=" + maintenanceGeneration);
+                } else {
+                    DiagnosticLogger.i("STATE",
+                            "maintenance_reapply_settlement_skipped key=" + key
+                                    + " maintenanceGen=" + maintenanceGeneration
+                                    + " ownershipChanged=true");
+                }
+            } finally {
+                if (recoveredOperation) {
+                    finishRecoveredMaintenanceOperation(maintenanceGeneration);
+                }
+            }
+        };
+    }
+    /**
+     * Dispatches a maintenance reapply and, if this generation was claimed by process-death
+     * recovery, accounts for exactly one physical operation. Live maintenance re-entry has no
+     * recovered claim, so registration returns false and its behavior is unchanged.
+     */
+    private void dispatchMaintenanceReapplyState(
+            Context context,
+            String key,
+            boolean enabled,
+            long maintenanceGeneration) {
+        boolean recoveredOperation =
+                registerRecoveredMaintenanceOperation(maintenanceGeneration);
+        try {
+            requestGenericState(
+                    context,
+                    key,
+                    enabled,
+                    maintenanceReapplyCompletion(
+                            key, maintenanceGeneration, recoveredOperation));
+        } catch (RuntimeException e) {
+            if (recoveredOperation) {
+                finishRecoveredMaintenanceOperation(maintenanceGeneration);
+            }
+            throw e;
+        }
+    }
+    /**
+     * Policy no longer wants this restriction. Re-submit the restored user value through the same
+     * per-key serializer so its success proves every older temporary-restore operation has settled
+     * physically. Only then retire both durable owners in one store commit.
+     */
+    private void confirmAndRetireMaintenancePolicy(
+            Context context,
+            DozeStateStore.AppliedKeySnapshot snapshot,
+            long maintenanceGeneration) {
+        boolean recoveredOperation =
+                registerRecoveredMaintenanceOperation(maintenanceGeneration);
+        confirmAndRetireMaintenancePolicy(
+                context, snapshot, maintenanceGeneration, recoveredOperation);
+    }
+
+    private void confirmAndRetireMaintenancePolicy(
+            Context context,
+            DozeStateStore.AppliedKeySnapshot snapshot,
+            long maintenanceGeneration,
+            boolean recoveredOperation) {
+        try {
+            requestGenericState(
+                    context,
+                    snapshot.key,
+                    snapshot.previousValue,
+                    (commandCode, exitCode, stdout, stderr) -> {
+                        try {
+                            if (exitCode != 0) {
+                                Log.e(TAG, "MAINTENANCE_POLICY_CONFIRM_FAILED " + snapshot.key
+                                        + " exit=" + exitCode
+                                        + " maintenanceGen=" + maintenanceGeneration);
+                                DiagnosticLogger.e("STATE",
+                                        "maintenance_policy_confirm_failed key=" + snapshot.key
+                                                + " exit=" + exitCode
+                                                + " maintenanceGen=" + maintenanceGeneration
+                                                + " debtKept=true");
+                                return;
+                            }
+
+                            if (dozeStateStore.retireMaintenanceReapplyKeyIfGenerations(
+                                    snapshot.key,
+                                    maintenanceGeneration,
+                                    snapshot.generation)) {
+                                Log.i(TAG, "MAINTENANCE_POLICY_RETIRED " + snapshot.key
+                                        + " maintenanceGen=" + maintenanceGeneration
+                                        + " appliedGen=" + snapshot.generation);
+                                DiagnosticLogger.i("STATE",
+                                        "maintenance_policy_retired key=" + snapshot.key
+                                                + " maintenanceGen=" + maintenanceGeneration
+                                                + " appliedGen=" + snapshot.generation);
+                            } else {
+                                DiagnosticLogger.i("STATE",
+                                        "maintenance_policy_retirement_skipped key=" + snapshot.key
+                                                + " maintenanceGen=" + maintenanceGeneration
+                                                + " appliedGen=" + snapshot.generation
+                                                + " ownershipChanged=true");
+                            }
+                        } finally {
+                            if (recoveredOperation) {
+                                finishRecoveredMaintenanceOperation(
+                                        maintenanceGeneration);
+                            }
+                        }
+                    });
+        } catch (RuntimeException e) {
+            if (recoveredOperation) {
+                finishRecoveredMaintenanceOperation(maintenanceGeneration);
+            }
+            throw e;
+        }
+    }
     /**
      * Invalidates only maintenance-specific asynchronous ownership. Ordinary session-scoped work
      * keeps its existing lifecycle semantics.
@@ -5219,16 +5745,17 @@ public class ForceDozeService extends Service {
         synchronized (physicalEntryLock) {
             maintenanceCycle++;
             maintenance = false;
+            recoveredMaintenanceWindowGeneration = 0L;
             maintenanceReapplySnapshots = Collections.emptyList();
         }
     }
 
     public void actualEnterDozeHandleNetwork(Context context, String packageName) {
-        actualEnterDozeHandleNetwork(context, packageName, Collections.emptyList());
+        actualEnterDozeHandleNetwork(context, packageName, 0L, Collections.emptyList());
     }
 
     private void actualEnterDozeHandleNetwork(
-            Context context, String packageName,
+            Context context, String packageName, long maintenanceGeneration,
             List<DozeStateStore.AppliedKeySnapshot> maintenanceSnapshots) {
         log("playingPackageName: " + packageName);
         // Capture the CURRENT device state at the moment screen turns off
@@ -5288,57 +5815,209 @@ public class ForceDozeService extends Service {
                 logJournalDispatchFailure(DozeStateStore.KEY_BIOMETRICS);
             }
         }
-        if (turnOnBatterySaverInDoze && !wasBatterSaverOn) {
+        boolean applyBatterySaver =
+                shouldEvaluateRecoveredMaintenanceKey(
+                        maintenanceGeneration,
+                        maintenanceSnapshots,
+                        DozeStateStore.KEY_BATTERY_SAVER)
+                        && turnOnBatterySaverInDoze
+                        && !wasBatterSaverOn;
+        if (applyBatterySaver) {
             log("Enabling Battery Saver");
             if (dozeStateStore.markApplied(DozeStateStore.KEY_BATTERY_SAVER, false)) {
-                setBatterSaverState(context, true);
+                if (maintenanceGeneration == 0L) {
+                    setBatterSaverState(context, true, null);
+                } else {
+                    dispatchMaintenanceReapplyState(
+                            context,
+                            DozeStateStore.KEY_BATTERY_SAVER,
+                            true,
+                            maintenanceGeneration);
+                }
             } else {
                 logJournalDispatchFailure(DozeStateStore.KEY_BATTERY_SAVER);
             }
+        } else if (maintenanceGeneration != 0L) {
+            DozeStateStore.AppliedKeySnapshot snapshot =
+                    maintenanceSnapshotForKey(
+                            maintenanceSnapshots,
+                            DozeStateStore.KEY_BATTERY_SAVER);
+            if (snapshot != null) {
+                confirmAndRetireMaintenancePolicy(
+                        context, snapshot, maintenanceGeneration);
+            }
         }
 
-        if (turnOnAirplaneInDoze && (ignoreIfHotspot || !wasHotSpotTurnedOn) && !wasAirplaneOn && packageName == null) {
+        boolean applyAirplane =
+                shouldEvaluateRecoveredMaintenanceKey(
+                        maintenanceGeneration,
+                        maintenanceSnapshots,
+                        DozeStateStore.KEY_AIRPLANE)
+                        && turnOnAirplaneInDoze
+                        && (ignoreIfHotspot || !wasHotSpotTurnedOn)
+                        && !wasAirplaneOn
+                        && packageName == null;
+        if (applyAirplane) {
             log("Enabling airplane");
             if (dozeStateStore.markApplied(DozeStateStore.KEY_AIRPLANE, false)) {
-                setAirplaneState(context, true);
+                if (maintenanceGeneration == 0L) {
+                    setAirplaneState(context, true, null);
+                } else {
+                    dispatchMaintenanceReapplyState(
+                            context,
+                            DozeStateStore.KEY_AIRPLANE,
+                            true,
+                            maintenanceGeneration);
+                }
             } else {
                 logJournalDispatchFailure(DozeStateStore.KEY_AIRPLANE);
             }
+        } else if (maintenanceGeneration != 0L) {
+            DozeStateStore.AppliedKeySnapshot snapshot =
+                    maintenanceSnapshotForKey(
+                            maintenanceSnapshots,
+                            DozeStateStore.KEY_AIRPLANE);
+            if (snapshot != null) {
+                confirmAndRetireMaintenancePolicy(
+                        context, snapshot, maintenanceGeneration);
+            }
         }
 
-        if (turnOffBluetoothInDoze && wasBluetoothOn && packageName == null) {
+        boolean applyBluetooth =
+                shouldEvaluateRecoveredMaintenanceKey(
+                        maintenanceGeneration,
+                        maintenanceSnapshots,
+                        DozeStateStore.KEY_BLUETOOTH)
+                        && turnOffBluetoothInDoze
+                        && wasBluetoothOn
+                        && packageName == null;
+        if (applyBluetooth) {
             log("Disabling Bluetooth");
             if (dozeStateStore.markApplied(DozeStateStore.KEY_BLUETOOTH, true)) {
-                setBluetoothState(context, false);
+                if (maintenanceGeneration == 0L) {
+                    setBluetoothState(context, false, null);
+                } else {
+                    dispatchMaintenanceReapplyState(
+                            context,
+                            DozeStateStore.KEY_BLUETOOTH,
+                            false,
+                            maintenanceGeneration);
+                }
             } else {
                 logJournalDispatchFailure(DozeStateStore.KEY_BLUETOOTH);
             }
+        } else if (maintenanceGeneration != 0L) {
+            DozeStateStore.AppliedKeySnapshot snapshot =
+                    maintenanceSnapshotForKey(
+                            maintenanceSnapshots,
+                            DozeStateStore.KEY_BLUETOOTH);
+            if (snapshot != null) {
+                confirmAndRetireMaintenancePolicy(
+                        context, snapshot, maintenanceGeneration);
+            }
         }
 
-        if (turnOffGPSInDoze && wasGPSOn && packageName == null) {
+        boolean applyGps =
+                shouldEvaluateRecoveredMaintenanceKey(
+                        maintenanceGeneration,
+                        maintenanceSnapshots,
+                        DozeStateStore.KEY_GPS)
+                        && turnOffGPSInDoze
+                        && wasGPSOn
+                        && packageName == null;
+        if (applyGps) {
             log("Disabling GPS/Location");
             if (dozeStateStore.markApplied(DozeStateStore.KEY_GPS, true)) {
-                setGPSState(context, false);
+                if (maintenanceGeneration == 0L) {
+                    setGPSState(context, false, null);
+                } else {
+                    dispatchMaintenanceReapplyState(
+                            context,
+                            DozeStateStore.KEY_GPS,
+                            false,
+                            maintenanceGeneration);
+                }
             } else {
                 logJournalDispatchFailure(DozeStateStore.KEY_GPS);
             }
-        }
-
-        if (turnOffWiFiInDoze && (ignoreIfHotspot || !wasHotSpotTurnedOn) && wasWiFiTurnedOn && packageName == null) {
-            log("Disabling WiFi");
-            if (dozeStateStore.markApplied(DozeStateStore.KEY_WIFI, true)) {
-                disableWiFi();
-            } else {
-                logJournalDispatchFailure(DozeStateStore.KEY_WIFI);
+        } else if (maintenanceGeneration != 0L) {
+            DozeStateStore.AppliedKeySnapshot snapshot =
+                    maintenanceSnapshotForKey(
+                            maintenanceSnapshots,
+                            DozeStateStore.KEY_GPS);
+            if (snapshot != null) {
+                confirmAndRetireMaintenancePolicy(
+                        context, snapshot, maintenanceGeneration);
             }
         }
 
-        if (turnOffDataInDoze && wasMobileDataTurnedOn && (ignoreIfHotspot || !wasHotSpotTurnedOn) && (packageName == null || wasWiFiTurnedOn)) {
+        boolean applyWifi =
+                shouldEvaluateRecoveredMaintenanceKey(
+                        maintenanceGeneration,
+                        maintenanceSnapshots,
+                        DozeStateStore.KEY_WIFI)
+                        && turnOffWiFiInDoze
+                        && (ignoreIfHotspot || !wasHotSpotTurnedOn)
+                        && wasWiFiTurnedOn
+                        && packageName == null;
+        if (applyWifi) {
+            log("Disabling WiFi");
+            if (dozeStateStore.markApplied(DozeStateStore.KEY_WIFI, true)) {
+                if (maintenanceGeneration == 0L) {
+                    setWiFiState(false, null);
+                } else {
+                    dispatchMaintenanceReapplyState(
+                            context,
+                            DozeStateStore.KEY_WIFI,
+                            false,
+                            maintenanceGeneration);
+                }
+            } else {
+                logJournalDispatchFailure(DozeStateStore.KEY_WIFI);
+            }
+        } else if (maintenanceGeneration != 0L) {
+            DozeStateStore.AppliedKeySnapshot snapshot =
+                    maintenanceSnapshotForKey(
+                            maintenanceSnapshots,
+                            DozeStateStore.KEY_WIFI);
+            if (snapshot != null) {
+                confirmAndRetireMaintenancePolicy(
+                        context, snapshot, maintenanceGeneration);
+            }
+        }
+
+        boolean applyMobileData =
+                shouldEvaluateRecoveredMaintenanceKey(
+                        maintenanceGeneration,
+                        maintenanceSnapshots,
+                        DozeStateStore.KEY_MOBILE_DATA)
+                        && turnOffDataInDoze
+                        && wasMobileDataTurnedOn
+                        && (ignoreIfHotspot || !wasHotSpotTurnedOn)
+                        && (packageName == null || wasWiFiTurnedOn);
+        if (applyMobileData) {
             log("Disabling mobile data");
             if (dozeStateStore.markApplied(DozeStateStore.KEY_MOBILE_DATA, true)) {
-                disableMobileData();
+                if (maintenanceGeneration == 0L) {
+                    setMobileDataState(false, null);
+                } else {
+                    dispatchMaintenanceReapplyState(
+                            context,
+                            DozeStateStore.KEY_MOBILE_DATA,
+                            false,
+                            maintenanceGeneration);
+                }
             } else {
                 logJournalDispatchFailure(DozeStateStore.KEY_MOBILE_DATA);
+            }
+        } else if (maintenanceGeneration != 0L) {
+            DozeStateStore.AppliedKeySnapshot snapshot =
+                    maintenanceSnapshotForKey(
+                            maintenanceSnapshots,
+                            DozeStateStore.KEY_MOBILE_DATA);
+            if (snapshot != null) {
+                confirmAndRetireMaintenancePolicy(
+                        context, snapshot, maintenanceGeneration);
             }
         }
     }
@@ -5350,22 +6029,23 @@ public class ForceDozeService extends Service {
      */
     public void enterDozeHandleNetwork(Context context) {
         enterDozeHandleNetwork(context, ensureActiveSessionEpoch("network entry"),
-                0L, Collections.emptyList());
+                0L, 0L, Collections.emptyList());
     }
 
     private void enterDozeHandleNetwork(
-            Context context, long maintenanceCycleToken,
+            Context context, long maintenanceCycleToken, long maintenanceGeneration,
             List<DozeStateStore.AppliedKeySnapshot> maintenanceSnapshots) {
         enterDozeHandleNetwork(context, ensureActiveSessionEpoch("network entry"),
-                maintenanceCycleToken, maintenanceSnapshots);
+                maintenanceCycleToken, maintenanceGeneration, maintenanceSnapshots);
     }
 
     private void enterDozeHandleNetwork(Context context, long sessionEpoch) {
-        enterDozeHandleNetwork(context, sessionEpoch, 0L, Collections.emptyList());
+        enterDozeHandleNetwork(context, sessionEpoch, 0L, 0L, Collections.emptyList());
     }
 
     private void enterDozeHandleNetwork(
             Context context, long sessionEpoch, long maintenanceCycleToken,
+            long maintenanceGeneration,
             List<DozeStateStore.AppliedKeySnapshot> maintenanceSnapshots) {
         final long entryToken;
         synchronized (physicalEntryLock) {
@@ -5384,26 +6064,42 @@ public class ForceDozeService extends Service {
                         synchronized (physicalEntryLock) {
                             if (classifySessionEntryWork(sessionEpoch) == WORK_STALE) {
                                 logStaleAsyncWork("network");
+                                abandonRecoveredMaintenanceReapply(
+                                        maintenanceGeneration, "network_stale_session");
                                 return null;
                             }
                             if (entryToken != networkEntryToken) {
                                 DiagnosticLogger.i("DOZE",
                                         "async_session_work_skipped reason=superseded type=network");
+                                abandonRecoveredMaintenanceReapply(
+                                        maintenanceGeneration, "network_superseded");
                                 return null;
                             }
                             if (maintenance) {
                                 DiagnosticLogger.i("DOZE",
                                         "async_session_work_skipped reason=maintenance_active type=network");
+                                abandonRecoveredMaintenanceReapply(
+                                        maintenanceGeneration, "network_maintenance_active");
                                 return null;
                             }
                             if (maintenanceCycleToken != 0L
                                     && maintenanceCycleToken != maintenanceCycle) {
                                 DiagnosticLogger.i("DOZE",
                                         "async_session_work_skipped reason=stale_maintenance type=network");
+                                abandonRecoveredMaintenanceReapply(
+                                        maintenanceGeneration, "network_stale_maintenance");
                                 return null;
                             }
-                            actualEnterDozeHandleNetwork(
-                                    context, packageName, maintenanceSnapshots);
+                            try {
+                                actualEnterDozeHandleNetwork(
+                                        context,
+                                        packageName,
+                                        maintenanceGeneration,
+                                        maintenanceSnapshots);
+                            } finally {
+                                finishRecoveredMaintenanceScheduling(
+                                        maintenanceGeneration);
+                            }
                         }
                         return null;
                     });
@@ -5421,25 +6117,39 @@ public class ForceDozeService extends Service {
         synchronized (physicalEntryLock) {
             if (classifySessionEntryWork(sessionEpoch) == WORK_STALE) {
                 logStaleAsyncWork("network");
+                abandonRecoveredMaintenanceReapply(
+                        maintenanceGeneration, "network_stale_session");
                 return;
             }
             if (entryToken != networkEntryToken) {
                 DiagnosticLogger.i("DOZE",
                         "async_session_work_skipped reason=superseded type=network");
+                abandonRecoveredMaintenanceReapply(
+                        maintenanceGeneration, "network_superseded");
                 return;
             }
             if (maintenance) {
                 DiagnosticLogger.i("DOZE",
                         "async_session_work_skipped reason=maintenance_active type=network");
+                abandonRecoveredMaintenanceReapply(
+                        maintenanceGeneration, "network_maintenance_active");
                 return;
             }
             if (maintenanceCycleToken != 0L
                     && maintenanceCycleToken != maintenanceCycle) {
                 DiagnosticLogger.i("DOZE",
                         "async_session_work_skipped reason=stale_maintenance type=network");
+                abandonRecoveredMaintenanceReapply(
+                        maintenanceGeneration, "network_stale_maintenance");
                 return;
             }
-            actualEnterDozeHandleNetwork(context, null, maintenanceSnapshots);
+            try {
+                actualEnterDozeHandleNetwork(
+                        context, null, maintenanceGeneration, maintenanceSnapshots);
+            } finally {
+                finishRecoveredMaintenanceScheduling(
+                        maintenanceGeneration);
+            }
         }
     }
 
@@ -5453,7 +6163,7 @@ public class ForceDozeService extends Service {
      * binder restart or a service death mid-restore must not silently lose the record.
      */
     public void restoreDeviceStates(Context context, String reason) {
-        restoreDeviceStates(context, reason, null);
+        restoreDeviceStates(context, reason, null, 0L);
     }
 
     /**
@@ -5462,6 +6172,14 @@ public class ForceDozeService extends Service {
      *                 (they are only re-disabled when a fresh Doze cycle starts).
      */
     public void restoreDeviceStates(Context context, String reason, Set<String> onlyKeys) {
+        restoreDeviceStates(context, reason, onlyKeys, 0L);
+    }
+
+    private void restoreDeviceStates(
+            Context context,
+            String reason,
+            Set<String> onlyKeys,
+            long maintenanceGeneration) {
         Context appContext = context.getApplicationContext();
         int dispatched = 0;
         // Selecting the keys, snapshotting them and enqueueing their restores is ONE critical
@@ -5524,7 +6242,7 @@ public class ForceDozeService extends Service {
                 try {
                     performRestore(appContext, key, snapshot.previousValue,
                             (commandCode, exitCode, stdout, stderr) ->
-                                    onRestoreFinished(key, generation, exitCode));
+                                    onRestoreFinished(key, generation, maintenanceGeneration, exitCode));
                     dispatched++;
                 } catch (Exception e) {
                     stateRestoreInFlight.remove(restoreToken);
@@ -5559,7 +6277,8 @@ public class ForceDozeService extends Service {
      * purpose, so the next trigger - USER_PRESENT, a Shizuku reconnect, the next service start or
      * the next boot - picks it up again.
      */
-    private void onRestoreFinished(String key, long generation, int exitCode) {
+    private void onRestoreFinished(
+            String key, long generation, long maintenanceGeneration, int exitCode) {
         try {
             if (exitCode == 0) {
                 // Cross-session guard for the keys whose commands a later session can outlive: an
@@ -5576,6 +6295,30 @@ public class ForceDozeService extends Service {
                     DiagnosticLogger.i("STATE", "RESTORE_SUPERSEDED " + key + " newSessionOwnsMarker=true");
                     return;
                 }
+                if (maintenanceGeneration != 0L) {
+                    DozeStateStore.MaintenanceReapplySnapshot maintenanceSnapshot =
+                            dozeStateStore.getMaintenanceReapplySnapshot();
+
+                    if (maintenanceSnapshot != null
+                            && maintenanceSnapshot.generation == maintenanceGeneration
+                            && maintenanceSnapshot.keys.contains(key)) {
+                        // This is only the temporary user-state restore for the exact durable
+                        // maintenance transaction that still owns this key. Keep the ordinary
+                        // applied marker: its pre-Doze value and generation remain the recovery
+                        // source until maintenance reapply successfully settles this key.
+                        Log.i(TAG, "RESTORE_MAINTENANCE_TEMPORARY " + key
+                                + " gen=" + generation
+                                + " maintenanceGen=" + maintenanceGeneration
+                                + ", applied marker preserved");
+                        DiagnosticLogger.i("STATE",
+                                "RESTORE_MAINTENANCE_TEMPORARY key=" + key
+                                        + " gen=" + generation
+                                        + " maintenanceGen=" + maintenanceGeneration
+                                        + " markerPreserved=true");
+                        return;
+                    }
+                }
+
                 // Compare-and-clear against the generation this restore captured. A newer session
                 // - or a maintenance re-entry - that re-marked the key while this command was in
                 // flight owns the marker now, and its debt must survive.
@@ -6333,6 +7076,160 @@ public class ForceDozeService extends Service {
      * <p>
      * Mode C - the session is genuinely over: the existing full restore.
      */
+    /**
+     * Resumes a durable maintenance transaction after process recreation.
+     *
+     * If Android is still outside deep IDLE, this process adopts only the proven ordinary owners
+     * and reconstructs the RAM maintenance barrier so owned-session recovery cannot force deep idle
+     * on top of the temporary maintenance restores.
+     *
+     * If Android is already back in deep IDLE, the maintenance window ended while this process was
+     * dead. Empty debt can be settled immediately; non-empty debt is re-applied through the recovered
+     * single-flight so keys without an ordinary owner are never inferred from live physical state.
+     */
+    private void recoverDurableMaintenanceAfterProcessDeath(
+            Context context, String reason, long recoveredEpoch) {
+        DozeStateStore.MaintenanceReapplySnapshot observed =
+                dozeStateStore.getMaintenanceReapplySnapshot();
+        if (observed == null) {
+            return;
+        }
+
+        if (observed.generation == 0L) {
+            DiagnosticLogger.e("RECOVERY",
+                    "maintenance_recovery_invalid_generation maintenanceGen=0"
+                            + " reason=" + reason
+                            + " debtKept=true");
+            return;
+        }
+
+        boolean inDeepIdle = pm.isDeviceIdleMode();
+
+        if (!inDeepIdle) {
+            synchronized (physicalEntryLock) {
+                DozeStateStore.MaintenanceReapplySnapshot current =
+                        dozeStateStore.getMaintenanceReapplySnapshot();
+                if (current == null || current.generation != observed.generation) {
+                    DiagnosticLogger.i("RECOVERY",
+                            "maintenance_recovery_window_skipped reason=journal_changed"
+                                    + " observedGen=" + observed.generation);
+                    return;
+                }
+
+                // A live in-process maintenance window already owns this transition.
+                if (maintenance) {
+                    return;
+                }
+
+                // Reconstructing an open window is a process-recreation operation. If this process
+                // has already crossed a maintenance lifecycle boundary, let the live DeviceIdle
+                // broadcast own any later physical maintenance transition instead of misclassifying
+                // old durable debt as the currently open window.
+                if (maintenanceCycle != 0L) {
+                    DiagnosticLogger.i("RECOVERY",
+                            "maintenance_recovery_window_skipped reason=not_fresh_process_context"
+                                    + " maintenanceGen=" + current.generation
+                                    + " cycle=" + maintenanceCycle);
+                    return;
+                }
+
+                RecoveredMaintenanceDebtView debtView =
+                        reconstructRecoveredMaintenanceDebtLocked(current);
+
+                // This window originated in the previous process, so there are no maintenance-cycle
+                // callbacks from this process to invalidate. Keep maintenanceCycle at zero: the
+                // durable generation, session epoch, network token and recovered-window identity
+                // provide ownership, while zero keeps failed durable debt retryable in this process.
+                networkEntryToken++;
+                maintenance = true;
+                recoveredMaintenanceWindowGeneration = current.generation;
+                maintenanceReapplySnapshots = debtView.recoverableSnapshots;
+
+                DiagnosticLogger.i("RECOVERY",
+                        "maintenance_recovery_window_reconstructed maintenanceGen="
+                                + current.generation
+                                + " recoverable=" + debtView.recoverableSnapshots.size()
+                                + " unrecoverable=" + debtView.unrecoverableKeys.size()
+                                + " deepIdle=false");
+            }
+            return;
+        }
+
+        final long maintenanceGeneration;
+        final List<DozeStateStore.AppliedKeySnapshot> reapplySnapshots;
+
+        synchronized (physicalEntryLock) {
+            DozeStateStore.MaintenanceReapplySnapshot current =
+                    dozeStateStore.getMaintenanceReapplySnapshot();
+            if (current == null || current.generation != observed.generation) {
+                DiagnosticLogger.i("RECOVERY",
+                        "maintenance_recovery_reapply_skipped reason=journal_changed"
+                                + " observedGen=" + observed.generation);
+                return;
+            }
+
+            // A live/reconstructed maintenance context will be completed by the real DeviceIdle
+            // maintenance-exit broadcast. Do not race it with an immediate recovered reapply.
+            if (maintenance) {
+                return;
+            }
+
+            // Immediate deep-IDLE recovery is valid only in a fresh process. A maintenance cycle
+            // already observed by this process may still have durable per-key callbacks settling;
+            // treating that live transaction as process-death recovery would dispatch it twice.
+            if (maintenanceCycle != 0L) {
+                DiagnosticLogger.i("RECOVERY",
+                        "maintenance_recovery_reapply_skipped"
+                                + " reason=not_fresh_process_context"
+                                + " maintenanceGen=" + current.generation
+                                + " cycle=" + maintenanceCycle);
+                return;
+            }
+
+            if (current.keys.isEmpty()) {
+                if (dozeStateStore.finishEmptyMaintenanceReapplyIfGeneration(
+                        current.generation)) {
+                    DiagnosticLogger.i("RECOVERY",
+                            "maintenance_recovery_empty_settled maintenanceGen="
+                                    + current.generation);
+                } else {
+                    DiagnosticLogger.e("RECOVERY",
+                            "maintenance_recovery_empty_settlement_failed maintenanceGen="
+                                    + current.generation
+                                    + " debtKept=true");
+                }
+                return;
+            }
+
+            RecoveredMaintenanceDebtView debtView =
+                    reconstructRecoveredMaintenanceDebtLocked(current);
+
+            if (!beginRecoveredMaintenanceReapplyLocked(current.generation)) {
+                DiagnosticLogger.i("RECOVERY",
+                        "maintenance_recovery_reapply_skipped reason=singleflight_active"
+                                + " maintenanceGen=" + current.generation);
+                return;
+            }
+
+            maintenanceGeneration = current.generation;
+            reapplySnapshots = debtView.recoverableSnapshots;
+
+            DiagnosticLogger.i("RECOVERY",
+                    "maintenance_recovery_reapply_claimed maintenanceGen="
+                            + maintenanceGeneration
+                            + " recoverable=" + reapplySnapshots.size()
+                            + " unrecoverable=" + debtView.unrecoverableKeys.size()
+                            + " deepIdle=true");
+        }
+
+        enterDozeHandleNetwork(
+                context,
+                recoveredEpoch,
+                0L,
+                maintenanceGeneration,
+                reapplySnapshots);
+    }
+
     private void applyRecoveryPolicy(String logPrefix, String reason) {
         boolean screenOn = Utils.isScreenOn(getApplicationContext());
         boolean inDoze = dozeStateStore.isInDoze();
@@ -6441,6 +7338,12 @@ public class ForceDozeService extends Service {
             releasePhysicalDozeForLockedWake(reason, recoveredEpoch);
             return;
         }
+
+        // Durable maintenance recovery runs before ordinary screen-off convergence. When Android is
+        // still inside the maintenance window it reconstructs maintenance=true, which makes
+        // ensureOwnedDozePhysicalState() below wait rather than force deep idle prematurely.
+        recoverDurableMaintenanceAfterProcessDeath(
+                getApplicationContext(), reason, recoveredEpoch);
 
         log(logPrefix + "_DEFERRED: still dozing with the screen off, keeping suspensions and "
                 + "pending state until the screen comes back on");
@@ -6827,18 +7730,42 @@ public class ForceDozeService extends Service {
                             synchronized (physicalEntryLock) {
                                 maintenanceCycle++;
                                 maintenance = true;
-                                maintenanceReapplySnapshots =
-                                        captureMaintenanceReapplySnapshotsLocked();
-                                DiagnosticLogger.i("STATE",
-                                        "maintenance_restore_snapshot cycle=" + maintenanceCycle
-                                                + " count="
-                                                + maintenanceReapplySnapshots.size());
 
-                                // restoreDeviceStates() re-enters this monitor intentionally. Keeping
-                                // snapshot selection and restore dispatch in the same barrier means
-                                // both describe the same journal ownership.
-                                restoreDeviceStates(context, "Doze maintenance window",
-                                        MAINTENANCE_RESTORE_KEYS);
+                                List<DozeStateStore.AppliedKeySnapshot> capturedSnapshots =
+                                        captureMaintenanceReapplySnapshotsLocked();
+                                Set<String> durableReapplyKeys =
+                                        maintenanceGenericKeysFromSnapshots(capturedSnapshots);
+
+                                long maintenanceGeneration =
+                                        dozeStateStore.beginMaintenanceReapply(durableReapplyKeys);
+
+                                if (maintenanceGeneration == 0L) {
+                                    // Do not temporarily restore generic state unless recovery after
+                                    // process death can prove that a reapply obligation exists.
+                                    maintenanceReapplySnapshots = Collections.emptyList();
+                                    Log.e(TAG,
+                                            "Maintenance journal commit failed; temporary restore not dispatched");
+                                    DiagnosticLogger.e("STATE",
+                                            "maintenance_journal_failed cycle=" + maintenanceCycle
+                                                    + " restoreDispatched=false");
+                                } else {
+                                    maintenanceReapplySnapshots = capturedSnapshots;
+                                    DiagnosticLogger.i("STATE",
+                                            "maintenance_restore_snapshot cycle=" + maintenanceCycle
+                                                    + " maintenanceGen=" + maintenanceGeneration
+                                                    + " count="
+                                                    + maintenanceReapplySnapshots.size()
+                                                    + " durableKeys=" + durableReapplyKeys);
+
+                                    // restoreDeviceStates() re-enters this monitor intentionally.
+                                    // The durable maintenance transaction was committed first, so
+                                    // every temporary generic restore carries recoverable ownership.
+                                    restoreDeviceStates(
+                                            context,
+                                            "Doze maintenance window",
+                                            MAINTENANCE_RESTORE_KEYS,
+                                            maintenanceGeneration);
+                                }
                             }
                         }
                     } else if (lastKnownState.equals("IDLE")) {
@@ -6850,10 +7777,78 @@ public class ForceDozeService extends Service {
                                 saveDozeDataStats();
                             }
                             final long reapplyCycle;
+                            final long reapplyMaintenanceGeneration;
+                            final long emptyMaintenanceGeneration;
+                            final long recoveredWindowGenerationForSettlement;
                             final List<DozeStateStore.AppliedKeySnapshot> reapplySnapshots;
+                            final boolean dispatchMaintenanceNetworkReapply;
                             synchronized (physicalEntryLock) {
                                 reapplyCycle = maintenanceCycle;
+                                DozeStateStore.MaintenanceReapplySnapshot durableMaintenance =
+                                        dozeStateStore.getMaintenanceReapplySnapshot();
+
+                                if (durableMaintenance != null
+                                        && durableMaintenance.keys.isEmpty()) {
+                                    emptyMaintenanceGeneration = durableMaintenance.generation;
+                                    // There is no generic per-key debt for network re-entry to settle.
+                                    reapplyMaintenanceGeneration = 0L;
+                                } else {
+                                    emptyMaintenanceGeneration = 0L;
+                                    reapplyMaintenanceGeneration =
+                                            durableMaintenance == null
+                                                    ? 0L
+                                                    : durableMaintenance.generation;
+                                }
+
                                 reapplySnapshots = maintenanceReapplySnapshots;
+
+                                long recoveredWindowGeneration =
+                                        recoveredMaintenanceWindowGeneration;
+                                recoveredMaintenanceWindowGeneration = 0L;
+                                recoveredWindowGenerationForSettlement =
+                                        recoveredWindowGeneration;
+
+                                boolean dispatchNetworkReapply = true;
+                                if (recoveredWindowGeneration != 0L) {
+                                    if (durableMaintenance == null
+                                            || durableMaintenance.generation
+                                            != recoveredWindowGeneration) {
+                                        dispatchNetworkReapply = false;
+                                        DiagnosticLogger.e("RECOVERY",
+                                                "maintenance_recovery_exit_skipped"
+                                                        + " reason=generation_mismatch"
+                                                        + " recoveredGen="
+                                                        + recoveredWindowGeneration
+                                                        + " durableGen="
+                                                        + (durableMaintenance == null
+                                                                ? 0L
+                                                                : durableMaintenance.generation)
+                                                        + " debtKept=true");
+                                    } else if (durableMaintenance.keys.isEmpty()) {
+                                        // Exact empty settlement below is sufficient. Unlike a live
+                                        // window, recovered empty debt must not invent generic work
+                                        // from current physical state.
+                                        dispatchNetworkReapply = false;
+                                    } else if (!beginRecoveredMaintenanceReapplyLocked(
+                                            recoveredWindowGeneration)) {
+                                        dispatchNetworkReapply = false;
+                                        DiagnosticLogger.i("RECOVERY",
+                                                "maintenance_recovery_exit_skipped"
+                                                        + " reason=singleflight_active"
+                                                        + " maintenanceGen="
+                                                        + recoveredWindowGeneration
+                                                        + " debtKept=true");
+                                    } else {
+                                        DiagnosticLogger.i("RECOVERY",
+                                                "maintenance_recovery_exit_claimed maintenanceGen="
+                                                        + recoveredWindowGeneration
+                                                        + " recoverable="
+                                                        + reapplySnapshots.size());
+                                    }
+                                }
+
+                                dispatchMaintenanceNetworkReapply =
+                                        dispatchNetworkReapply;
                                 maintenanceReapplySnapshots = Collections.emptyList();
 
                                 // Close the maintenance window and invalidate older network callbacks
@@ -6863,7 +7858,31 @@ public class ForceDozeService extends Service {
                                 networkEntryToken++;
                                 maintenance = false;
                             }
-                            enterDozeHandleNetwork(context, reapplyCycle, reapplySnapshots);
+
+                            if (emptyMaintenanceGeneration != 0L
+                                    && (recoveredWindowGenerationForSettlement == 0L
+                                    || recoveredWindowGenerationForSettlement
+                                    == emptyMaintenanceGeneration)) {
+                                if (dozeStateStore.finishEmptyMaintenanceReapplyIfGeneration(
+                                        emptyMaintenanceGeneration)) {
+                                    DiagnosticLogger.i("STATE",
+                                            "maintenance_empty_settled maintenanceGen="
+                                                    + emptyMaintenanceGeneration);
+                                } else {
+                                    DiagnosticLogger.e("STATE",
+                                            "maintenance_empty_settlement_failed maintenanceGen="
+                                                    + emptyMaintenanceGeneration
+                                                    + " debtKept=true");
+                                }
+                            }
+
+                            if (dispatchMaintenanceNetworkReapply) {
+                                enterDozeHandleNetwork(
+                                        context,
+                                        reapplyCycle,
+                                        reapplyMaintenanceGeneration,
+                                        reapplySnapshots);
+                            }
                         }
                     }
                 }
