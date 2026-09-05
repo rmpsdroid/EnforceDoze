@@ -1,13 +1,13 @@
 # EnforceDoze Fork — Authoritative Project Continuation
 
-**Updated:** 2026-09-04 (Asia/Kolkata)
+**Updated:** 2026-09-05 (Asia/Kolkata)
 **Repository:** `rmpsdroid/EnforceDoze`
-**Current authoritative Git state:** maintenance async restore/reapply is fully
-integrated on `master`. Functional commit
-`434ce6508764bdcf2b34221f85858f9c0ce1a440` and documentation commit
-`fbc41b67b8e17dcc47a6bab93ecc818a34430e6d` are both contained in local
-`master` and `origin/master`, which are synchronized at
-`fbc41b67b8e17dcc47a6bab93ecc818a34430e6d`.
+**Current authoritative Git state:** maintenance async restore/reapply remains fully
+integrated on `master` / `origin/master` at
+`d7c214d5a70fac2b26529f98cf9e259084564ad6`. Maintenance process-death recovery
+is functionally complete on branch `fix/maintenance-process-death-v1` at commit
+`d80a5ee` (`Fix maintenance process-death recovery`). That functional commit is built
+and M30 runtime validated, but has not yet been documented, merged, or pushed.
 
 **Purpose:** single source of truth for continuing this project in a new ChatGPT window without restarting the investigation.
 
@@ -57,9 +57,13 @@ The immediate phase is still reliability/correctness first:
 - Android API/Samsung behavior;
 - service lifecycle and recovery.
 
-Work on **one narrow audit item at a time**.
+Use **release-oriented checkpoints** rather than endless micro-audits. Reliability
+work must remain controlled and evidence-driven, but closely related changes may be
+completed as one reviewed/build-tested candidate.
 
-Do not mix functional reliability work with future UI/rebranding/public-release work.
+Public-release preparation, rebranding, and UI work may proceed in parallel with
+remaining Phase-0 triage once no known critical reliability blocker is being left
+unresolved. Do not destabilize known-good reliability architecture for UI work.
 
 ---
 
@@ -1752,8 +1756,97 @@ rather than separately forced as a dedicated runtime case.
 
 Do not exaggerate those narrower evidence boundaries.
 
-Maintenance **process-death behavior is separate** and is the next Phase-0 audit
-subject.
+Maintenance process-death behavior was subsequently audited separately and is now
+functionally fixed by `d80a5ee`; see the following section.
+
+---
+
+## 14.14 Maintenance process-death recovery — `d80a5ee`
+
+Result:
+
+**CONFIRMED / FIXED / BUILD PASS / M30 RUNTIME VALIDATED / FUNCTIONALLY COMMITTED**
+
+Branch: `fix/maintenance-process-death-v1`
+
+Functional commit: `d80a5ee` — `Fix maintenance process-death recovery`
+
+Production scope:
+
+- `app/src/main/java/com/akylas/enforcedoze/DozeStateStore.java`
+- `app/src/main/java/com/akylas/enforcedoze/ForceDozeService.java`
+
+Functional diff:
+
+```text
+2 files changed
+1456 insertions
+65 deletions
+```
+
+Confirmed defect: maintenance state was partly process-local. During an owned Doze
+maintenance window, generic restrictions are temporarily restored. If the service
+process died after that temporary restore but before maintenance exit, the recreated
+process could lose the maintenance context and fail to reapply the restriction when
+deep IDLE resumed.
+
+Final design:
+
+- durable maintenance-active marker and monotonically increasing generation;
+- exact generic maintenance reapply key set;
+- ordinary per-key applied owner/generation remains authoritative;
+- successful temporary restore preserves the ordinary owner;
+- recovered keys are reconstructed only from exact durable ownership;
+- missing ownership is never guessed from physical state;
+- exact-generation settlement prevents stale callbacks retiring newer debt;
+- recovered single-flight prevents duplicate reapply scheduling;
+- process recreation during an open maintenance window reconstructs the maintenance
+  barrier and does not prematurely force deep idle;
+- process recreation after maintenance already ended can immediately resume durable
+  reapply work;
+- service/session invalidation clears recovered RAM ownership.
+
+Generic maintenance-reapply coverage: airplane mode, Bluetooth, GPS/location, Wi-Fi,
+mobile data, and Battery Saver. `ALL_SENSORS` remains outside this generic set.
+
+Build identity:
+
+```text
+build log SHA256 = 58ACBCF0ABAD7F14E18858C27E3CDB6439C66363F7ADECFCA4192D2008D32751
+APK SHA256       = 6F00EF54CE153EA3BFD62B23773AFD42CB3DD6EF7E68D30A2DFF5C68FAC18D94
+final diff SHA256= A3A4EF5928BD1EAC92707F104AA908520AFB3084D64E61AD8486316B476F3F44
+```
+
+M30 runtime validation reproduced process death inside `IDLE_MAINTENANCE`, preserved
+the recovered maintenance window, then observed real maintenance exit followed by:
+
+```text
+Enabling Battery Saver
+MAINTENANCE_REAPPLY_SETTLED batterySaver maintenanceGen=1
+```
+
+Final M30 cleanup:
+
+```text
+mForceIdle=false
+mScreenOn=true
+mState=ACTIVE
+low_power=0
+```
+
+Git state at this checkpoint:
+
+```text
+HEAD / feature branch = d80a5ee
+master                = d7c214d
+origin/master         = d7c214d
+```
+
+`d80a5ee` is functionally committed only. Documentation, merge, feature push, and
+master push remain separate approval-gated actions.
+
+Protected evidence additionally includes all `maintenance-process-death-*` files.
+Do not stage those evidence files by default.
 
 ---
 
@@ -4908,13 +5001,17 @@ Do **not** make me restate completed history.
 - Local repo: `D:\AndroidProjects\EnforceDoze`
 - Application ID: `com.akylas.enforcedoze.fork`
 - Java namespace: `com.akylas.enforcedoze`
-- Current branch: `master`
+- Current branch: `fix/maintenance-process-death-v1`
 - Maintenance async restore/reapply functional commit:
   `434ce6508764bdcf2b34221f85858f9c0ce1a440`
-- Maintenance documentation/master commit:
-  `fbc41b67b8e17dcc47a6bab93ecc818a34430e6d`
-- Current `HEAD`, `master`, and `origin/master`:
-  `fbc41b67b8e17dcc47a6bab93ecc818a34430e6d`
+- Maintenance async final master state:
+  `d7c214d5a70fac2b26529f98cf9e259084564ad6`
+- Maintenance process-death functional commit:
+  `d80a5ee`
+- Current feature `HEAD`:
+  `d80a5ee`
+- Current `master` and `origin/master`:
+  `d7c214d5a70fac2b26529f98cf9e259084564ad6`
 
 The maintenance async restore/reapply functional fix and its documentation are
 merged and pushed to `master`.
@@ -5060,29 +5157,38 @@ The Samsung Galaxy S26 Ultra remains the normal-use device.
 Do not perform synthetic failure tests on it unless specifically justified.
 Prefer the M30 for controlled failure testing.
 
-### Remaining Phase-0 backlog
+### Remaining Phase-0 / public-release backlog
 
-Do not start rebranding/UI yet.
+Maintenance process-death recovery is now closed functionally by `d80a5ee`.
 
-Remaining work:
+The project is moving from exhaustive sequential auditing toward **public-release
+triage**. Remaining items must first be classified by release impact rather than
+automatically expanded into long audit projects.
 
-1. maintenance process-death behavior;
-2. Shizuku `newProcess` deprecation / newer Android API behavior;
-3. stdout/stderr pipe deadlock risk;
-4. notification blocklist exact-set correctness;
-5. notification-only boot/process-death restoration durability;
-6. biometric pre-state correctness;
-7. pre-N tracked release protocol;
-8. tunable callback absence;
-9. marker-stuck recovery;
-10. PREPARING phantom boot / stale session;
-11. focused `setInDoze(false)` durability/lifecycle audit.
+Current remaining items:
+
+1. Shizuku `newProcess` deprecation / newer Android API behavior;
+2. stdout/stderr pipe deadlock risk;
+3. notification blocklist exact-set correctness;
+4. notification-only boot/process-death restoration durability;
+5. biometric pre-state correctness;
+6. pre-N tracked release protocol;
+7. tunable callback absence;
+8. marker-stuck recovery;
+9. PREPARING phantom boot / stale session;
+10. focused `setInDoze(false)` durability/lifecycle audit.
+
+Release triage rule:
+
+- reproducible or high-confidence current-Android reliability/security blocker -> fix before public beta;
+- low-risk theoretical edge, obsolete Android path, or unproven concern -> document/defer unless new evidence elevates it;
+- do not reopen already closed R0 items without new evidence.
+
+Rebranding/UI and public-release preparation may proceed in parallel with this triage,
+provided known-good reliability architecture is preserved.
 
 Do not invent the next R0 number until the tracked roadmap/current documentation
 has been checked.
-
-The next audit subject is **maintenance process-death behavior**. Treat it as an
-audit candidate first, not an automatically confirmed bug.
 
 ### Current documentation / Git completion state
 
@@ -5103,14 +5209,14 @@ Any new documentation commit created after this checkpoint requires a new exact
 `approve commit`, and any subsequent master push requires a new exact
 `approve push master`.
 
-The next Phase-0 audit subject is **maintenance process-death behavior**.
+The next project checkpoint is **public-release triage**, with rebranding/UI allowed to proceed in parallel.
 
 ### Protected evidence
 
 Never stage, overwrite, or delete audit evidence casually.
 
-All `r0-4-*`, `r0-5-*`, `r0-6-*`, and maintenance async restore/reapply evidence
-is protected.
+All `r0-4-*`, `r0-5-*`, `r0-6-*`, maintenance async restore/reapply evidence,
+and `maintenance-process-death-*` evidence is protected.
 
 Important maintenance evidence includes:
 
@@ -5181,7 +5287,7 @@ Do not restart the project explanation.
 
 Do not re-audit closed candidates without new evidence.
 
-Do not begin UI/rebranding while Phase 0 remains open.
+UI/rebranding may proceed in parallel with release-critical Phase-0 triage; do not sacrifice reliability invariants for cosmetic work.
 
 ---
 

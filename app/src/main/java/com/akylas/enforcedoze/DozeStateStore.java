@@ -66,6 +66,17 @@ public class DozeStateStore {
     private static final String KEY_OWNED_REFORCE_PENDING = "ownedReforcePending";
     private static final String KEY_SESSION_PHYSICAL_MODE = "sessionPhysicalMode";
     private static final String KEY_FINAL_EXIT_PENDING = "finalExitPending";
+    /**
+     * A maintenance window temporarily restores selected Doze-owned states while the logical
+     * session remains ACTIVE. This durable transaction survives service/process recreation so
+     * recovery can distinguish genuine maintenance from an unexpectedly lost physical idle.
+     *
+     * The generation is monotonic so stale completion work from an older maintenance window cannot
+     * retire a newer window's reapply debt.
+     */
+    private static final String KEY_MAINTENANCE_ACTIVE = "maintenanceActive";
+    private static final String KEY_MAINTENANCE_GENERATION = "maintenanceGeneration";
+    private static final String KEY_MAINTENANCE_REAPPLY_KEYS = "maintenanceReapplyKeys";
 
     /**
      * Physical ownership semantics of the ACTIVE session: does ending it owe an explicit unforce?
@@ -492,6 +503,298 @@ public class DozeStateStore {
         return prefs.getBoolean(KEY_IN_DOZE, false);
     }
 
+    /** One durable view of the maintenance transaction currently owned by the ACTIVE session. */
+    public static final class MaintenanceReapplySnapshot {
+        public final long generation;
+        public final Set<String> keys;
+
+        MaintenanceReapplySnapshot(long generation, Set<String> keys) {
+            this.generation = generation;
+            this.keys = Collections.unmodifiableSet(new LinkedHashSet<>(keys));
+        }
+    }
+
+    /**
+     * Opens a durable maintenance transaction before any temporary state restore is dispatched.
+     *
+     * An empty key set is valid: recovery still needs the active marker to distinguish a genuine
+     * Android maintenance window from an owned session whose physical idle unexpectedly disappeared.
+     *
+     * @return the new maintenance generation, or 0 when the journal could not be persisted
+     */
+    public synchronized long beginMaintenanceReapply(Collection<String> keys) {
+        if (!prefs.getBoolean(KEY_IN_DOZE, false)) {
+            return 0L;
+        }
+
+        boolean hadActive = prefs.contains(KEY_MAINTENANCE_ACTIVE);
+        boolean oldActive = prefs.getBoolean(KEY_MAINTENANCE_ACTIVE, false);
+        boolean hadGeneration = prefs.contains(KEY_MAINTENANCE_GENERATION);
+        long oldGeneration = prefs.getLong(KEY_MAINTENANCE_GENERATION, 0L);
+        boolean hadKeys = prefs.contains(KEY_MAINTENANCE_REAPPLY_KEYS);
+        Set<String> oldKeys = new LinkedHashSet<>(
+                prefs.getStringSet(KEY_MAINTENANCE_REAPPLY_KEYS, Collections.emptySet()));
+
+        long generation = oldGeneration + 1L;
+        Set<String> newKeys = new LinkedHashSet<>(keys);
+
+        if (prefs.edit()
+                .putBoolean(KEY_MAINTENANCE_ACTIVE, true)
+                .putLong(KEY_MAINTENANCE_GENERATION, generation)
+                .putStringSet(KEY_MAINTENANCE_REAPPLY_KEYS, newKeys)
+                .commit()) {
+            return generation;
+        }
+
+        // commit() already changed SharedPreferences' cached map. Restore the exact previous
+        // transaction locally as well as best-effort on disk, including key absence on upgrades.
+        SharedPreferences.Editor rollback = prefs.edit();
+
+        if (hadActive) {
+            rollback.putBoolean(KEY_MAINTENANCE_ACTIVE, oldActive);
+        } else {
+            rollback.remove(KEY_MAINTENANCE_ACTIVE);
+        }
+
+        if (hadGeneration) {
+            rollback.putLong(KEY_MAINTENANCE_GENERATION, oldGeneration);
+        } else {
+            rollback.remove(KEY_MAINTENANCE_GENERATION);
+        }
+
+        if (hadKeys) {
+            rollback.putStringSet(KEY_MAINTENANCE_REAPPLY_KEYS, oldKeys);
+        } else {
+            rollback.remove(KEY_MAINTENANCE_REAPPLY_KEYS);
+        }
+
+        rollback.commit();
+        return 0L;
+    }
+
+    /**
+     * Returns maintenance ownership only while its logical Doze session is still ACTIVE. Stale
+     * maintenance metadata beside inDoze=false must never create recovery work by itself.
+     */
+    public synchronized MaintenanceReapplySnapshot getMaintenanceReapplySnapshot() {
+        if (!prefs.getBoolean(KEY_IN_DOZE, false)
+                || !prefs.getBoolean(KEY_MAINTENANCE_ACTIVE, false)) {
+            return null;
+        }
+
+        return new MaintenanceReapplySnapshot(
+                prefs.getLong(KEY_MAINTENANCE_GENERATION, 0L),
+                prefs.getStringSet(KEY_MAINTENANCE_REAPPLY_KEYS, Collections.emptySet()));
+    }
+
+    /**
+     * Atomically retires a maintenance key when current policy no longer wants its restriction.
+     *
+     * The temporary maintenance restore has already put the user's value back physically, so there
+     * is no reapply command whose completion can settle the transaction. Removing the ordinary
+     * applied owner and the maintenance key in separate commits would create a process-death gap.
+     *
+     * Both generations must still be the ones captured by the caller. A newer ordinary owner or a
+     * newer maintenance window therefore wins and nothing is cleared.
+     */
+    public synchronized boolean retireMaintenanceReapplyKeyIfGenerations(
+            String key,
+            long expectedMaintenanceGeneration,
+            long expectedAppliedGeneration) {
+        if (!prefs.getBoolean(KEY_IN_DOZE, false)
+                || !prefs.getBoolean(KEY_MAINTENANCE_ACTIVE, false)) {
+            return false;
+        }
+
+        long currentMaintenanceGeneration =
+                prefs.getLong(KEY_MAINTENANCE_GENERATION, 0L);
+        if (currentMaintenanceGeneration != expectedMaintenanceGeneration) {
+            return false;
+        }
+
+        boolean hadActive = prefs.contains(KEY_MAINTENANCE_ACTIVE);
+        boolean oldActive = prefs.getBoolean(KEY_MAINTENANCE_ACTIVE, false);
+        boolean hadKeys = prefs.contains(KEY_MAINTENANCE_REAPPLY_KEYS);
+        Set<String> oldKeys = new LinkedHashSet<>(
+                prefs.getStringSet(
+                        KEY_MAINTENANCE_REAPPLY_KEYS,
+                        Collections.emptySet()));
+
+        if (!oldKeys.contains(key)) {
+            return false;
+        }
+
+        String appliedKey = PREFIX_APPLIED + key;
+        boolean hadApplied = prefs.contains(appliedKey);
+        boolean oldApplied = prefs.getBoolean(appliedKey, false);
+        if (!oldApplied) {
+            return false;
+        }
+
+        long currentAppliedGeneration =
+                prefs.getLong(PREFIX_GENERATION + key, 0L);
+        if (currentAppliedGeneration != expectedAppliedGeneration) {
+            return false;
+        }
+
+        Set<String> remaining = new LinkedHashSet<>(oldKeys);
+        remaining.remove(key);
+
+        SharedPreferences.Editor editor = prefs.edit()
+                .remove(appliedKey);
+
+        if (remaining.isEmpty()) {
+            editor.putBoolean(KEY_MAINTENANCE_ACTIVE, false)
+                    .remove(KEY_MAINTENANCE_REAPPLY_KEYS);
+        } else {
+            editor.putBoolean(KEY_MAINTENANCE_ACTIVE, true)
+                    .putStringSet(KEY_MAINTENANCE_REAPPLY_KEYS, remaining);
+        }
+
+        if (editor.commit()) {
+            return true;
+        }
+
+        // commit() has already changed the cached map. Restore exactly the two ownership records
+        // this operation attempted to settle; pre-state and both generation counters were untouched.
+        SharedPreferences.Editor rollback = prefs.edit();
+
+        if (hadApplied) {
+            rollback.putBoolean(appliedKey, oldApplied);
+        } else {
+            rollback.remove(appliedKey);
+        }
+
+        if (hadActive) {
+            rollback.putBoolean(KEY_MAINTENANCE_ACTIVE, oldActive);
+        } else {
+            rollback.remove(KEY_MAINTENANCE_ACTIVE);
+        }
+
+        if (hadKeys) {
+            rollback.putStringSet(KEY_MAINTENANCE_REAPPLY_KEYS, oldKeys);
+        } else {
+            rollback.remove(KEY_MAINTENANCE_REAPPLY_KEYS);
+        }
+
+        rollback.commit();
+        return false;
+    }
+
+    /**
+     * Retires one reapply obligation only when it still belongs to the exact maintenance generation
+     * that dispatched the physical work. A stale callback from an older window may therefore never
+     * discharge a newer window's debt.
+     */
+    public synchronized boolean clearMaintenanceReapplyKeyIfGeneration(
+            String key, long expectedGeneration) {
+        if (!prefs.getBoolean(KEY_IN_DOZE, false)
+                || !prefs.getBoolean(KEY_MAINTENANCE_ACTIVE, false)) {
+            return false;
+        }
+
+        long currentGeneration = prefs.getLong(KEY_MAINTENANCE_GENERATION, 0L);
+        if (currentGeneration != expectedGeneration) {
+            return false;
+        }
+
+        boolean hadActive = prefs.contains(KEY_MAINTENANCE_ACTIVE);
+        boolean oldActive = prefs.getBoolean(KEY_MAINTENANCE_ACTIVE, false);
+        boolean hadKeys = prefs.contains(KEY_MAINTENANCE_REAPPLY_KEYS);
+        Set<String> oldKeys = new LinkedHashSet<>(
+                prefs.getStringSet(KEY_MAINTENANCE_REAPPLY_KEYS, Collections.emptySet()));
+
+        if (!oldKeys.contains(key)) {
+            return false;
+        }
+
+        Set<String> remaining = new LinkedHashSet<>(oldKeys);
+        remaining.remove(key);
+
+        SharedPreferences.Editor editor = prefs.edit();
+        if (remaining.isEmpty()) {
+            editor.putBoolean(KEY_MAINTENANCE_ACTIVE, false)
+                    .remove(KEY_MAINTENANCE_REAPPLY_KEYS);
+        } else {
+            editor.putBoolean(KEY_MAINTENANCE_ACTIVE, true)
+                    .putStringSet(KEY_MAINTENANCE_REAPPLY_KEYS, remaining);
+        }
+
+        if (editor.commit()) {
+            return true;
+        }
+
+        // Restore the exact pre-settlement cached state. The generation itself was never changed.
+        SharedPreferences.Editor rollback = prefs.edit();
+        if (hadActive) {
+            rollback.putBoolean(KEY_MAINTENANCE_ACTIVE, oldActive);
+        } else {
+            rollback.remove(KEY_MAINTENANCE_ACTIVE);
+        }
+
+        if (hadKeys) {
+            rollback.putStringSet(KEY_MAINTENANCE_REAPPLY_KEYS, oldKeys);
+        } else {
+            rollback.remove(KEY_MAINTENANCE_REAPPLY_KEYS);
+        }
+
+        rollback.commit();
+        return false;
+    }
+
+    /**
+     * Closes a maintenance transaction that has no per-key reapply debt, but only after the caller
+     * has observed the physical return to deep IDLE. Generation matching prevents an old maintenance
+     * exit from closing a newer window.
+     */
+    public synchronized boolean finishEmptyMaintenanceReapplyIfGeneration(
+            long expectedGeneration) {
+        if (!prefs.getBoolean(KEY_IN_DOZE, false)
+                || !prefs.getBoolean(KEY_MAINTENANCE_ACTIVE, false)) {
+            return false;
+        }
+
+        long currentGeneration = prefs.getLong(KEY_MAINTENANCE_GENERATION, 0L);
+        if (currentGeneration != expectedGeneration) {
+            return false;
+        }
+
+        boolean hadActive = prefs.contains(KEY_MAINTENANCE_ACTIVE);
+        boolean oldActive = prefs.getBoolean(KEY_MAINTENANCE_ACTIVE, false);
+        boolean hadKeys = prefs.contains(KEY_MAINTENANCE_REAPPLY_KEYS);
+        Set<String> oldKeys = new LinkedHashSet<>(
+                prefs.getStringSet(KEY_MAINTENANCE_REAPPLY_KEYS, Collections.emptySet()));
+
+        if (!oldKeys.isEmpty()) {
+            return false;
+        }
+
+        if (prefs.edit()
+                .putBoolean(KEY_MAINTENANCE_ACTIVE, false)
+                .remove(KEY_MAINTENANCE_REAPPLY_KEYS)
+                .commit()) {
+            return true;
+        }
+
+        // commit() changed the cached map even though persistence failed. Restore the exact old view.
+        SharedPreferences.Editor rollback = prefs.edit();
+
+        if (hadActive) {
+            rollback.putBoolean(KEY_MAINTENANCE_ACTIVE, oldActive);
+        } else {
+            rollback.remove(KEY_MAINTENANCE_ACTIVE);
+        }
+
+        if (hadKeys) {
+            rollback.putStringSet(KEY_MAINTENANCE_REAPPLY_KEYS, oldKeys);
+        } else {
+            rollback.remove(KEY_MAINTENANCE_REAPPLY_KEYS);
+        }
+
+        rollback.commit();
+        return false;
+    }
+
     /**
      * True only while an ACTIVE legacy session is waiting for its already-requested final exit to
      * become physically classifiable. Missing on older installs means false.
@@ -572,28 +875,50 @@ public class DozeStateStore {
      * both bits set. SharedPreferences writes one XML file, so the two puts land together or not
      * at all.
      */
-    public boolean commitDozeSession() {
+    public synchronized boolean commitDozeSession() {
+        boolean hadMaintenanceActive = prefs.contains(KEY_MAINTENANCE_ACTIVE);
+        boolean previousMaintenanceActive =
+                prefs.getBoolean(KEY_MAINTENANCE_ACTIVE, false);
+        boolean hadMaintenanceKeys = prefs.contains(KEY_MAINTENANCE_REAPPLY_KEYS);
+        Set<String> previousMaintenanceKeys = new LinkedHashSet<>(
+                prefs.getStringSet(KEY_MAINTENANCE_REAPPLY_KEYS, Collections.emptySet()));
+
         if (prefs.edit()
                 .putBoolean(KEY_IN_DOZE, true)
                 .putBoolean(KEY_ENTRY_PENDING, false)
                 .putBoolean(KEY_FINAL_EXIT_PENDING, false)
                 .putInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_FORCED)
+                .putBoolean(KEY_MAINTENANCE_ACTIVE, false)
+                .remove(KEY_MAINTENANCE_REAPPLY_KEYS)
                 .commit()) {
             return true;
         }
+
         // Nothing reached disk, so the durable state is still the PREPARING record written before
-        // the force was dispatched. Rewriting exactly those values restores the local view to match
-        // it and cannot destroy the record, since it is what the file should already hold. The
-        // caller must not treat the session as owned.
-        prefs.edit()
+        // the force was dispatched. Restore that ownership locally together with the exact stale
+        // maintenance representation that existed before this failed fresh-session commit.
+        SharedPreferences.Editor rollback = prefs.edit()
                 .putBoolean(KEY_IN_DOZE, false)
                 .putBoolean(KEY_ENTRY_PENDING, true)
                 .putBoolean(KEY_FINAL_EXIT_PENDING, false)
-                .putInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_UNKNOWN)
-                .commit();
+                .putInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_UNKNOWN);
+
+        if (hadMaintenanceActive) {
+            rollback.putBoolean(KEY_MAINTENANCE_ACTIVE, previousMaintenanceActive);
+        } else {
+            rollback.remove(KEY_MAINTENANCE_ACTIVE);
+        }
+
+        if (hadMaintenanceKeys) {
+            rollback.putStringSet(
+                    KEY_MAINTENANCE_REAPPLY_KEYS, previousMaintenanceKeys);
+        } else {
+            rollback.remove(KEY_MAINTENANCE_REAPPLY_KEYS);
+        }
+
+        rollback.commit();
         return false;
     }
-
     public int getSessionPhysicalMode() {
         return prefs.getInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_UNKNOWN);
     }
@@ -603,24 +928,47 @@ public class DozeStateStore {
      * a session can never exist without its physical semantics recorded beside it.
      */
     public synchronized boolean beginTunableDozeSession() {
+        boolean hadMaintenanceActive = prefs.contains(KEY_MAINTENANCE_ACTIVE);
+        boolean previousMaintenanceActive =
+                prefs.getBoolean(KEY_MAINTENANCE_ACTIVE, false);
+        boolean hadMaintenanceKeys = prefs.contains(KEY_MAINTENANCE_REAPPLY_KEYS);
+        Set<String> previousMaintenanceKeys = new LinkedHashSet<>(
+                prefs.getStringSet(KEY_MAINTENANCE_REAPPLY_KEYS, Collections.emptySet()));
+
         if (prefs.edit()
                 .putBoolean(KEY_IN_DOZE, true)
                 .putBoolean(KEY_FINAL_EXIT_PENDING, false)
                 .putInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_TUNABLE)
+                .putBoolean(KEY_MAINTENANCE_ACTIVE, false)
+                .remove(KEY_MAINTENANCE_REAPPLY_KEYS)
                 .commit()) {
             return true;
         }
-        // Nothing reached disk, but commit() has already updated the in-memory map. Put the local
-        // view back to "no session" so the caller cannot go on to apply restrictions and write an
-        // ENTER row for ownership that no recovery could ever find.
-        prefs.edit()
+
+        // Nothing reached disk, but commit() already changed the in-memory map. Restore the
+        // no-session state together with the exact stale maintenance representation that existed
+        // before this failed fresh-session claim.
+        SharedPreferences.Editor rollback = prefs.edit()
                 .putBoolean(KEY_IN_DOZE, false)
                 .putBoolean(KEY_FINAL_EXIT_PENDING, false)
-                .putInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_UNKNOWN)
-                .commit();
+                .putInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_UNKNOWN);
+
+        if (hadMaintenanceActive) {
+            rollback.putBoolean(KEY_MAINTENANCE_ACTIVE, previousMaintenanceActive);
+        } else {
+            rollback.remove(KEY_MAINTENANCE_ACTIVE);
+        }
+
+        if (hadMaintenanceKeys) {
+            rollback.putStringSet(
+                    KEY_MAINTENANCE_REAPPLY_KEYS, previousMaintenanceKeys);
+        } else {
+            rollback.remove(KEY_MAINTENANCE_REAPPLY_KEYS);
+        }
+
+        rollback.commit();
         return false;
     }
-
     /**
      * Ends an ACTIVE session and records any physical debt that ending it creates, in ONE commit.
      * <p>
@@ -639,6 +987,13 @@ public class DozeStateStore {
         boolean previousFinalExitPending = prefs.getBoolean(KEY_FINAL_EXIT_PENDING, false);
         boolean previousDebt = prefs.getBoolean(KEY_OWNED_REFORCE_PENDING, false);
 
+        boolean hadMaintenanceActive = prefs.contains(KEY_MAINTENANCE_ACTIVE);
+        boolean previousMaintenanceActive =
+                prefs.getBoolean(KEY_MAINTENANCE_ACTIVE, false);
+        boolean hadMaintenanceKeys = prefs.contains(KEY_MAINTENANCE_REAPPLY_KEYS);
+        Set<String> previousMaintenanceKeys = new LinkedHashSet<>(
+                prefs.getStringSet(KEY_MAINTENANCE_REAPPLY_KEYS, Collections.emptySet()));
+
         // Never written false. A locked-wake release or a reforce cleanup may already own the
         // shared marker, and a tunable finalization has no business discharging their debt.
         boolean debt = previousDebt || claimUnforceDebt;
@@ -648,20 +1003,37 @@ public class DozeStateStore {
                 .putInt(KEY_SESSION_PHYSICAL_MODE, SESSION_PHYSICAL_UNKNOWN)
                 .putBoolean(KEY_FINAL_EXIT_PENDING, false)
                 .putBoolean(KEY_OWNED_REFORCE_PENDING, debt)
+                .putBoolean(KEY_MAINTENANCE_ACTIVE, false)
+                .remove(KEY_MAINTENANCE_REAPPLY_KEYS)
                 .commit()) {
             return true;
         }
-        // Restore exactly what was there, not what was expected to be there: an unrelated
-        // transaction's debt must survive a failed finalization as faithfully as ownership does.
-        prefs.edit()
+
+        // Restore exactly what was there, not what was expected to be there: unrelated physical
+        // debt and the maintenance transaction must survive a failed finalization as faithfully as
+        // logical session ownership does.
+        SharedPreferences.Editor rollback = prefs.edit()
                 .putBoolean(KEY_IN_DOZE, previousInDoze)
                 .putInt(KEY_SESSION_PHYSICAL_MODE, previousMode)
                 .putBoolean(KEY_FINAL_EXIT_PENDING, previousFinalExitPending)
-                .putBoolean(KEY_OWNED_REFORCE_PENDING, previousDebt)
-                .commit();
+                .putBoolean(KEY_OWNED_REFORCE_PENDING, previousDebt);
+
+        if (hadMaintenanceActive) {
+            rollback.putBoolean(KEY_MAINTENANCE_ACTIVE, previousMaintenanceActive);
+        } else {
+            rollback.remove(KEY_MAINTENANCE_ACTIVE);
+        }
+
+        if (hadMaintenanceKeys) {
+            rollback.putStringSet(
+                    KEY_MAINTENANCE_REAPPLY_KEYS, previousMaintenanceKeys);
+        } else {
+            rollback.remove(KEY_MAINTENANCE_REAPPLY_KEYS);
+        }
+
+        rollback.commit();
         return false;
     }
-
     /**
      * Settles a successful owned reforce and records that the session now owns a physical force, in
      * ONE commit.
