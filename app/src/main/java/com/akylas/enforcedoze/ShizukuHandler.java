@@ -1,23 +1,24 @@
 package com.akylas.enforcedoze;
 
+import android.content.ComponentName;
 import android.content.Context;
+import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
+import android.os.Bundle;
 import android.os.DeadObjectException;
+import android.os.IBinder;
+import android.os.RemoteException;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 
 import rikka.shizuku.Shizuku;
-import rikka.shizuku.ShizukuRemoteProcess;
 
 public class ShizukuHandler {
     private static final String TAG = "ShizukuHandler";
@@ -25,22 +26,48 @@ public class ShizukuHandler {
     /**
      * How long a command waits for the Shizuku binder before giving up. After a process death the
      * binder is delivered asynchronously by ShizukuProvider, so a command issued immediately on
-     * service creation would otherwise be dropped with "Shizuku is not available".
+     * service creation would otherwise be dropped.
      */
     private static final long BINDER_WAIT_TIMEOUT_MS = 2_000;
     private static final long BINDER_POLL_INTERVAL_MS = 100;
+
+    /**
+     * UserService startup is a separate asynchronous step after the Shizuku binder is ready.
+     * Commands run on their own worker threads, so waiting here never blocks the UI/service thread.
+     */
+    private static final long USER_SERVICE_WAIT_TIMEOUT_MS = 5_000;
+
+    /**
+     * daemon(false) was added in Shizuku v12. We require it because privileged command ownership
+     * must end with this app process; silently falling back to a daemon service would regress the
+     * process-death guarantees established for DeviceIdle operations.
+     */
+    private static final int MIN_SHIZUKU_USER_SERVICE_VERSION = 12;
+
+    private static final String USER_SERVICE_TAG = "enforcedoze-shizuku-command";
+    private static final String USER_SERVICE_PROCESS_SUFFIX = "shizuku_cmd";
+
     /** Retained for source compatibility with the four-argument executeCommand overload. */
     private static final int DEFAULT_MAX_ATTEMPTS = 1;
+
     /**
      * Reported when Shizuku actively refused the command (authorisation revoked). Distinct from -1
-     * "never ran", so the retry loop stops instead of hammering a permission we no longer hold.
+     * "never ran", so callers do not mistake a permission failure for a normal shell failure.
      */
     public static final int REFUSED_EXIT_CODE = -2;
 
     private static ShizukuHandler instance;
-    private Context context;
+
+    private final Context context;
     private volatile boolean isShizukuAvailable = false;
-    private final CopyOnWriteArrayList<OnAvailibilityChange> availabilityListeners = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<OnAvailibilityChange> availabilityListeners =
+            new CopyOnWriteArrayList<>();
+
+    private final Object userServiceLock = new Object();
+    private final Shizuku.UserServiceArgs userServiceArgs;
+    @Nullable
+    private IShizukuCommandService commandService;
+    private boolean userServiceBinding = false;
 
     interface OnAvailibilityChange {
         void onChange(Boolean value);
@@ -68,17 +95,61 @@ public class ShizukuHandler {
     private final Shizuku.OnBinderDeadListener BINDER_DEAD_LISTENER = () -> {
         Log.w(TAG, "Shizuku binder died");
         DiagnosticLogger.w("SHIZUKU", "binder_dead");
+        clearUserServiceReference("shizuku_binder_dead");
         setAvailable(false);
+    };
+
+    private final ServiceConnection USER_SERVICE_CONNECTION = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder serviceBinder) {
+            IShizukuCommandService service =
+                    IShizukuCommandService.Stub.asInterface(serviceBinder);
+
+            synchronized (userServiceLock) {
+                if (!isShizukuAvailable
+                        || service == null
+                        || !service.asBinder().isBinderAlive()) {
+                    commandService = null;
+                    userServiceBinding = false;
+                    userServiceLock.notifyAll();
+                    return;
+                }
+
+                commandService = service;
+                userServiceBinding = false;
+                userServiceLock.notifyAll();
+            }
+
+            Log.i(TAG, "Shizuku UserService connected");
+            DiagnosticLogger.i("SHIZUKU", "user_service_connected");
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            clearUserServiceReference("user_service_disconnected");
+            Log.w(TAG, "Shizuku UserService disconnected");
+            DiagnosticLogger.w("SHIZUKU", "user_service_disconnected");
+        }
     };
 
     private ShizukuHandler(Context context) {
         this.context = context.getApplicationContext();
+
+        userServiceArgs = new Shizuku.UserServiceArgs(
+                new ComponentName(this.context, ShizukuCommandService.class))
+                .daemon(false)
+                .tag(USER_SERVICE_TAG)
+                .version(BuildConfig.VERSION_CODE)
+                .processNameSuffix(USER_SERVICE_PROCESS_SUFFIX)
+                .debuggable(BuildConfig.DEBUG);
+
         try {
             Shizuku.addBinderReceivedListenerSticky(BINDER_RECEIVED_LISTENER);
             Shizuku.addBinderDeadListener(BINDER_DEAD_LISTENER);
         } catch (Throwable t) {
             Log.e(TAG, "Unable to register Shizuku binder listeners: " + t.getMessage());
         }
+
         checkShizukuAvailability();
     }
 
@@ -92,9 +163,7 @@ public class ShizukuHandler {
     /**
      * @deprecated kept for existing call sites; prefer
      * {@link #addOnAvailabilityChangeListener(OnAvailibilityChange)} so that several components
-     * (service + UI) can observe Shizuku at the same time. The old setter replaced the single
-     * listener field, which meant opening Settings silently stopped ForceDozeService from ever
-     * learning that Shizuku had become available again.
+     * (service + UI) can observe Shizuku at the same time.
      */
     @Deprecated
     public void setOnAvailibilityChangeListener(OnAvailibilityChange listener) {
@@ -112,6 +181,10 @@ public class ShizukuHandler {
     }
 
     private void setAvailable(boolean available) {
+        if (!available) {
+            clearUserServiceReference("shizuku_unavailable");
+        }
+
         if (isShizukuAvailable != available) {
             isShizukuAvailable = available;
             notifyAvailabilityListeners();
@@ -130,18 +203,32 @@ public class ShizukuHandler {
 
     public void checkShizukuAvailability() {
         boolean available = false;
+
         try {
             if (Shizuku.pingBinder()) {
                 if (Shizuku.isPreV11()) {
                     Log.w(TAG, "Shizuku pre-v11 is not supported");
+                } else if (Shizuku.getVersion() < MIN_SHIZUKU_USER_SERVICE_VERSION) {
+                    Log.w(TAG, "Shizuku v" + Shizuku.getVersion()
+                            + " is too old; UserService non-daemon mode requires v"
+                            + MIN_SHIZUKU_USER_SERVICE_VERSION + "+");
+                    DiagnosticLogger.w(
+                            "SHIZUKU",
+                            "unsupported_server_version version=" + Shizuku.getVersion()
+                                    + " minimum=" + MIN_SHIZUKU_USER_SERVICE_VERSION);
                 } else {
-                    available = checkShizukuPermission() == PackageManager.PERMISSION_GRANTED;
+                    available =
+                            checkShizukuPermission() == PackageManager.PERMISSION_GRANTED;
                 }
             }
-        } catch (Exception e) {
+        } catch (Throwable e) {
             Log.e(TAG, "Error checking Shizuku availability: " + e.getMessage());
         }
+
         isShizukuAvailable = available;
+        if (!available) {
+            clearUserServiceReference("availability_check_failed");
+        }
     }
 
     public boolean isShizukuAvailable() {
@@ -155,7 +242,7 @@ public class ShizukuHandler {
             }
             return Shizuku.checkSelfPermission();
         } catch (Exception e) {
-            // checkSelfPermission() throws when the binder has not been received yet
+            // checkSelfPermission() throws when the binder has not been received yet.
             Log.w(TAG, "Unable to read Shizuku permission: " + e.getMessage());
             return PackageManager.PERMISSION_DENIED;
         }
@@ -178,20 +265,22 @@ public class ShizukuHandler {
     }
 
     public void removePermissionResultListener() {
-        Shizuku.removeRequestPermissionResultListener(REQUEST_PERMISSION_RESULT_LISTENER);
+        try {
+            Shizuku.removeRequestPermissionResultListener(REQUEST_PERMISSION_RESULT_LISTENER);
+        } catch (Throwable t) {
+            Log.w(TAG, "Unable to remove Shizuku permission listener: " + t.getMessage());
+        }
     }
 
     /**
-     * Returns immediately when Shizuku is connected, which is the normal case and therefore costs
-     * a wake-up nothing. Only when the binder is genuinely missing does it wait briefly - the
-     * binder arrives asynchronously after a process start, and without this a command issued in
-     * that window is dropped outright. Each command has its own thread, so this never holds
-     * another command up.
+     * Returns immediately when Shizuku is connected, which is the normal case. Only when the
+     * binder is genuinely missing does it wait briefly for ShizukuProvider's asynchronous delivery.
      */
     private boolean awaitShizukuReady() {
         if (isShizukuAvailable) {
             return true;
         }
+
         long deadline = System.currentTimeMillis() + BINDER_WAIT_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
             checkShizukuAvailability();
@@ -199,6 +288,7 @@ public class ShizukuHandler {
                 notifyAvailabilityListeners();
                 return true;
             }
+
             try {
                 TimeUnit.MILLISECONDS.sleep(BINDER_POLL_INTERVAL_MS);
             } catch (InterruptedException e) {
@@ -206,132 +296,236 @@ public class ShizukuHandler {
                 return false;
             }
         }
+
         return isShizukuAvailable;
     }
 
     /**
-     * Execute a shell command using Shizuku
-     *
-     * @param command  The command to execute
-     * @param callback Callback to receive the output
+     * Starts or waits for the one non-daemon Shizuku UserService used by every command.
+     * Multiple command threads can arrive together: exactly one starts the bind and all others wait
+     * for the same ServiceConnection. Once connected, Binder can service those calls concurrently,
+     * preserving the existing "one worker per command" behavior.
      */
-    public void executeCommand(@NonNull String command, @NonNull OnCommandResultListener callback) {
-        executeCommand(command, callback, false);
+    private boolean awaitCommandService() {
+        if (!awaitShizukuReady()) {
+            return false;
+        }
+
+        boolean startBind = false;
+
+        synchronized (userServiceLock) {
+            if (isCommandServiceAliveLocked()) {
+                return true;
+            }
+
+            commandService = null;
+            if (!userServiceBinding) {
+                userServiceBinding = true;
+                startBind = true;
+            }
+        }
+
+        if (startBind) {
+            try {
+                DiagnosticLogger.i("SHIZUKU", "user_service_bind_start");
+                Shizuku.bindUserService(userServiceArgs, USER_SERVICE_CONNECTION);
+            } catch (SecurityException e) {
+                synchronized (userServiceLock) {
+                    userServiceBinding = false;
+                    userServiceLock.notifyAll();
+                }
+                Log.e(TAG, "Shizuku refused UserService bind: " + e.getMessage());
+                DiagnosticLogger.e("SHIZUKU", "user_service_bind_refused");
+                setAvailable(false);
+                return false;
+            } catch (Throwable t) {
+                synchronized (userServiceLock) {
+                    userServiceBinding = false;
+                    userServiceLock.notifyAll();
+                }
+                Log.e(TAG, "Could not bind Shizuku UserService: " + t.getMessage());
+                DiagnosticLogger.e("SHIZUKU", "user_service_bind_failed");
+                checkShizukuAvailability();
+                return false;
+            }
+        }
+
+        long deadline = System.currentTimeMillis() + USER_SERVICE_WAIT_TIMEOUT_MS;
+
+        synchronized (userServiceLock) {
+            while (!isCommandServiceAliveLocked()) {
+                if (!userServiceBinding || !isShizukuAvailable) {
+                    return false;
+                }
+
+                long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0L) {
+                    userServiceBinding = false;
+                    DiagnosticLogger.e("SHIZUKU", "user_service_bind_timeout");
+                    return false;
+                }
+
+                try {
+                    userServiceLock.wait(remaining);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+
+            return true;
+        }
+    }
+
+    private boolean isCommandServiceAliveLocked() {
+        return commandService != null
+                && commandService.asBinder() != null
+                && commandService.asBinder().isBinderAlive();
+    }
+
+    private void clearUserServiceReference(String reason) {
+        synchronized (userServiceLock) {
+            commandService = null;
+            userServiceBinding = false;
+            userServiceLock.notifyAll();
+        }
+        DiagnosticLogger.i("SHIZUKU", "user_service_reference_cleared reason=" + reason);
     }
 
     /**
-     * Execute a shell command using Shizuku
-     *
-     * @param command     The command to execute
-     * @param callback    Callback to receive the output
-     * @param printOutput Whether to print the output to logs
+     * Execute a shell command using Shizuku.
      */
-    public void executeCommand(@NonNull String command, @Nullable OnCommandResultListener callback, boolean printOutput) {
+    public void executeCommand(
+            @NonNull String command,
+            @NonNull OnCommandResultListener callback) {
+        executeCommand(command, callback, false);
+    }
+
+    public void executeCommand(
+            @NonNull String command,
+            @Nullable OnCommandResultListener callback,
+            boolean printOutput) {
         executeCommand(command, callback, printOutput, DEFAULT_MAX_ATTEMPTS);
     }
 
     /**
-     * Execute a shell command using Shizuku on its own thread.
+     * Execute a shell command using the Shizuku UserService on its own app-process worker thread.
      *
      * @param maxAttempts ignored; kept so existing call sites still compile. Commands are issued
-     *                    once and never retried, so nothing delays the caller.
+     *                    once and never retried, so a state-changing shell command cannot run twice
+     *                    merely because a binder transition happened around its completion.
      */
-    public void executeCommand(@NonNull String command, @Nullable OnCommandResultListener callback,
-                               boolean printOutput, int maxAttempts) {
-        // One thread per command, as upstream did. Commands issued together - which is what a
-        // wake-up does - therefore run at the same time instead of queueing behind each other.
+    public void executeCommand(
+            @NonNull String command,
+            @Nullable OnCommandResultListener callback,
+            boolean printOutput,
+            int maxAttempts) {
+
         new Thread(() -> {
             CommandResult result;
-            if (!awaitShizukuReady()) {
-                Log.e(TAG, "Shizuku is not available, cannot run: " + command);
-                // Command text is not logged to the diagnostic file: it can contain package lists.
-                DiagnosticLogger.e("SHIZUKU", "command_dropped reason=unavailable");
+
+            if (!awaitCommandService()) {
+                Log.e(TAG, "Shizuku UserService is not available; command was not run");
+                DiagnosticLogger.e("SHIZUKU", "command_dropped reason=user_service_unavailable");
                 result = new CommandResult(-1, new ArrayList<>(), new ArrayList<>());
             } else {
                 result = runCommandOnce(command, printOutput);
             }
 
             if (callback != null) {
-                callback.onCommandResult(0, result.exitCode, result.stdout, result.stderr);
+                callback.onCommandResult(
+                        0,
+                        result.exitCode,
+                        result.stdout,
+                        result.stderr);
             }
         }, "ShizukuCommand").start();
     }
 
-    Method shizukuNewProcessMethod = null;
-
     private CommandResult runCommandOnce(String command, boolean printOutput) {
-        List<String> stdout = new ArrayList<>();
-        List<String> stderr = new ArrayList<>();
-        int exitCode = -1;
+        IShizukuCommandService service;
+
+        synchronized (userServiceLock) {
+            if (!isCommandServiceAliveLocked()) {
+                return new CommandResult(-1, new ArrayList<>(), new ArrayList<>());
+            }
+            service = commandService;
+        }
 
         try {
-            if (shizukuNewProcessMethod == null) {
-                Class<?> clazz = Class.forName("rikka.shizuku.Shizuku");
-                shizukuNewProcessMethod = clazz.getDeclaredMethod("newProcess", String[].class, String[].class, String.class);
-                shizukuNewProcessMethod.setAccessible(true);
-            }
-            String[] cmd = new String[]{"sh", "-c", command};
-            Object[] invokeArgs = new Object[]{cmd, null, null};
-
-            ShizukuRemoteProcess process = (ShizukuRemoteProcess) shizukuNewProcessMethod.invoke(null, invokeArgs);
-
-            // Read stdout
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    stdout.add(line);
-                    if (printOutput) {
-                        Log.i(TAG, line);
-                    }
-                }
+            Bundle resultBundle = service.execute(command);
+            if (resultBundle == null) {
+                DiagnosticLogger.e("SHIZUKU", "command_failed reason=null_result");
+                return new CommandResult(-1, new ArrayList<>(), new ArrayList<>());
             }
 
-            // Read stderr
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    stderr.add(line);
-                    if (printOutput) {
-                        Log.e(TAG, line);
-                    }
-                }
-            }
+            int exitCode =
+                    resultBundle.getInt(ShizukuCommandService.RESULT_EXIT_CODE, -1);
 
-            exitCode = process.waitFor();
-            process.destroy();
-        } catch (Exception e) {
-            Throwable cause = unwrap(e);
-            if (cause instanceof SecurityException) {
-                // The user revoked EnforceDoze's Shizuku authorisation. Retrying cannot help and
-                // would just burn the retry budget, so report it as permanently refused.
-                Log.e(TAG, "Shizuku refused the command, permission was revoked: " + cause.getMessage());
-                DiagnosticLogger.e("SHIZUKU", "command_refused reason=permission_revoked");
-                setAvailable(false);
-                return new CommandResult(REFUSED_EXIT_CODE, stdout, stderr);
-            }
-            if (cause instanceof DeadObjectException) {
-                // Shizuku's server went away (restarted, or stopped by the user). Mark it gone so
-                // the next attempt waits for the binder to come back instead of failing instantly.
-                Log.w(TAG, "Shizuku binder is dead, will wait for it to return");
-                DiagnosticLogger.w("SHIZUKU", "command_failed reason=dead_binder");
+            ArrayList<String> stdout =
+                    resultBundle.getStringArrayList(ShizukuCommandService.RESULT_STDOUT);
+            ArrayList<String> stderr =
+                    resultBundle.getStringArrayList(ShizukuCommandService.RESULT_STDERR);
+
+            if (stdout == null) {
+                stdout = new ArrayList<>();
             } else {
-                Log.e(TAG, "Error executing command: " + e.getMessage());
-                e.printStackTrace();
+                stdout = new ArrayList<>(stdout);
             }
+
+            if (stderr == null) {
+                stderr = new ArrayList<>();
+            } else {
+                stderr = new ArrayList<>(stderr);
+            }
+
+            if (printOutput) {
+                for (String line : stdout) {
+                    Log.i(TAG, line);
+                }
+                for (String line : stderr) {
+                    Log.e(TAG, line);
+                }
+            }
+
+            DiagnosticLogger.i(
+                    "SHIZUKU",
+                    "command_finished exit=" + exitCode
+                            + " stdoutLines=" + stdout.size()
+                            + " stderrLines=" + stderr.size());
+
+            return new CommandResult(exitCode, stdout, stderr);
+
+        } catch (SecurityException e) {
+            Log.e(TAG, "Shizuku refused the command, permission was revoked: " + e.getMessage());
+            DiagnosticLogger.e("SHIZUKU", "command_refused reason=permission_revoked");
+            clearUserServiceReference("permission_revoked");
+            setAvailable(false);
+            return new CommandResult(
+                    REFUSED_EXIT_CODE,
+                    new ArrayList<>(),
+                    new ArrayList<>());
+
+        } catch (DeadObjectException e) {
+            Log.w(TAG, "Shizuku UserService died while command was running");
+            DiagnosticLogger.w("SHIZUKU", "command_failed reason=user_service_dead");
+            clearUserServiceReference("command_dead_object");
             checkShizukuAvailability();
-            return new CommandResult(-1, stdout, stderr);
-        }
+            return new CommandResult(-1, new ArrayList<>(), new ArrayList<>());
 
-        return new CommandResult(exitCode, stdout, stderr);
-    }
+        } catch (RemoteException e) {
+            Log.e(TAG, "Shizuku UserService remote error: " + e.getMessage());
+            DiagnosticLogger.e("SHIZUKU", "command_failed reason=remote_exception");
+            clearUserServiceReference("command_remote_exception");
+            checkShizukuAvailability();
+            return new CommandResult(-1, new ArrayList<>(), new ArrayList<>());
 
-    /** Reflection reports the real failure as the cause of an InvocationTargetException. */
-    private static Throwable unwrap(Throwable t) {
-        Throwable cause = t;
-        while (cause.getCause() != null && cause.getCause() != cause) {
-            cause = cause.getCause();
+        } catch (Throwable t) {
+            Log.e(TAG, "Error executing Shizuku command: " + t.getMessage(), t);
+            DiagnosticLogger.e("SHIZUKU", "command_failed reason=unexpected");
+            checkShizukuAvailability();
+            return new CommandResult(-1, new ArrayList<>(), new ArrayList<>());
         }
-        return cause;
     }
 
     private static class CommandResult {
@@ -344,14 +538,13 @@ public class ShizukuHandler {
             this.stdout = stdout;
             this.stderr = stderr;
         }
-
-
     }
 
-    /**
-     * Callback interface for command execution results
-     */
     public interface OnCommandResultListener {
-        void onCommandResult(int commandCode, int exitCode, List<String> stdout, List<String> stderr);
+        void onCommandResult(
+                int commandCode,
+                int exitCode,
+                List<String> stdout,
+                List<String> stderr);
     }
 }
