@@ -49,13 +49,15 @@ public class MyApplication extends android.app.Application {
 
         DozeStateStore store = DozeStateStore.getInstance(MyApplication.context);
         boolean packageDebt = store.hasAppliedSuspendedPackages();
+        boolean notificationDebt = store.hasAppliedNotificationPackages();
         boolean stateDebt = store.hasPendingRestore();
-        if (!packageDebt && !stateDebt) {
+        if (!packageDebt && !notificationDebt && !stateDebt) {
             return;
         }
 
         DiagnosticLogger.i("RECOVERY", "app_shizuku_restore_trigger"
                 + " pendingPackages=" + store.getAppliedSuspendedPackages().size()
+                + " pendingNotifications=" + store.getAppliedNotificationPackages().size()
                 + " pendingStates=" + store.getAppliedKeys());
 
         boolean started = Utils.startForceDozeServiceAction(
