@@ -2133,47 +2133,150 @@ Final status at this documentation update:
 
 Feature push, documentation commit, merge to `master`, and master push remain separate approval-controlled actions.
 
-## Follow-up / deferred
+## Checkpoint B - public-beta state integrity
 
-Phase 0 is **not yet declared fully complete**.
-
-The maintenance async restore/reapply item is fully closed for its audited scope.
-
-Remaining public-beta runtime/state-integrity backlog:
-
-1. notification blocklist exact-set durable ownership;
-2. notification-only process-death / boot restoration;
-3. biometric real pre-state correctness;
-4. focused `setInDoze(false)` durability/lifecycle;
-5. public-beta minimum Android decision: raise `minSdkVersion 23` to `24`.
-
-These five items are the planned **Checkpoint B - public-beta state integrity** bundle.
-Create it from the validated/integrated Checkpoint A baseline on:
+Branch:
 
 `fix/public-beta-state-integrity-v1`
 
-Checkpoint B should consolidate the correction, then perform one review -> build -> M30 synthetic validation -> S26 normal-use validation -> freeze.
+Integrated base before Checkpoint B:
 
-Later/deferred items after Checkpoint B unless new evidence raises their priority:
+`bb3ce89af2082f63d51ea907e6c21320d8bd6b4d`
 
-- tunable callback absence;
-- marker-stuck recovery;
-- PREPARING phantom boot / stale-session behavior.
+Functional commit:
 
-Closed and removed from the backlog:
+`e6d82fcf769a3c0e5ed8e8eba383564d4998acb4`
 
+Subject:
+
+`Fix public beta state integrity`
+
+Merge commit:
+
+`2549a1830bef221b06950e893011c02106fca87f`
+
+Merge subject:
+
+`Merge public beta state integrity`
+
+Verified completion state:
+
+`master = origin/master = 2549a1830bef221b06950e893011c02106fca87f`
+
+Production scope:
+
+- `app/build.gradle`
+- `app/src/main/java/com/akylas/enforcedoze/BootCompleteReceiver.java`
+- `app/src/main/java/com/akylas/enforcedoze/DozeStateStore.java`
+- `app/src/main/java/com/akylas/enforcedoze/ForceDozeService.java`
+- `app/src/main/java/com/akylas/enforcedoze/MyApplication.java`
+
+What changed:
+
+- public-beta minimum Android was raised from API 23 to API 24;
+- notification restore ownership is now a durable exact package set with a monotonic generation;
+- a new notification session unions any prior unresolved debt before synchronously journaling the exact owner set and generation;
+- final notification restore compare-clears only the generation it actually settled;
+- notification-only debt participates in app/service/boot recovery gates;
+- an owned package that disappears before final restore is settled generation-safely without issuing a shell/Binder toggle for a package that no longer exists;
+- Samsung Android 10 / API 29 notification Binder fallback was device-framework-confirmed as transaction code `10`;
+- Android 16 / API 36 fallback remains code `17`;
+- biometric entry reads the real `Settings.Secure biometric_keyguard_enabled` value and accepts only exact `0` or `1`;
+- biometric pre-state `0` creates no ownership and is left disabled;
+- biometric pre-state `1` is durably recorded, restricted during Doze, and restored to `1` at final exit;
+- unknown / `null` biometric pre-state is skipped rather than guessed as enabled;
+- `setInDoze(boolean)` durable writes report success/failure and roll local representation back on commit failure rather than claiming uncommitted lifecycle state.
+
+Candidate progression:
+
+- Candidate 1 established the consolidated state-integrity design and build baseline.
+- Candidate 2 attempted notification transaction reflection on API 29, but Samsung hidden-API restrictions prevented resolution; preserved debt correctly remained fail-closed.
+- Device framework inspection of the M30 `/system/framework/framework.jar` established the exact API 29 transaction value `10`.
+- Candidate 3 added only the device-confirmed API 29 fallback while retaining the API 36 fallback and fail-closed behavior elsewhere.
+
+Frozen Candidate 3 build:
+
+`public-beta-state-integrity-candidate3-api29-notification-fallback-v1-debug.apk`
+
+SHA-256:
+
+`768460E273392B32EFD3AE992C65554C03323B405A7D088BD3041CB5BA25313D`
+
+Candidate 3 build log:
+
+`public-beta-state-integrity-candidate3-api29-notification-fallback-v1-build1.txt`
+
+SHA-256:
+
+`5D7AD8BCFAB487CA0C219342512B49B22871897E74FA1E8F06A83D2FC6A4AA2D`
+
+Candidate 3 production review:
+
+`public-beta-state-integrity-candidate3-api29-notification-fallback-v1-review.diff`
+
+SHA-256:
+
+`EB28D88F428E709A0157099E445F7044BB09E0B899DE4A5BEE270194C574244B`
+
+M30 / API 29 runtime validation:
+
+- notification exact durable ownership/generation: PASS;
+- notification disable and normal-wake restore: PASS;
+- active-session process death -> service recreation with durable ownership preserved: PASS;
+- `setInDoze(false)` final lifecycle transition: PASS;
+- notification-only reboot recovery dispatch: PASS;
+- Shizuku unavailable after boot -> physical restore fails closed and durable debt remains: PASS;
+- live Shizuku return -> automatic listener-driven retry without manual EnforceDoze restore action: PASS;
+- API 29 transaction fallback `10` -> notification final restore exit `0`: PASS;
+- missing/uninstalled owned-package settlement -> no-shell generation-aware clear: PASS;
+- biometric exact pre-state `0`: PASS;
+- biometric exact pre-state `1`: PASS;
+- biometric natural `null` / unknown: PASS;
+- original test-device preferences restored after each controlled workflow: PASS;
+- final device state neutral (`inDoze=false`, no notification/biometric debt, `mForceIdle=false`): PASS.
+
+Important runtime interpretation:
+
+- the successful M30 state-integrity suite closes the Checkpoint B implementation/runtime blocker;
+- several harness failures during development were explicitly classified as invalid tests or cleanup-only defects and did not establish production failures;
+- no additional M30 Checkpoint B runtime testing is required without genuinely new evidence;
+- a dedicated S26/API 36 integrated-master normal-use smoke remains a release-validation gate, not a reason to reopen the closed Checkpoint B implementation.
+
+Final Checkpoint B status:
+
+**FIXED / BUILT / REVIEWED / M30 RUNTIME-VALIDATED / FUNCTIONALLY COMMITTED / MERGED / MASTER-PUSHED**
+
+Do not reopen Checkpoint B notification, biometric, `setInDoze`, or min-SDK work without genuinely new evidence.
+
+## Follow-up / deferred
+
+Checkpoint B public-beta runtime/state-integrity bundle is now closed and removed from the open backlog.
+
+Next public-beta / release gates:
+
+1. run an integrated `master` S26 Ultra / API 36 normal-use smoke using Shizuku; do not convert this into another synthetic M30-style state-integrity campaign unless new evidence requires it;
+2. complete the exported-component / Tasker security pass without breaking intentional automation;
+3. perform targeted marker-stuck recovery test/triage only if the current integrated source/device state can still reproduce the concern;
+4. perform targeted PREPARING phantom-boot / stale-session triage;
+5. after the short security/release gate, proceed to rebranding, UI, release packaging, README/screenshots, signing/versioning, attribution/licenses, and GitHub release preparation.
+
+Deferred unless new evidence raises priority:
+
+- tunable callback absence is likely post-release work.
+
+Closed and removed from the runtime/state-integrity backlog:
+
+- notification exact-set durable ownership/generation;
+- notification-only process-death / boot recovery;
+- biometric real pre-state correctness;
+- focused `setInDoze(false)` durability/lifecycle;
+- public-beta minimum Android decision (`minSdkVersion 24`);
 - maintenance process-death recovery;
 - Shizuku `newProcess` deprecation/newer-Android backend risk;
 - stdout/stderr pipe deadlock risk.
 
-The focused `setInDoze(false)` durability item remains separate from the earlier
-narrow lifecycle/barrier PASS / NO FIX audit.
-
 Do not reopen closed work without new evidence.
 Do not invent a new R0 number without first checking the tracked roadmap and current documentation.
-
----
-
 # 19. TESTING RULES
 
 Always verify real state.
@@ -5066,7 +5169,7 @@ It contains additional detailed context around the late fresh force-idle settlem
 
 ---
 
-# PART IV — FINAL CONTINUATION PROMPT
+# PART IV - FINAL CONTINUATION PROMPT
 
 Copy/paste or point a new ChatGPT conversation to this section.
 
@@ -5076,21 +5179,25 @@ I am continuing a long-running Android **EnforceDoze fork** reliability/correctn
 
 `PROJECT_CONTINUATION.md` is the authoritative repository handoff. PART I and this FINAL CONTINUATION PROMPT supersede older historical snapshots in this file.
 
-Do not make me restate completed history and do not reopen closed work without new evidence.
+Do not make me restate completed history and do not reopen closed work without genuinely new evidence.
 
-### Repository / workflow
+### Repository / current integrated baseline
 
 - Fork: `rmpsdroid/EnforceDoze`
 - Local repo: `D:\AndroidProjects\EnforceDoze`
 - Application ID: `com.akylas.enforcedoze.fork`
 - Java namespace: `com.akylas.enforcedoze`
-- Current feature branch for Checkpoint A: `fix/shizuku-userservice-v1`
-- Checkpoint A functional commit:
-  `58c726714d17b40c5cb18a48cc67aec82cff7998`
-- Last known integrated `master` baseline before Checkpoint A:
-  `7ffeed4ed218ec29b18d123288c728b99191bcbb`
+- Current integrated branch: `master`
+- Current local `master`:
+  `2549a1830bef221b06950e893011c02106fca87f`
+- Current verified `origin/master`:
+  `2549a1830bef221b06950e893011c02106fca87f`
+- Checkpoint B functional commit:
+  `e6d82fcf769a3c0e5ed8e8eba383564d4998acb4`
+- Checkpoint B merge:
+  `2549a1830bef221b06950e893011c02106fca87f`
 
-Always verify Git refs read-only when reopening; a later documentation commit, merge, or push may have advanced the branch after this text was written.
+Always verify live Git refs read-only when reopening because later documentation/release work may advance `master`.
 
 ### Approval gates
 
@@ -5106,40 +5213,42 @@ Never use `git add .`.
 Stage only explicitly reviewed production/documentation files.
 Protected untracked audit/test evidence must not be deleted, cleaned, overwritten, staged, or committed casually.
 
-### Shell preference
+### Shell / execution discipline
 
-Use **PowerShell** for repository work and for ADB/device command sequences.
+Use **PowerShell** for repository work and ADB/device sequences.
 
-Repo prompt:
+Repository prompt:
 
 `PS D:\AndroidProjects\EnforceDoze>`
 
-Use ADB explicitly as:
+ADB executable:
 
 `C:\adb\adb.exe`
 
-For device test workflows, PowerShell blocks are preferred over multi-command CMD pastes.
-
+Prefer consolidated guarded PowerShell blocks/scripts.
 Do not use `monkey`.
 
 ### Devices
 
-Primary:
+Primary normal-use/release-validation device:
+
 - Samsung S26 Ultra, API 36
 - Shizuku, no root
-- normal-use validation device
-- wireless ADB port is dynamic; always verify current serial
+- wireless ADB serial changes; verify before use
+- avoid synthetic mutation unless a focused reason exists
 
-Synthetic/spare:
-- Samsung M30, Android 10 / API 29
-- ADB serial `30.30.30.70:5555`
+Synthetic/spare device:
+
+- Samsung M30 / SM-M305F
+- Android 10 / API 29
+- ADB `30.30.30.70:5555`
 - Shizuku, no root
-- safe device for controlled synthetic runtime testing
 - Spotify package `com.spotify.music`; do not uninstall it
+- PIN remains configured; do not instruct removal
 
-### Closed baseline before public-beta blocker work
+### Closed baseline before Checkpoint A
 
-Closed and integrated before Checkpoint A include:
+Closed/integrated work includes:
 
 - R0-1 dead/unreachable `leaveDoze`: PASS / no change
 - R0-3 legacy final-exit ownership
@@ -5151,136 +5260,182 @@ Closed and integrated before Checkpoint A include:
 
 Do not reopen these without new evidence.
 
-### CHECKPOINT A - SHIZUKU USERSERVICE MODERNIZATION
-
-Branch:
-
-`fix/shizuku-userservice-v1`
+### CHECKPOINT A - SHIZUKU USERSERVICE MODERNIZATION - CLOSED
 
 Functional commit:
 
 `58c726714d17b40c5cb18a48cc67aec82cff7998`
 
+Documentation commit:
+
+`090f980e1a6fedc5d1bf803873504bbf6c8ef4c6`
+
+Merge/master checkpoint:
+
+`bb3ce89af2082f63d51ea907e6c21320d8bd6b4d`
+
+Final architecture:
+
+- Shizuku command execution uses non-daemon UserService + AIDL;
+- stdout/stderr are drained concurrently;
+- Root mode remains unchanged;
+- each privileged command runs in its own `setsid` process group;
+- teardown kills the process group so privileged descendants cannot survive caller death.
+
+Checkpoint A is fully closed/integrated/pushed.
+
+### CHECKPOINT B - PUBLIC-BETA STATE INTEGRITY - CLOSED
+
+Branch:
+
+`fix/public-beta-state-integrity-v1`
+
+Integrated base:
+
+`bb3ce89af2082f63d51ea907e6c21320d8bd6b4d`
+
+Functional commit:
+
+`e6d82fcf769a3c0e5ed8e8eba383564d4998acb4`
+
 Subject:
 
-`Migrate Shizuku backend to UserService`
+`Fix public beta state integrity`
+
+Merge:
+
+`2549a1830bef221b06950e893011c02106fca87f`
+
+Subject:
+
+`Merge public beta state integrity`
 
 Production files:
 
 - `app/build.gradle`
-- `app/src/main/aidl/com/akylas/enforcedoze/IShizukuCommandService.aidl`
-- `app/src/main/java/com/akylas/enforcedoze/ShizukuCommandService.java`
-- `app/src/main/java/com/akylas/enforcedoze/ShizukuHandler.java`
+- `app/src/main/java/com/akylas/enforcedoze/BootCompleteReceiver.java`
+- `app/src/main/java/com/akylas/enforcedoze/DozeStateStore.java`
+- `app/src/main/java/com/akylas/enforcedoze/ForceDozeService.java`
+- `app/src/main/java/com/akylas/enforcedoze/MyApplication.java`
 
-Final architecture:
+Final functional behavior:
 
-- deprecated `Shizuku.newProcess()` / `ShizukuRemoteProcess` removed from the migrated backend;
-- command execution moved to Shizuku UserService through AIDL;
-- UserService is `daemon(false)`;
-- stdout/stderr are drained concurrently;
-- app-facing async callback behavior is preserved;
-- commands are not automatically retried;
-- Root mode is unchanged;
-- each privileged command runs in its own `setsid` process group;
-- UserService teardown sends group-wide `SIGKILL`, preventing privileged descendants from surviving caller death.
+- `minSdkVersion` raised to `24`;
+- durable exact notification owner set + monotonic generation;
+- prior notification debt is preserved/unioned;
+- generation-aware compare-and-clear;
+- notification-only boot/process-recreation recovery;
+- fail-closed durable debt retention while Shizuku is unavailable;
+- automatic restore retry when Shizuku returns;
+- Samsung API29 notification transaction fallback is device-framework-confirmed code `10`;
+- API36 fallback remains `17`;
+- missing/uninstalled owned package settles without issuing a shell toggle;
+- biometric pre-state accepts exact `0` or `1`, skips unknown/null;
+- pre-state `0` stays disabled without creating ownership;
+- pre-state `1` is restricted in Doze then restored exactly;
+- unknown/null is not guessed;
+- `setInDoze(boolean)` durable commit result is honored and local representation rolls back on commit failure.
 
-Candidate 1 is intentionally superseded:
+Frozen Candidate 3 APK:
 
-- app death removed the old UserService and tracked shell;
-- a spawned `sleep` child survived;
-- Candidate 1 therefore failed the active-child orphan gate and was not committed.
-
-Candidate 2 final runtime gates:
-
-- build PASS
-- UserService bind / ordinary command PASS
-- real force-idle PASS
-- Battery Saver / motion privileged commands PASS
-- app process death -> old UserService death PASS
-- app restart -> new UserService PASS
-- kill only UserService -> reconnect with same app process PASS
-- active-child orphan test PASS
-- final process-group cleanup log observed
-- `1000` stdout + `1000` stderr pipe regression PASS
-
-Validated Candidate 2 APK:
-
-`shizuku-userservice-candidate2-debug.apk`
+`public-beta-state-integrity-candidate3-api29-notification-fallback-v1-debug.apk`
 
 SHA-256:
 
-`C0D2E3366DEB7897BD7F5A30A433A22E50B0FE2B81EBFF78E29FC49BB5077614`
+`768460E273392B32EFD3AE992C65554C03323B405A7D088BD3041CB5BA25313D`
 
-Final review artifact:
+Build log SHA-256:
 
-`shizuku-userservice-candidate2-final-review.txt`
+`5D7AD8BCFAB487CA0C219342512B49B22871897E74FA1E8F06A83D2FC6A4AA2D`
 
-SHA-256:
+Final review SHA-256:
 
-`17B6A428264705DB173200D1777A3AAD8E05D6310F370450696EA3BCCF3D101F`
+`EB28D88F428E709A0157099E445F7044BB09E0B899DE4A5BEE270194C574244B`
 
-Checkpoint A functional implementation is **PASS / COMMITTED**.
-Documentation commit, feature push, merge, and master push remain independently approval-controlled until Git proves otherwise.
+M30/API29 runtime gates closed PASS:
 
-### NEXT - CHECKPOINT B: PUBLIC-BETA STATE INTEGRITY
+- exact notification durable ownership/generation
+- notification normal-wake restore
+- active-session process death/recreation
+- `setInDoze(false)` lifecycle
+- notification-only reboot recovery
+- Shizuku-unavailable fail-closed debt retention
+- automatic retry after Shizuku returns
+- device-confirmed API29 fallback transaction `10`
+- missing-package no-shell settlement
+- biometric pre-state `0`
+- biometric pre-state `1`
+- biometric natural `null`/unknown
+- exact original M30 preferences restored
+- final neutral state
 
-After Checkpoint A is integrated, create:
+Do not reopen Checkpoint B without genuinely new evidence.
 
-`fix/public-beta-state-integrity-v1`
+### Important runtime evidence interpretation
 
-Bundle these runtime/state-integrity items:
+Several test harness defects occurred during Checkpoint B and were explicitly classified separately from product behavior:
 
-1. notification exact-set ownership/generation;
-2. notification process-death/boot recovery;
-3. biometric real pre-state;
-4. `setInDoze` durability/lifecycle;
-5. raise `minSdkVersion 23` to `24`.
+- parser-only failures before execution;
+- disposable test-fixture packaging failure;
+- PID polling false-negative after real process recreation;
+- logcat/diagnostic timing false-negatives;
+- cleanup-only preference/status reporting defects.
 
-Required design direction:
+None of these established a production failure after corrected targeted validation.
 
-- notification blocklist must persist the exact package restore set with monotonic generation;
-- preserve prior debt and use generation-safe compare-and-clear;
-- boot/process recreation must restore notification-only debt;
-- biometric entry must read the real `Settings.Secure biometric_keyguard_enabled` pre-state:
-  - false -> no claim/apply;
-  - unknown -> skip rather than guessing true;
-- `setInDoze` durable writes must not silently report ownership state that was not committed;
-- min SDK becomes 24 for the public-beta line.
+### NEXT - SHORT PUBLIC-BETA / RELEASE GATE
 
-Then perform one consolidated:
-review -> build -> M30 synthetic validation -> S26 normal-use validation -> freeze.
+Do not run another broad state-integrity audit.
 
-### Later/deferred after Checkpoint B
+Proceed in this order unless stronger evidence changes priority:
 
-Unless new evidence changes priority:
+1. **S26/API36 integrated-master normal-use smoke**
+   - use Shizuku;
+   - normal use only;
+   - verify ordinary screen-off Doze entry and wake recovery;
+   - verify no obvious notification/biometric/state regression;
+   - do not reproduce the M30 synthetic suite unless new evidence requires it.
 
-- tunable callback absence
-- marker-stuck recovery
-- PREPARING phantom boot / stale-session behavior
+2. **Exported-component / Tasker security pass**
+   - review exported receivers/services/activities and intent actions;
+   - preserve intentional Tasker/automation behavior;
+   - avoid breaking same-UID/internal recovery dispatch.
 
-Also complete the pre-beta exported-component / Tasker security pass without breaking intentional automation.
+3. **Targeted deferred runtime concerns**
+   - marker-stuck recovery test/triage if still reproducible;
+   - PREPARING phantom boot / stale-session triage.
 
-### Public release / rebranding after runtime blockers
+4. **Tunable callback absence**
+   - likely post-release unless new evidence raises its priority.
 
-Once Checkpoint B and the short security/release pass are complete, proceed to:
-
-- app name / icon / branding strategy
-- Material 3 UI redesign
-- dashboard/status cards
-- onboarding
-- settings cleanup
-- About/licenses
-- release versioning/signing
-- install/upgrade compatibility
-- release APK hashes
-- polished GitHub README
-- screenshots
-- Shizuku/root setup documentation
-- attribution/upstream licensing
-- GitHub release preparation
+5. **Public release / rebranding**
+   - app name/icon/branding
+   - Material 3 UI/dashboard/onboarding/settings cleanup
+   - About/licenses
+   - release versioning/signing/install-upgrade checks
+   - final release APK hashes
+   - README/screenshots
+   - Shizuku/root setup documentation
+   - attribution/upstream licensing
+   - GitHub release preparation
 
 Favor consolidated checkpoints over endless micro-audits:
 
 `understand complete issue -> consolidated correction -> review -> build -> runtime test -> move on`
+
+### Current documentation action
+
+Checkpoint B code is already committed, merged, and pushed.
+
+This `PROJECT_CONTINUATION.md` update is documentation-only.
+
+Before any documentation commit:
+
+- review the generated documentation diff;
+- confirm `PROJECT_CONTINUATION.md` is the only tracked modification;
+- do not stage protected evidence;
+- require a fresh exact `approve commit`.
+
+After a documentation commit, do not infer approval to push it. A later master push still requires exact `approve push master`.
 
 # END OF AUTHORITATIVE CONTINUATION FILE
