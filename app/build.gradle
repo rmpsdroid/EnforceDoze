@@ -24,7 +24,7 @@ android {
         // replacing it. The Java/resource namespace above deliberately stays unchanged, so class
         // names and the R class are untouched - only the on-device package identity differs.
         applicationId "com.akylas.enforcedoze.fork"
-        minSdkVersion 23
+        minSdkVersion 24
         targetSdkVersion 36
         versionCode 86
         versionName "1.10.2"

@@ -105,6 +105,21 @@ public class DozeStateStore {
     private static final String KEY_APPLIED_SUSPENDED_PACKAGES_GENERATION =
             "appliedSuspendedPackagesGeneration";
 
+    /**
+     * Exact packages whose notification permission this app changed for the current notification
+     * transaction. Kept separate from the live user blocklist so edits made while Doze is active
+     * cannot change what an older session owes on restore.
+     */
+    private static final String KEY_APPLIED_NOTIFICATION_PACKAGES =
+            "appliedNotificationPackages";
+
+    /**
+     * Monotonic owner for {@link #KEY_APPLIED_NOTIFICATION_PACKAGES}. A stale final-enable callback
+     * can clear only the generation it actually restored.
+     */
+    private static final String KEY_APPLIED_NOTIFICATION_PACKAGES_GENERATION =
+            "appliedNotificationPackagesGeneration";
+
     private static volatile DozeStateStore instance;
 
     private final SharedPreferences prefs;
@@ -417,6 +432,153 @@ public class DozeStateStore {
     public boolean hasAppliedSuspendedPackages() {
         return !getSuspendedPackageSession().isEmpty();
     }
+    /**
+     * Atomic view of the durable notification ownership set and its monotonic generation.
+     */
+    public static final class NotificationPackageSession {
+        public final long generation;
+        /** Unmodifiable copy - never the live SharedPreferences instance. */
+        public final Set<String> packages;
+
+        NotificationPackageSession(long generation, Set<String> packages) {
+            this.generation = generation;
+            this.packages = packages;
+        }
+
+        public boolean isEmpty() {
+            return packages.isEmpty();
+        }
+    }
+
+    /**
+     * Journals the exact notification package set before any physical disable command is issued.
+     * Existing debt is carried forward so a failed older restore can never be lost by a fresh
+     * transaction. Set and generation land in one synchronous commit.
+     *
+     * @return the durable snapshot to dispatch, or null when the journal could not be committed
+     */
+    public synchronized NotificationPackageSession beginNotificationPackageSession(
+            Collection<String> packages) {
+        boolean hadPackages = prefs.contains(KEY_APPLIED_NOTIFICATION_PACKAGES);
+        Set<String> previousPackages = new LinkedHashSet<>(
+                prefs.getStringSet(
+                        KEY_APPLIED_NOTIFICATION_PACKAGES,
+                        new LinkedHashSet<String>()));
+        boolean hadGeneration = prefs.contains(KEY_APPLIED_NOTIFICATION_PACKAGES_GENERATION);
+        long previousGeneration =
+                prefs.getLong(KEY_APPLIED_NOTIFICATION_PACKAGES_GENERATION, 0L);
+
+        Set<String> union = new LinkedHashSet<>(previousPackages);
+        if (packages != null) {
+            union.addAll(packages);
+        }
+
+        long nextGeneration = previousGeneration + 1L;
+        if (prefs.edit()
+                .putStringSet(
+                        KEY_APPLIED_NOTIFICATION_PACKAGES,
+                        new LinkedHashSet<>(union))
+                .putLong(KEY_APPLIED_NOTIFICATION_PACKAGES_GENERATION, nextGeneration)
+                .commit()) {
+            logToLogcat(
+                    TAG,
+                    "Began notification package session generation=" + nextGeneration
+                            + " owned=" + union.size()
+                            + " previouslyOwed=" + previousPackages.size());
+            return new NotificationPackageSession(
+                    nextGeneration,
+                    Collections.unmodifiableSet(new LinkedHashSet<>(union)));
+        }
+
+        SharedPreferences.Editor rollback = prefs.edit();
+        if (hadPackages) {
+            rollback.putStringSet(
+                    KEY_APPLIED_NOTIFICATION_PACKAGES,
+                    new LinkedHashSet<>(previousPackages));
+        } else {
+            rollback.remove(KEY_APPLIED_NOTIFICATION_PACKAGES);
+        }
+        if (hadGeneration) {
+            rollback.putLong(
+                    KEY_APPLIED_NOTIFICATION_PACKAGES_GENERATION,
+                    previousGeneration);
+        } else {
+            rollback.remove(KEY_APPLIED_NOTIFICATION_PACKAGES_GENERATION);
+        }
+        rollback.commit();
+
+        logToLogcat(
+                TAG,
+                "Could not durably begin notification package session; disable must not be dispatched");
+        return null;
+    }
+
+    public synchronized NotificationPackageSession getNotificationPackageSession() {
+        long generation =
+                prefs.getLong(KEY_APPLIED_NOTIFICATION_PACKAGES_GENERATION, 0L);
+        Set<String> packages = new LinkedHashSet<>(
+                prefs.getStringSet(
+                        KEY_APPLIED_NOTIFICATION_PACKAGES,
+                        new LinkedHashSet<String>()));
+        return new NotificationPackageSession(
+                generation,
+                Collections.unmodifiableSet(packages));
+    }
+
+    public Set<String> getAppliedNotificationPackages() {
+        return getNotificationPackageSession().packages;
+    }
+
+    public boolean hasAppliedNotificationPackages() {
+        return !getNotificationPackageSession().isEmpty();
+    }
+
+    /**
+     * Compare-and-clear for notification ownership. The generation counter is deliberately retained
+     * so it can only move forward and a stale completion can never match a later transaction.
+     */
+    public synchronized boolean clearAppliedNotificationPackagesIfGeneration(
+            long expectedGeneration) {
+        long current =
+                prefs.getLong(KEY_APPLIED_NOTIFICATION_PACKAGES_GENERATION, 0L);
+        if (current != expectedGeneration) {
+            logToLogcat(
+                    TAG,
+                    "Not clearing notification package record: expected generation "
+                            + expectedGeneration + " but current owner is " + current);
+            return false;
+        }
+
+        boolean hadPackages = prefs.contains(KEY_APPLIED_NOTIFICATION_PACKAGES);
+        Set<String> previousPackages = new LinkedHashSet<>(
+                prefs.getStringSet(
+                        KEY_APPLIED_NOTIFICATION_PACKAGES,
+                        new LinkedHashSet<String>()));
+
+        if (prefs.edit().remove(KEY_APPLIED_NOTIFICATION_PACKAGES).commit()) {
+            logToLogcat(
+                    TAG,
+                    "Cleared notification package record for generation "
+                            + expectedGeneration);
+            return true;
+        }
+
+        SharedPreferences.Editor rollback = prefs.edit();
+        if (hadPackages) {
+            rollback.putStringSet(
+                    KEY_APPLIED_NOTIFICATION_PACKAGES,
+                    new LinkedHashSet<>(previousPackages));
+        } else {
+            rollback.remove(KEY_APPLIED_NOTIFICATION_PACKAGES);
+        }
+        rollback.commit();
+
+        logToLogcat(
+                TAG,
+                "Could not durably clear notification package record for generation "
+                        + expectedGeneration);
+        return false;
+    }
 
     /**
      * Compare-and-clear. The generation is checked inside this monitor rather than by the caller,
@@ -490,13 +652,41 @@ public class DozeStateStore {
      * Survives process death so a recreated service knows it was mid-Doze and has to restore,
      * even when the screen turned back on while the process was gone.
      */
-    public synchronized void setInDoze(boolean inDoze) {
+        public synchronized boolean setInDoze(boolean inDoze) {
+        boolean hadInDoze = prefs.contains(KEY_IN_DOZE);
+        boolean previousInDoze = prefs.getBoolean(KEY_IN_DOZE, false);
+        boolean hadFinalExitPending = prefs.contains(KEY_FINAL_EXIT_PENDING);
+        boolean previousFinalExitPending =
+                prefs.getBoolean(KEY_FINAL_EXIT_PENDING, false);
+
         SharedPreferences.Editor editor = prefs.edit()
                 .putBoolean(KEY_IN_DOZE, inDoze);
         if (!inDoze) {
             editor.putBoolean(KEY_FINAL_EXIT_PENDING, false);
         }
-        editor.commit();
+
+        if (editor.commit()) {
+            return true;
+        }
+
+        // commit() changes the process-local SharedPreferences cache before reporting disk failure.
+        // Put the exact previous representation back so callers do not observe ownership as cleared
+        // when durable storage still contains the older state.
+        SharedPreferences.Editor rollback = prefs.edit();
+        if (hadInDoze) {
+            rollback.putBoolean(KEY_IN_DOZE, previousInDoze);
+        } else {
+            rollback.remove(KEY_IN_DOZE);
+        }
+        if (hadFinalExitPending) {
+            rollback.putBoolean(KEY_FINAL_EXIT_PENDING, previousFinalExitPending);
+        } else {
+            rollback.remove(KEY_FINAL_EXIT_PENDING);
+        }
+        rollback.commit();
+
+        logToLogcat(TAG, "Could not durably set inDoze=" + inDoze);
+        return false;
     }
 
     public boolean isInDoze() {

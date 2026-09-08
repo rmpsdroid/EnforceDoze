@@ -267,9 +267,29 @@ public class ForceDozeService extends Service {
      */
     private final Object notificationOpLock = new Object();
     private boolean notificationOpInFlight = false;
-    private String pendingNotificationCommand = null;
-    private boolean pendingNotificationEnabled = false;
-    private int pendingNotificationCount = 0;
+
+    private static final class NotificationOp {
+        final String command;
+        final boolean enabled;
+        final int count;
+        final long generation;
+        final boolean finalRestore;
+
+        NotificationOp(
+                String command,
+                boolean enabled,
+                int count,
+                long generation,
+                boolean finalRestore) {
+            this.command = command;
+            this.enabled = enabled;
+            this.count = count;
+            this.generation = generation;
+            this.finalRestore = finalRestore;
+        }
+    }
+
+    private NotificationOp pendingNotificationOp = null;
 
     /**
      * Motion sensors get the same treatment as the other physical toggles, and for the same
@@ -957,7 +977,8 @@ public class ForceDozeService extends Service {
 
         boolean inDoze = dozeStateStore.isInDoze();
         boolean pending = dozeStateStore.hasPendingRestore()
-                || dozeStateStore.hasAppliedSuspendedPackages();
+                || dozeStateStore.hasAppliedSuspendedPackages()
+                || dozeStateStore.hasAppliedNotificationPackages();
         if (!inDoze && !pending) {
             log("Call started (" + reason + ") but no Doze session is owned, nothing to release");
             return;
@@ -1008,7 +1029,7 @@ public class ForceDozeService extends Service {
             log("Call ended but another call is still active, not entering Doze");
             return;
         }
-        if (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasPendingRestore()) {
+        if (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasAppliedNotificationPackages() || dozeStateStore.hasPendingRestore()) {
             // The previous session has not finished unwinding. Entering again would let
             // suspendPackagesForDoze() overwrite the journal with the current blocklist and lose
             // any package the failed restore still owes the user. Leave it to the next SCREEN_OFF.
@@ -1176,7 +1197,7 @@ public class ForceDozeService extends Service {
         // Recovery keeps priority. A fresh session started over an unfinished restore would
         // allocate a new package generation and lose whatever that restore still owes, so the
         // intent stays armed and the completion of the last debt tries again.
-        if (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasPendingRestore()) {
+        if (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasAppliedNotificationPackages() || dozeStateStore.hasPendingRestore()) {
             DiagnosticLogger.i("DOZE", "entry_retry_skipped reason=pending_restore"
                     + " pendingStates=" + dozeStateStore.getAppliedKeys().size()
                     + " suspendedPackages=" + dozeStateStore.getAppliedSuspendedPackages().size());
@@ -1215,6 +1236,7 @@ public class ForceDozeService extends Service {
         boolean screenOn = Utils.isScreenOn(getApplicationContext());
         boolean inDoze = dozeStateStore.isInDoze();
         boolean hasPackages = dozeStateStore.hasAppliedSuspendedPackages();
+        boolean hasNotifications = dozeStateStore.hasAppliedNotificationPackages();
         boolean hasStates = dozeStateStore.hasPendingRestore();
         boolean entryPending = dozeStateStore.isEntryPending();
         boolean ownedReforcePending = dozeStateStore.isOwnedReforcePending();
@@ -1227,7 +1249,7 @@ public class ForceDozeService extends Service {
         // entryPending is a fourth independent reason to recover: an interrupted force-idle owns no
         // session and no marker, so without this term the one state that can leave the device
         // physically forced would return RECOVERY_NONE and never be resolved.
-        if (!inDoze && !hasPackages && !hasStates && !entryPending && !ownedReforcePending) {
+        if (!inDoze && !hasPackages && !hasNotifications && !hasStates && !entryPending && !ownedReforcePending) {
             log("RECOVERY_NONE: service recreated with nothing pending");
             return;
         }
@@ -1236,9 +1258,13 @@ public class ForceDozeService extends Service {
                 + " entryPending=" + entryPending
                 + " ownedReforcePending=" + ownedReforcePending
                 + " pendingPackages=" + (hasPackages ? dozeStateStore.getAppliedSuspendedPackages().size() : 0)
+                + " pendingNotifications=" + (hasNotifications
+                ? dozeStateStore.getAppliedNotificationPackages().size() : 0)
                 + " pendingStates=" + dozeStateStore.getAppliedKeys());
         log("RECOVERY_CHECK screenOn=" + screenOn + " inDoze=" + inDoze
                 + " pendingPackages=" + (hasPackages ? dozeStateStore.getAppliedSuspendedPackages().size() : 0)
+                + " pendingNotifications=" + (hasNotifications
+                ? dozeStateStore.getAppliedNotificationPackages().size() : 0)
                 + " pendingStates=" + dozeStateStore.getAppliedKeys());
 
         applyRecoveryPolicy("RECOVERY", "service recreated");
@@ -1416,7 +1442,11 @@ public class ForceDozeService extends Service {
      */
     private void handleRestoreStateRequest(int startId) {
         DiagnosticLogger.i("RECOVERY", "ACTION_RESTORE_STATE received");
-        dozeStateStore.setInDoze(false);
+        if (!dozeStateStore.setInDoze(false)) {
+            DiagnosticLogger.e(
+                    "RECOVERY",
+                    "restore_state_inDoze_clear_failed physicalRestoreStillAttempted=true");
+        }
         // ACTION_RESTORE_STATE means "put back everything EnforceDoze owns", so the persisted
         // suspended packages are part of it. Restoring only the radios left a device that booted
         // mid-Doze with its blocklisted apps still greyed out.
@@ -1450,7 +1480,7 @@ public class ForceDozeService extends Service {
         }
 
         synchronized (notificationOpLock) {
-            if (notificationOpInFlight || pendingNotificationCommand != null) {
+            if (notificationOpInFlight || pendingNotificationOp != null) {
                 return true;
             }
         }
@@ -1588,6 +1618,7 @@ public class ForceDozeService extends Service {
         boolean pendingFinalExit = dozeStateStore.isFinalExitPending();
         boolean finishedRestoreDebt = !dozeStateStore.isInDoze()
                 && (dozeStateStore.hasAppliedSuspendedPackages()
+                || dozeStateStore.hasAppliedNotificationPackages()
                 || dozeStateStore.hasPendingRestore());
         if (selectedBackendAvailable && (pendingFinalExit || finishedRestoreDebt)) {
             DiagnosticLogger.i("RECOVERY", "settings_reload_retry_recovery"
@@ -2354,7 +2385,7 @@ public class ForceDozeService extends Service {
         // still owes: entering would allocate a new package generation and lose whatever the
         // unfinished restore has not yet given back. The intent survives so the completion of that
         // debt gets the chance instead.
-        if (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasPendingRestore()) {
+        if (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasAppliedNotificationPackages() || dozeStateStore.hasPendingRestore()) {
             DiagnosticLogger.i("DOZE", "owned_reforce_settled_continuation=recover_pending_restore");
             applyRecoveryPolicy("OWNED_REFORCE_RECOVERY", "owned reforce debt settled");
             return;
@@ -2392,7 +2423,7 @@ public class ForceDozeService extends Service {
         if (unresolved) {
             return;
         }
-        if (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasPendingRestore()) {
+        if (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasAppliedNotificationPackages() || dozeStateStore.hasPendingRestore()) {
             return;
         }
         if (!debtFreshEntryDeferred.compareAndSet(true, false)) {
@@ -2855,7 +2886,7 @@ public class ForceDozeService extends Service {
             }
             // Same rule as the privileged path: no fresh session over an unfinished restore, or the
             // pre-Doze values this session records are the previous session's restrictions.
-            if (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasPendingRestore()) {
+            if (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasAppliedNotificationPackages() || dozeStateStore.hasPendingRestore()) {
                 log("Restore debt is still outstanding, skipping the fallback entry");
                 DiagnosticLogger.i("DOZE", "entry_refused reason=restore_debt_outstanding"
                         + " mode=tunable_fallback");
@@ -3004,7 +3035,7 @@ public class ForceDozeService extends Service {
             // The session would then record "Wi-Fi was off" and honour it for ever. Checked here,
             // inside the barrier and after the entry has otherwise been proven current, so nothing
             // can slip between the check and the claim.
-            if (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasPendingRestore()) {
+            if (dozeStateStore.hasAppliedSuspendedPackages() || dozeStateStore.hasAppliedNotificationPackages() || dozeStateStore.hasPendingRestore()) {
                 log("Restore debt is still outstanding, skipping fresh entry");
                 DiagnosticLogger.i("DOZE", "entry_refused reason=restore_debt_outstanding"
                         + " pendingStates=" + dozeStateStore.getAppliedKeys().size()
@@ -3753,7 +3784,23 @@ public class ForceDozeService extends Service {
                         toBlock.add(pkg);
                     }
                 }
-                setNotificationsEnabledForPackages(toBlock, false);
+
+                if (!toBlock.isEmpty()) {
+                    DozeStateStore.NotificationPackageSession notificationSession =
+                            dozeStateStore.beginNotificationPackageSession(toBlock);
+                    if (notificationSession == null) {
+                        Log.e(TAG, "Notification journal commit failed; disable not dispatched");
+                        DiagnosticLogger.e(
+                                "NOTIF",
+                                "journal_failed disableNotDispatched=true count=" + toBlock.size());
+                    } else {
+                        setNotificationsEnabledForPackages(
+                                notificationSession.packages,
+                                false,
+                                notificationSession.generation,
+                                false);
+                    }
+                }
             }
     }
 
@@ -3799,23 +3846,23 @@ public class ForceDozeService extends Service {
         enterDozeHandleNetwork(context, sessionEpoch);
     }
 
-    /**
-     * Undoes the notification blocking. Package un-suspension is handled separately by
-     * {@link #restoreSuspendedPackages(String)}, which is driven by the persisted set rather than
-     * the live blocklist and runs first on the wake path.
+        /**
+     * Restores exactly the notification packages durably owned by the old transaction. The live
+     * blocklist is intentionally irrelevant: it may have been edited after the disable landed.
      */
     private void reEnableBlockedNotifications() {
-        if (dozeNotificationBlocklist.size() == 0) {
+        DozeStateStore.NotificationPackageSession notificationSession =
+                dozeStateStore.getNotificationPackageSession();
+        if (notificationSession.isEmpty()) {
             return;
         }
-        log("Re-enabling notifications for apps in the Notification blocklist");
-        List<String> toUnblock = new ArrayList<>();
-        for (String pkg : dozeNotificationBlocklist) {
-            if (!dozeAppBlocklist.contains(pkg)) {
-                toUnblock.add(pkg);
-            }
-        }
-        setNotificationsEnabledForPackages(toUnblock, true);
+
+        log("Re-enabling notifications for the durably owned notification package set");
+        setNotificationsEnabledForPackages(
+                notificationSession.packages,
+                true,
+                notificationSession.generation,
+                true);
     }
 
     public void exitDoze(String newDeviceIdleState) {
@@ -4496,40 +4543,89 @@ public class ForceDozeService extends Service {
         }
     }
 
-    public void setNotificationEnabledForPackage(String packageName, boolean enabled) {
+        public void setNotificationEnabledForPackage(String packageName, boolean enabled) {
         setNotificationsEnabledForPackages(Collections.singletonList(packageName), enabled);
     }
 
+    public void setNotificationsEnabledForPackages(
+            Collection<String> packageNames,
+            boolean enabled) {
+        setNotificationsEnabledForPackages(packageNames, enabled, 0L, false);
+    }
+
     /**
-     * Toggles notifications for a whole set of packages using a single shell invocation.
-     * <p>
-     * The old per-package version called getInstalledPackages(GET_META_DATA) - a full enumeration
-     * of every app on the device, several hundred of them on One UI - once for <em>each</em>
-     * package, just to look up one uid. The uid is now read directly.
+     * Builds one notification Binder command for the exact package set. A durable final restore
+     * carries its generation through the serializer so only the generation physically restored by
+     * that callback may be retired.
      */
-    public void setNotificationsEnabledForPackages(Collection<String> packageNames, boolean enabled) {
+    private void setNotificationsEnabledForPackages(
+            Collection<String> packageNames,
+            boolean enabled,
+            long generation,
+            boolean finalRestore) {
         if (packageNames == null || packageNames.isEmpty()) {
+            if (enabled && finalRestore) {
+                settleEmptyNotificationRestore(generation, "empty durable set");
+            }
             return;
         }
 
         int transaction = 0;
         try {
-            @SuppressLint("PrivateApi") Field field = Class.forName("android.app.INotificationManager").getDeclaredClasses()[0].getDeclaredField("TRANSACTION_setNotificationsEnabledForPackage");
-            field.setAccessible(true);
-            transaction = field.getInt(null);
-        } catch (ClassNotFoundException e) {
+            @SuppressLint("PrivateApi")
+            Class<?> notificationManagerClass =
+                    Class.forName("android.app.INotificationManager");
+
+            // AIDL-generated interfaces can expose more than one nested class (for example
+            // Default and Stub), and reflection does not guarantee declaration-array ordering.
+            // The transaction constant belongs to Stub, so search every nested class instead of
+            // assuming the first declared nested class is the one that owns it.
+            for (Class<?> nestedClass : notificationManagerClass.getDeclaredClasses()) {
+                try {
+                    Field field = nestedClass.getDeclaredField(
+                            "TRANSACTION_setNotificationsEnabledForPackage");
+                    field.setAccessible(true);
+                    transaction = field.getInt(null);
+                    if (transaction > 0) {
+                        break;
+                    }
+                } catch (NoSuchFieldException ignored) {
+                    // Keep looking: this nested class is not the generated Binder Stub.
+                }
+            }
+        } catch (ClassNotFoundException | IllegalAccessException e) {
             log(e.toString());
-        } catch (NoSuchFieldException e2) {
-            log(e2.toString());
-        } catch (IllegalAccessException e3) {
-            log(e3.toString());
+        } catch (RuntimeException e) {
+            // Hidden-API/reflection enforcement must fail closed: no Binder command is built with
+            // an unknown transaction number, and durable restore debt is retained for recovery.
+            log(e.toString());
+        }
+
+        if (transaction == 0 && Build.VERSION.SDK_INT == 29) {
+            // On Android 10 the generated Stub field is hidden from modern-target apps.
+            // The M30 SM-M305F API29 framework DEX confirms this transaction is exactly 10.
+            transaction = 10;
+            Log.w(TAG, "Using Android 10 notification Binder transaction fallback");
+            DiagnosticLogger.w(
+                    "NOTIF",
+                    "transaction_fallback sdk=29 code=10 source=device_framework");
         }
         if (transaction == 0 && Build.VERSION.SDK_INT == 36) {
             transaction = 17;
             Log.w(TAG, "Using Android 16 notification Binder transaction fallback");
+            DiagnosticLogger.w(
+                    "NOTIF",
+                    "transaction_fallback sdk=36 code=17");
         }
         if (transaction == 0) {
             Log.e(TAG, "Could not resolve the notification transaction code, skipping");
+            DiagnosticLogger.e(
+                    "NOTIF",
+                    "transaction_resolution_failed sdk=" + Build.VERSION.SDK_INT
+                            + " enabled=" + enabled
+                            + " finalRestore=" + finalRestore
+                            + " gen=" + generation
+                            + " debtKept=" + (generation != 0L));
             return;
         }
 
@@ -4541,38 +4637,100 @@ public class ForceDozeService extends Service {
             }
             try {
                 int uid = getPackageManager().getApplicationInfo(packageName, 0).uid;
-                commands.add(String.format(Locale.US, "service call notification %d s16 %s i32 %d i32 %d",
-                        transaction, packageName, uid, enabled ? 1 : 0));
+                commands.add(String.format(
+                        Locale.US,
+                        "service call notification %d s16 %s i32 %d i32 %d",
+                        transaction,
+                        packageName,
+                        uid,
+                        enabled ? 1 : 0));
             } catch (PackageManager.NameNotFoundException e) {
                 log("Skipping notifications for '" + packageName + "', it is not installed");
             }
         }
 
         if (commands.isEmpty()) {
+            if (enabled && finalRestore) {
+                settleEmptyNotificationRestore(generation, "no installed packages");
+            }
             return;
         }
-        log((enabled ? "Turning on " : "Turning off ") + "notifications for " + commands.size() + " package(s)");
-        requestNotificationState(TextUtils.join("; ", commands), enabled, commands.size());
+
+        log((enabled ? "Turning on " : "Turning off ")
+                + "notifications for " + commands.size() + " package(s)");
+        requestNotificationState(
+                TextUtils.join("; ", commands),
+                enabled,
+                commands.size(),
+                generation,
+                finalRestore);
+    }
+
+    private void settleEmptyNotificationRestore(long generation, String reason) {
+        if (generation == 0L) {
+            return;
+        }
+
+        if (dozeStateStore.isInDoze()) {
+            DiagnosticLogger.w(
+                    "NOTIF",
+                    "final_restore_stale reason=active_session gen=" + generation);
+            return;
+        }
+
+        if (dozeStateStore.clearAppliedNotificationPackagesIfGeneration(generation)) {
+            DiagnosticLogger.i(
+                    "NOTIF",
+                    "final_restore_settled_without_shell gen=" + generation
+                            + " reason=" + reason);
+            maybeContinueAfterNotificationDebtSettled(reason);
+        } else {
+            DiagnosticLogger.w(
+                    "NOTIF",
+                    "final_restore_not_cleared gen=" + generation
+                            + " reason=" + reason);
+        }
+
+        maybeStopDisabledRecoveryService("notification restore settled without shell");
+    }
+
+    private void maybeContinueAfterNotificationDebtSettled(String reason) {
+        if (dozeStateStore.hasAppliedSuspendedPackages()
+                || dozeStateStore.hasAppliedNotificationPackages()
+                || dozeStateStore.hasPendingRestore()) {
+            return;
+        }
+
+        boolean unresolved;
+        synchronized (physicalEntryLock) {
+            unresolved = isOwnedReforceUnresolved();
+        }
+        if (unresolved) {
+            return;
+        }
+
+        if (debtFreshEntryDeferred.compareAndSet(true, false)) {
+            DiagnosticLogger.i(
+                    "DOZE",
+                    "debt_entry_retried reason=notification_" + reason);
+            reevaluateEntryAfterCleanup();
+        }
     }
 
     /**
-     * Queues a notification toggle. Returns immediately; the command itself is dispatched by
-     * {@link #dispatchPendingNotificationOp()}, either now or after whatever is already running has
-     * genuinely finished.
-     *
-     * @param command the fully built shell invocation for this exact package set and target state
-     * @param enabled the target, for diagnostics only
-     * @param count   how many packages the command covers, for diagnostics only
+     * Latest-wins notification serializer. An in-flight operation always completes on its real
+     * callback. The queued operation carries the complete durable generation identity.
      */
-    private void requestNotificationState(String command, boolean enabled, int count) {
+    private void requestNotificationState(
+            String command,
+            boolean enabled,
+            int count,
+            long generation,
+            boolean finalRestore) {
         boolean dispatchNow;
         synchronized (notificationOpLock) {
-            // Replacing a queued request is safe: it never ran, so nothing physical is undone by
-            // dropping it. An in-flight command is untouched - it keeps its own callback and is
-            // never declared finished early.
-            pendingNotificationCommand = command;
-            pendingNotificationEnabled = enabled;
-            pendingNotificationCount = count;
+            pendingNotificationOp =
+                    new NotificationOp(command, enabled, count, generation, finalRestore);
             dispatchNow = !notificationOpInFlight;
             if (dispatchNow) {
                 notificationOpInFlight = true;
@@ -4584,29 +4742,65 @@ public class ForceDozeService extends Service {
     }
 
     private void dispatchPendingNotificationOp() {
-        final String command;
-        final boolean enabled;
-        final int count;
+        final NotificationOp op;
         synchronized (notificationOpLock) {
-            if (pendingNotificationCommand == null) {
+            if (pendingNotificationOp == null) {
                 notificationOpInFlight = false;
                 return;
             }
-            command = pendingNotificationCommand;
-            enabled = pendingNotificationEnabled;
-            count = pendingNotificationCount;
-            pendingNotificationCommand = null;
+            op = pendingNotificationOp;
+            pendingNotificationOp = null;
             notificationOpInFlight = true;
         }
 
-        // The lock is released before the command is issued; only the slot bookkeeping is guarded.
-        DiagnosticLogger.i("NOTIF", "toggle_start enabled=" + enabled + " count=" + count);
-        executeCommandWithRoot(command, (commandCode, exitCode, stdout, stderr) -> {
-            DiagnosticLogger.i("NOTIF", "toggle_finished enabled=" + enabled + " count=" + count
-                    + " exit=" + exitCode);
-            // Only the real callback releases the next request, so ordering follows completion
-            // rather than dispatch. Works identically on the root backend.
+        DiagnosticLogger.i(
+                "NOTIF",
+                "toggle_start enabled=" + op.enabled
+                        + " count=" + op.count
+                        + " gen=" + op.generation
+                        + " finalRestore=" + op.finalRestore);
+
+        executeCommandWithRoot(op.command, (commandCode, exitCode, stdout, stderr) -> {
+            DiagnosticLogger.i(
+                    "NOTIF",
+                    "toggle_finished enabled=" + op.enabled
+                            + " count=" + op.count
+                            + " gen=" + op.generation
+                            + " finalRestore=" + op.finalRestore
+                            + " exit=" + exitCode);
+
+            boolean settled = false;
+            if (op.finalRestore && exitCode == 0) {
+                if (dozeStateStore.isInDoze()) {
+                    DiagnosticLogger.w(
+                            "NOTIF",
+                            "final_restore_stale reason=active_session gen=" + op.generation);
+                } else if (!dozeStateStore.clearAppliedNotificationPackagesIfGeneration(
+                        op.generation)) {
+                    DiagnosticLogger.w(
+                            "NOTIF",
+                            "final_restore_stale reason=generation_or_commit gen="
+                                    + op.generation);
+                } else {
+                    settled = true;
+                    DiagnosticLogger.i(
+                            "NOTIF",
+                            "final_restore_success count=" + op.count
+                                    + " gen=" + op.generation);
+                }
+            } else if (op.finalRestore && exitCode != 0) {
+                DiagnosticLogger.e(
+                        "NOTIF",
+                        "final_restore_failed exit=" + exitCode
+                                + " gen=" + op.generation
+                                + " debtKept=true");
+            }
+
             dispatchPendingNotificationOp();
+
+            if (settled) {
+                maybeContinueAfterNotificationDebtSettled("restore_callback");
+            }
             maybeStopDisabledRecoveryService("notification restore settled");
         }, false);
     }
@@ -5151,6 +5345,33 @@ public class ForceDozeService extends Service {
         }
     }
 
+    /**
+     * Reads the real pre-Doze biometric keyguard state. Only exact 0/1 values are accepted; an
+     * unknown value must never be guessed as enabled because that would make final restore turn a
+     * user-disabled feature back on.
+     */
+    private Boolean readBiometricKeyguardEnabled() {
+        try {
+            String value = Settings.Secure.getString(
+                    getContentResolver(),
+                    "biometric_keyguard_enabled");
+            if ("1".equals(value)) {
+                return true;
+            }
+            if ("0".equals(value)) {
+                return false;
+            }
+            DiagnosticLogger.w(
+                    "STATE",
+                    "biometric_prestate_unknown value=" + String.valueOf(value));
+        } catch (Exception e) {
+            DiagnosticLogger.e(
+                    "STATE",
+                    "biometric_prestate_read_failed type="
+                            + e.getClass().getSimpleName());
+        }
+        return null;
+    }
     public void setBiometricsSensorState(Context context, boolean enabled) {
         setBiometricsSensorState(context, enabled, null);
     }
@@ -5804,15 +6025,24 @@ public class ForceDozeService extends Service {
             }
         }
         if (turnOffBiometricsInDoze) {
-            log("Disabling Biometrics");
-            if (dozeStateStore.markApplied(DozeStateStore.KEY_BIOMETRICS, true)) {
-                // Through the same serializer as every other biometric write. Bypassing it left the
-                // fresh disable racing an old session's final enable on independent Shizuku threads:
-                // the cross-session marker guard would correctly keep the new marker, but the stale
-                // enable could still land last and leave biometrics on for the new session.
-                requestBiometricState(false, null, BIOMETRIC_LABEL_ENTER);
+            Boolean biometricPreState = readBiometricKeyguardEnabled();
+            if (Boolean.TRUE.equals(biometricPreState)) {
+                log("Disabling Biometrics");
+                if (dozeStateStore.markApplied(DozeStateStore.KEY_BIOMETRICS, true)) {
+                    // Through the same serializer as every other biometric write. Bypassing it left
+                    // a fresh disable racing an old session's final enable.
+                    requestBiometricState(false, null, BIOMETRIC_LABEL_ENTER);
+                } else {
+                    logJournalDispatchFailure(DozeStateStore.KEY_BIOMETRICS);
+                }
+            } else if (Boolean.FALSE.equals(biometricPreState)) {
+                DiagnosticLogger.i(
+                        "STATE",
+                        "biometric_entry_skipped reason=already_disabled");
             } else {
-                logJournalDispatchFailure(DozeStateStore.KEY_BIOMETRICS);
+                DiagnosticLogger.w(
+                        "STATE",
+                        "biometric_entry_skipped reason=prestate_unknown");
             }
         }
         boolean applyBatterySaver =

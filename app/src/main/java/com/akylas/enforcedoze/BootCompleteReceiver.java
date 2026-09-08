@@ -43,8 +43,12 @@ public class BootCompleteReceiver extends BroadcastReceiver {
     /** @return true when a reversion was handed to the service. */
     private boolean recoverStateAfterBoot(Context context) {
         DozeStateStore store = DozeStateStore.getInstance(context);
-        // A reboot always ends the Doze session, whatever the flag said when we went down.
-        store.setInDoze(false);
+        // A reboot always ends the physical Doze session. If durable logical ownership cannot be
+        // cleared, keep treating it as recovery debt rather than pretending the journal succeeded.
+        boolean logicalSessionCleared = store.setInDoze(false);
+        if (!logicalSessionCleared) {
+            DiagnosticLogger.e("RECOVERY", "boot_inDoze_clear_failed");
+        }
 
         // The same applies to an interrupted force-idle attempt, and more strongly: the reboot took
         // DeviceIdleController down with everything else, so the mForceIdle the marker stands for no
@@ -86,15 +90,24 @@ public class BootCompleteReceiver extends BroadcastReceiver {
         // reboot, so those apps would have come back up greyed out with nothing left to fix them.
         boolean hasDeviceStateRestore = store.hasPendingRestore();
         boolean hasPackageRestore = store.hasAppliedSuspendedPackages();
+        boolean hasNotificationRestore = store.hasAppliedNotificationPackages();
+        boolean hasLogicalSessionRestore = store.isInDoze();
 
-        if (!hasDeviceStateRestore && !hasPackageRestore) {
+        if (!hasDeviceStateRestore
+                && !hasPackageRestore
+                && !hasNotificationRestore
+                && !hasLogicalSessionRestore) {
             return false;
         }
 
         log("BOOT_RECOVERY_PENDING deviceStates=" + store.getAppliedKeys()
-                + " suspendedPackages=" + store.getAppliedSuspendedPackages().size());
+                + " suspendedPackages=" + store.getAppliedSuspendedPackages().size()
+                + " notificationPackages=" + store.getAppliedNotificationPackages().size()
+                + " logicalSession=" + store.isInDoze());
         DiagnosticLogger.i("RECOVERY", "BOOT_RECOVERY_PENDING deviceStates=" + store.getAppliedKeys()
-                + " suspendedPackages=" + store.getAppliedSuspendedPackages().size());
+                + " suspendedPackages=" + store.getAppliedSuspendedPackages().size()
+                + " notificationPackages=" + store.getAppliedNotificationPackages().size()
+                + " logicalSession=" + store.isInDoze());
         try {
             Intent restore = new Intent(context, ForceDozeService.class);
             restore.setAction(ForceDozeService.ACTION_RESTORE_STATE);
