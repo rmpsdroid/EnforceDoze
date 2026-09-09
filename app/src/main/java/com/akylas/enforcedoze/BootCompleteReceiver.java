@@ -16,6 +16,10 @@ public class BootCompleteReceiver extends BroadcastReceiver {
     }
     @Override
     public void onReceive(Context context, Intent intent) {
+        if (intent == null || !Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction())) {
+            log("Ignoring unexpected BootCompleteReceiver action");
+            return;
+        }
         boolean isServiceEnabled = PreferenceManager.getDefaultSharedPreferences(context).getBoolean("serviceEnabled", false);
         log("Received BOOT_COMPLETED intent, isServiceEnabled=" + Boolean.toString(isServiceEnabled));
         DiagnosticLogger.init(context);

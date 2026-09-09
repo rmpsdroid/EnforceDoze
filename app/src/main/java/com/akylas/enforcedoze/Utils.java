@@ -682,6 +682,13 @@ public class Utils {
         // Create broadcast intent to enable ForceDoze when tapping the notification
         Intent enableIntent = new Intent(context, EnableForceDozeService.class);
         enableIntent.setAction(ACTION_ENABLE_FORCEDOZE);
+        enableIntent.setPackage(context.getPackageName());
+        String automationAuthToken = AutomationSecurity.getAutomationAuthToken(context);
+        if (automationAuthToken != null) {
+            enableIntent.putExtra(AutomationSecurity.EXTRA_AUTH_TOKEN, automationAuthToken);
+        } else {
+            logToLogcat("EnforceDoze", "Could not authenticate disabled-notification enable action");
+        }
         PendingIntent pendingIntent = PendingIntent.getBroadcast(
             context, 
             0, 

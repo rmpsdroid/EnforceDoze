@@ -8,34 +8,36 @@ import android.content.Intent;
 
 public class SettingsChangeReceiver extends BroadcastReceiver {
 
-    public static String TAG = "EnforceDoze";private static void log(String message) {
+    public static String TAG = "EnforceDoze";
+
+    private static void log(String message) {
         logToLogcat(TAG, message);
     }
 
     @Override
     public void onReceive(Context context, Intent intent) {
-        log(Utils.ACTION_CHANGE_SETTING + " broadcast intent received");
+        if (!AutomationSecurity.isAuthorizedAutomationIntent(
+                context,
+                intent,
+                Utils.ACTION_CHANGE_SETTING
+        )) {
+            log("Rejected unauthorized " + Utils.ACTION_CHANGE_SETTING + " broadcast");
+            return;
+        }
+
         final String settingName = intent.getStringExtra("settingName");
         final String settingValue = intent.getStringExtra("settingValue");
 
-        if (settingName != null && settingValue != null) {
-            if (Utils.doesSettingExist(settingName)) {
-                if (Utils.isSettingBool(settingName)) {
-                    Utils.updateSettingBool(context, settingName, Boolean.valueOf(settingValue));
-                } else {
-                    try {
-                        Utils.updateSettingInt(context, settingName, Integer.valueOf(settingValue));
-                    } catch (NumberFormatException e) {
-                        log("settingValue '" + settingValue + "' is not a number, ignoring");
-                        return;
-                    }
-                }
-                Utils.notifyServiceSettingsChanged(context);
-            } else {
-                log("Setting does not exist or not updatable");
-            }
-        } else {
-            log("settingName and/or settingValue null");
+        if (!AutomationSecurity.applyAutomationSetting(
+                context,
+                settingName,
+                settingValue
+        )) {
+            log("Rejected unsupported or invalid automation setting");
+            return;
         }
+
+        log(Utils.ACTION_CHANGE_SETTING + " authenticated setting update accepted");
+        Utils.notifyServiceSettingsChanged(context);
     }
 }
