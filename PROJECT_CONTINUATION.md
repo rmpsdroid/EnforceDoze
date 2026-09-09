@@ -1,14 +1,22 @@
 # EnforceDoze Fork — Authoritative Project Continuation
 
-**Updated:** 2026-09-05 (Asia/Kolkata)
+**Updated:** 2026-09-09 (Asia/Kolkata)
 **Repository:** `rmpsdroid/EnforceDoze`
-**Current authoritative Git state:** maintenance async restore/reapply remains fully
-integrated on `master` / `origin/master` at
-`d7c214d5a70fac2b26529f98cf9e259084564ad6`. Maintenance process-death recovery
-is functionally complete on branch `fix/maintenance-process-death-v1` at commit
-`d80a5ee` (`Fix maintenance process-death recovery`). That functional commit is built
-and M30 runtime validated, but has not yet been documented, merged, or pushed.
+**Current authoritative Git state:** Checkpoint C exported-component / Tasker security
+hardening has a validated functional commit on branch `fix/exported-tasker-security-v1`:
 
+`43d9444de67ea97a91c468eb22e15033433e55b6`
+(`Harden exported Tasker automation receivers`)
+
+Its validated parent is:
+
+`fd1c45c731a01d8ec19e9cbdd174f357745aed23`
+
+The functional commit is built, source-reviewed, and focused Samsung M30 / API 29
+security-runtime validated. Checkpoint B and the S26/API36 integrated-master normal-use
+smoke remain closed. Checkpoint C functional source and continuation documentation are
+committed on the feature branch. The feature branch has not been pushed or merged to
+`master`.
 **Purpose:** single source of truth for continuing this project in a new ChatGPT window without restarting the investigation.
 
 ---
@@ -2248,35 +2256,175 @@ Final Checkpoint B status:
 
 Do not reopen Checkpoint B notification, biometric, `setInDoze`, or min-SDK work without genuinely new evidence.
 
+## Checkpoint C - exported-component / Tasker security hardening
+
+**FUNCTIONAL + DOCUMENTATION COMMITTED / FEATURE-BRANCH PUSH PENDING**
+
+Branch:
+
+`fix/exported-tasker-security-v1`
+
+Functional commit:
+
+`43d9444de67ea97a91c468eb22e15033433e55b6`
+
+Subject:
+
+`Harden exported Tasker automation receivers`
+
+Validated parent:
+
+`fd1c45c731a01d8ec19e9cbdd174f357745aed23`
+
+The functional commit contains exactly 11 production source files, including the new
+`AutomationSecurity.java`. `PROJECT_CONTINUATION.md` was intentionally excluded from the
+functional commit so this file could record the real resulting commit hash.
+
+This checkpoint is intentionally narrow. It hardens exported broadcast surfaces without
+redesigning ForceDoze lifecycle, Shizuku execution, durable state ownership, or the already
+closed Checkpoint B state-integrity work.
+
+Final exported-component boundary:
+
+- `BootCompleteReceiver`: non-exported plus exact `BOOT_COMPLETED` action guard.
+- `AutoRestartOnUpdate`: non-exported plus exact own-package `PACKAGE_REPLACED` validation.
+- `ReenterDoze`: non-exported.
+- the five intentional Tasker/automation receivers remain exported:
+  - `EnableForceDozeService`
+  - `DisableForceDozeService`
+  - `AddWhiteListReceiver`
+  - `RemoveWhiteListReceiver`
+  - `SettingsChangeReceiver`
+- `ForceDozeService` remains non-exported.
+- Quick Settings, notification-listener, and Shizuku permission boundaries remain unchanged.
+
+Automation authentication boundary:
+
+- stable per-install random 256-bit authentication token;
+- private `automation_security` SharedPreferences;
+- synchronous durable `commit()` before token use;
+- token value never logged;
+- exact public action required;
+- exact target package `com.akylas.enforcedoze.fork` required;
+- valid `authToken` required;
+- constant-time `MessageDigest.isEqual` comparison;
+- authentication failure occurs before receiver side effects.
+
+Tasker / MacroDroid migration:
+
+Every EnforceDoze automation broadcast must now:
+
+1. target package `com.akylas.enforcedoze.fork`;
+2. include string extra `authToken` containing the per-install token;
+3. retain the action-specific extras required by the existing public API.
+
+`TaskerBroadcastsActivity` exposes copyable target-package and authentication-token entries.
+
+Legacy unauthenticated or unscoped profiles intentionally fail closed.
+
+Whitelist hardening:
+
+- authentication happens first;
+- malformed, blank, overlong, unsafe, or non-installed packages are rejected;
+- PackageManager confirms the package;
+- only the canonical PackageManager-returned package value can reach the legacy
+  DeviceIdle whitelist shell command.
+
+Settings hardening:
+
+- explicit public automation allowlist;
+- strict boolean parsing;
+- compatibility aliases retained;
+- `dozeEnterDelay` accepts integer `0..1800` seconds;
+- malformed or out-of-range input fails closed.
+
+Internal disabled-notification enable action:
+
+- immutable PendingIntent retained;
+- authentication token included;
+- package explicitly scoped;
+- token-storage failure fails closed.
+
+Build evidence:
+
+- build log:
+  `exported-tasker-security-candidate1-build1.txt`
+- build log SHA-256:
+  `A7C7B8FF2F8BE9AF110C48E837EE66E6AEF2824BA4F9674F893493B18DBEDB34`
+- frozen APK:
+  `exported-tasker-security-candidate1-debug.apk`
+- APK size:
+  `7,499,255` bytes
+- APK SHA-256:
+  `A1081024A11D3AABBBF77890DD33EAF31E2F27B36B3F31120F9D55C3A63CA24E`
+- Gradle result:
+  `BUILD SUCCESSFUL`.
+
+Focused Samsung M30 / API29 runtime validation:
+
+- wrong token rejected;
+- valid token without package scope rejected;
+- valid token plus package scope accepted;
+- delay `1801` rejected;
+- malformed whitelist package rejected before shell;
+- `ReenterDoze` external invocation denied by Android because it is non-exported;
+- Android `BroadcastQueue` logged the explicit permission denial;
+- installed APK hash matched the frozen candidate;
+- temporary `dozeEnterDelay` restored to original `0`;
+- M30 PIN/security configuration untouched;
+- S26 Ultra untouched.
+
+Harness interpretation:
+
+- the emulator `-p` failure was a PowerShell test-harness issue before any security
+  broadcast was sent;
+- `am broadcast` returning `result=0` did not prove receiver execution;
+- Android logs definitively confirmed that `ReenterDoze` was denied.
+
+Checkpoint status:
+
+**FIXED / BUILT / REVIEWED / M30 SECURITY-RUNTIME-VALIDATED / FUNCTIONAL COMMITTED /
+DOCUMENTATION COMMITTED / NOT PUSHED / NOT MERGED**
+
+Do not reopen this checkpoint without genuinely new evidence.
+
 ## Follow-up / deferred
 
-Checkpoint B public-beta runtime/state-integrity bundle is now closed and removed from the open backlog.
+The short public-beta functional release gate is now materially closed:
 
-Next public-beta / release gates:
+- Checkpoint B public-beta state integrity: closed/integrated/pushed.
+- S26/API36 integrated-master normal-use smoke: PASS / closed.
+- exported-component / Tasker security hardening: functional validation PASS; commit/integration
+  still pending on `fix/exported-tasker-security-v1`.
 
-1. run an integrated `master` S26 Ultra / API 36 normal-use smoke using Shizuku; do not convert this into another synthetic M30-style state-integrity campaign unless new evidence requires it;
-2. complete the exported-component / Tasker security pass without breaking intentional automation;
-3. perform targeted marker-stuck recovery test/triage only if the current integrated source/device state can still reproduce the concern;
-4. perform targeted PREPARING phantom-boot / stale-session triage;
-5. after the short security/release gate, proceed to rebranding, UI, release packaging, README/screenshots, signing/versioning, attribution/licenses, and GitHub release preparation.
+Do not rerun the S26 normal-use smoke, the old Checkpoint B M30 synthetic suite, or this focused
+security suite without genuinely new evidence.
 
-Deferred unless new evidence raises priority:
+Remaining technical follow-up:
 
-- tunable callback absence is likely post-release work.
+1. **Targeted deferred runtime concerns**
+   - marker-stuck recovery test/triage only if still reproducible;
+   - PREPARING phantom boot / stale-session triage only if evidence still warrants it.
 
-Closed and removed from the runtime/state-integrity backlog:
+2. **Tunable callback absence**
+   - likely post-release unless new evidence raises priority.
 
-- notification exact-set durable ownership/generation;
-- notification-only process-death / boot recovery;
-- biometric real pre-state correctness;
-- focused `setInDoze(false)` durability/lifecycle;
-- public-beta minimum Android decision (`minSdkVersion 24`);
-- maintenance process-death recovery;
-- Shizuku `newProcess` deprecation/newer-Android backend risk;
-- stdout/stderr pipe deadlock risk.
+3. **Public release / rebranding**
+   - app name/icon/branding;
+   - Material 3 UI/dashboard/onboarding/settings cleanup;
+   - About/licenses;
+   - release versioning/signing/install-upgrade checks;
+   - final release APK hashes;
+   - README/screenshots;
+   - Shizuku/root setup documentation;
+   - Tasker/MacroDroid authenticated-broadcast migration documentation;
+   - attribution/upstream licensing;
+   - GitHub release preparation.
 
-Do not reopen closed work without new evidence.
-Do not invent a new R0 number without first checking the tracked roadmap and current documentation.
+Favor consolidated checkpoints over endless micro-audits:
+
+`understand complete issue -> consolidated correction -> review -> build -> runtime test -> move on`
+
 # 19. TESTING RULES
 
 Always verify real state.
@@ -5371,6 +5519,76 @@ M30/API29 runtime gates closed PASS:
 
 Do not reopen Checkpoint B without genuinely new evidence.
 
+### CHECKPOINT C - EXPORTED/TASKER SECURITY HARDENING - FUNCTIONAL + DOCUMENTATION COMMITTED
+
+Branch:
+
+`fix/exported-tasker-security-v1`
+
+Functional commit:
+
+`43d9444de67ea97a91c468eb22e15033433e55b6`
+
+Parent:
+
+`fd1c45c731a01d8ec19e9cbdd174f357745aed23`
+
+Subject:
+
+`Harden exported Tasker automation receivers`
+
+The functional commit contains exactly 11 production source files.
+
+Security architecture:
+
+- Boot/update/Reenter receivers are non-exported.
+- Five intentional Tasker receivers remain exported.
+- exported automation requires exact action + exact target package + per-install 256-bit
+  `authToken`;
+- token is private, durably committed, constant-time compared, and never logged;
+- whitelist input is syntax-validated, PackageManager-confirmed, and canonicalized;
+- exported settings use a narrow allowlist and strict parsing;
+- public `dozeEnterDelay` range is `0..1800`;
+- internal disabled-notification enable PendingIntent is package-scoped and authenticated.
+
+Automation migration:
+
+All existing Tasker/MacroDroid profiles must set target package
+
+`com.akylas.enforcedoze.fork`
+
+and include
+
+`authToken=<per-install token>`
+
+for every EnforceDoze automation broadcast.
+
+Frozen candidate APK SHA-256:
+
+`A1081024A11D3AABBBF77890DD33EAF31E2F27B36B3F31120F9D55C3A63CA24E`
+
+Build log SHA-256:
+
+`A7C7B8FF2F8BE9AF110C48E837EE66E6AEF2824BA4F9674F893493B18DBEDB34`
+
+M30/API29 runtime PASS:
+
+- unauthorized token rejected;
+- missing package scope rejected;
+- authenticated package-scoped update accepted;
+- delay `1801` rejected;
+- malformed whitelist package rejected before shell;
+- non-exported ReenterDoze invocation denied;
+- installed candidate hash verified;
+- original M30 delay restored;
+- device security configuration untouched.
+
+Current status:
+
+**FUNCTIONAL + DOCUMENTATION COMMITTED / NOT PUSHED / NOT MERGED**
+
+Do not rerun already-closed build/runtime gates without genuinely new evidence.
+
 ### Important runtime evidence interpretation
 
 Several test harness defects occurred during Checkpoint B and were explicitly classified separately from product behavior:
@@ -5383,59 +5601,89 @@ Several test harness defects occurred during Checkpoint B and were explicitly cl
 
 None of these established a production failure after corrected targeted validation.
 
-### NEXT - SHORT PUBLIC-BETA / RELEASE GATE
+### NEXT - RELEASE / DEFERRED GATE
 
-Do not run another broad state-integrity audit.
+Do not run another broad reliability/state-integrity/security audit.
 
-Proceed in this order unless stronger evidence changes priority:
+Already closed:
 
-1. **S26/API36 integrated-master normal-use smoke**
-   - use Shizuku;
-   - normal use only;
-   - verify ordinary screen-off Doze entry and wake recovery;
-   - verify no obvious notification/biometric/state regression;
-   - do not reproduce the M30 synthetic suite unless new evidence requires it.
+1. Checkpoint A - Shizuku UserService modernization.
+2. Checkpoint B - public-beta state integrity.
+3. S26/API36 integrated-master normal-use release smoke.
+4. Checkpoint C exported-component / Tasker security implementation, build, review,
+   focused M30/API29 runtime validation, and documentation.
 
-2. **Exported-component / Tasker security pass**
-   - review exported receivers/services/activities and intent actions;
-   - preserve intentional Tasker/automation behavior;
-   - avoid breaking same-UID/internal recovery dispatch.
+Checkpoint C functional commit:
 
-3. **Targeted deferred runtime concerns**
-   - marker-stuck recovery test/triage if still reproducible;
-   - PREPARING phantom boot / stale-session triage.
+`43d9444de67ea97a91c468eb22e15033433e55b6`
 
-4. **Tunable callback absence**
-   - likely post-release unless new evidence raises its priority.
+Checkpoint C functional source and continuation documentation are committed on
+`fix/exported-tasker-security-v1`.
 
-5. **Public release / rebranding**
-   - app name/icon/branding
-   - Material 3 UI/dashboard/onboarding/settings cleanup
-   - About/licenses
-   - release versioning/signing/install-upgrade checks
-   - final release APK hashes
-   - README/screenshots
-   - Shizuku/root setup documentation
-   - attribution/upstream licensing
-   - GitHub release preparation
+Immediate repository workflow:
 
-Favor consolidated checkpoints over endless micro-audits:
+1. require exact `approve push` before pushing the feature branch;
+2. after feature-branch push, require exact `approve merge to master` before merging;
+3. after merge, require exact `approve push master` before pushing master.
 
-`understand complete issue -> consolidated correction -> review -> build -> runtime test -> move on`
+Do not infer one Git authorization from another.
+
+After Checkpoint C is integrated, move on instead of reopening closed gates.
+
+Remaining engineering/release work:
+
+1. targeted deferred runtime concerns only if current evidence still warrants investigation;
+2. tunable callback absence, likely post-release;
+3. public release/rebranding:
+   - branding/icon/name;
+   - Material 3 UI;
+   - dashboard/onboarding/settings cleanup;
+   - About/licenses;
+   - release versioning/signing/update-install checks;
+   - README/screenshots;
+   - Shizuku/root documentation;
+   - authenticated Tasker/MacroDroid migration documentation;
+   - attribution/upstream licensing;
+   - GitHub release preparation.
 
 ### Current documentation action
 
-Checkpoint B code is already committed, merged, and pushed.
+Checkpoint C functional implementation and continuation documentation are committed on:
 
-This `PROJECT_CONTINUATION.md` update is documentation-only.
+`fix/exported-tasker-security-v1`
 
-Before any documentation commit:
+Functional commit:
 
-- review the generated documentation diff;
-- confirm `PROJECT_CONTINUATION.md` is the only tracked modification;
-- do not stage protected evidence;
-- require a fresh exact `approve commit`.
+`43d9444de67ea97a91c468eb22e15033433e55b6`
 
-After a documentation commit, do not infer approval to push it. A later master push still requires exact `approve push master`.
+Functional parent:
+
+`fd1c45c731a01d8ec19e9cbdd174f357745aed23`
+
+Functional subject:
+
+`Harden exported Tasker automation receivers`
+
+The documentation commit is the feature-branch tip immediately after the functional commit.
+Its hash is intentionally not embedded here so this continuation state remains self-stable
+when the documentation commit itself is amended.
+
+Checkpoint C is not yet pushed or merged.
+
+The documentation commit approval has been consumed.
+
+Feature-branch push requires exact:
+
+`approve push`
+
+Merge to master requires exact:
+
+`approve merge to master`
+
+Master push requires exact:
+
+`approve push master`
+
+No Git approval is currently active.
 
 # END OF AUTHORITATIVE CONTINUATION FILE
