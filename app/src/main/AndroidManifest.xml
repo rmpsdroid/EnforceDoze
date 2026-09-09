@@ -56,13 +56,13 @@
                 android:resource="@xml/shortcuts" />
         </activity>
         <receiver android:name="com.akylas.enforcedoze.BootCompleteReceiver"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
         <receiver android:name="com.akylas.enforcedoze.AutoRestartOnUpdate"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.PACKAGE_REPLACED" />
 
@@ -112,7 +112,7 @@
         <receiver
             android:name="com.akylas.enforcedoze.ReenterDoze"
             android:enabled="true"
-            android:exported="true" />
+            android:exported="false" />
         <receiver
             android:name="com.akylas.enforcedoze.CustomDozePeriodReceiver"
             android:enabled="true"

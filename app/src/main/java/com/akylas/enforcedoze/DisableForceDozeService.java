@@ -1,6 +1,5 @@
 package com.akylas.enforcedoze;
 
-
 import static com.akylas.enforcedoze.Utils.logToLogcat;
 
 import android.content.BroadcastReceiver;
@@ -14,10 +13,23 @@ public class DisableForceDozeService extends BroadcastReceiver {
     private static void log(String message) {
         logToLogcat(TAG, message);
     }
+
     @Override
     public void onReceive(Context context, Intent intent) {
-        log(Utils.ACTION_DISABLE_FORCEDOZE + " broadcast intent received");
-        PreferenceManager.getDefaultSharedPreferences(context).edit().putBoolean("serviceEnabled", false).apply();
+        if (!AutomationSecurity.isAuthorizedAutomationIntent(
+                context,
+                intent,
+                Utils.ACTION_DISABLE_FORCEDOZE
+        )) {
+            log("Rejected unauthorized " + Utils.ACTION_DISABLE_FORCEDOZE + " broadcast");
+            return;
+        }
+
+        log(Utils.ACTION_DISABLE_FORCEDOZE + " authenticated broadcast received");
+        PreferenceManager.getDefaultSharedPreferences(context)
+                .edit()
+                .putBoolean("serviceEnabled", false)
+                .apply();
         Utils.stopForceDozeService(context);
     }
 }

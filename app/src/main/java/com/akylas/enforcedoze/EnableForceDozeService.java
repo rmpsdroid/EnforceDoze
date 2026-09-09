@@ -9,14 +9,27 @@ import android.preference.PreferenceManager;
 
 public class EnableForceDozeService extends BroadcastReceiver {
     public static String TAG = "EnforceDoze";
+
     private static void log(String message) {
         logToLogcat(TAG, message);
     }
-    
+
     @Override
     public void onReceive(Context context, Intent intent) {
-        log(Utils.ACTION_ENABLE_FORCEDOZE + " broadcast intent received started: ");
-        PreferenceManager.getDefaultSharedPreferences(context).edit().putBoolean("serviceEnabled", true).apply();
+        if (!AutomationSecurity.isAuthorizedAutomationIntent(
+                context,
+                intent,
+                Utils.ACTION_ENABLE_FORCEDOZE
+        )) {
+            log("Rejected unauthorized " + Utils.ACTION_ENABLE_FORCEDOZE + " broadcast");
+            return;
+        }
+
+        log(Utils.ACTION_ENABLE_FORCEDOZE + " authenticated broadcast received");
+        PreferenceManager.getDefaultSharedPreferences(context)
+                .edit()
+                .putBoolean("serviceEnabled", true)
+                .apply();
         Utils.startForceDozeService(context);
     }
 }
