@@ -3,20 +3,32 @@
 **Updated:** 2026-09-09 (Asia/Kolkata)
 **Repository:** `rmpsdroid/EnforceDoze`
 **Current authoritative Git state:** Checkpoint C exported-component / Tasker security
-hardening has a validated functional commit on branch `fix/exported-tasker-security-v1`:
+hardening is integrated into local `master`.
+
+Functional commit:
 
 `43d9444de67ea97a91c468eb22e15033433e55b6`
 (`Harden exported Tasker automation receivers`)
 
-Its validated parent is:
+Feature documentation commit:
 
-`fd1c45c731a01d8ec19e9cbdd174f357745aed23`
+`0ed27409b675b70745b9e6336e97cd776b2fb2ab`
+(`Update continuation for Tasker security hardening`)
 
-The functional commit is built, source-reviewed, and focused Samsung M30 / API 29
-security-runtime validated. Checkpoint B and the S26/API36 integrated-master normal-use
-smoke remain closed. Checkpoint C functional source and continuation documentation are
-committed on the feature branch. The feature branch has not been pushed or merged to
-`master`.
+Local master merge:
+
+`12e16a1b723ef9fc4c14cb3f094db46c58ea493a`
+(`Merge exported Tasker security hardening`)
+
+The feature branch was published to
+`origin/fix/exported-tasker-security-v1` at `0ed27409b675b70745b9e6336e97cd776b2fb2ab`.
+The functional implementation remains built, source-reviewed, and focused Samsung M30 /
+API29 security-runtime validated. Checkpoint B and the S26/API36 integrated-master
+normal-use smoke remain closed.
+
+Remote `master` publication is an independently approval-gated Git operation. Its current
+state must be determined from Git rather than hard-coded into this continuation file, so
+this integration record remains self-stable across the final master publication.
 **Purpose:** single source of truth for continuing this project in a new ChatGPT window without restarting the investigation.
 
 ---
@@ -2258,7 +2270,7 @@ Do not reopen Checkpoint B notification, biometric, `setInDoze`, or min-SDK work
 
 ## Checkpoint C - exported-component / Tasker security hardening
 
-**FUNCTIONAL + DOCUMENTATION COMMITTED / FEATURE-BRANCH PUSH PENDING**
+**FUNCTIONAL + DOCUMENTATION COMMITTED / FEATURE BRANCH PUSHED / LOCAL MASTER MERGED**
 
 Branch:
 
@@ -2384,7 +2396,7 @@ Harness interpretation:
 Checkpoint status:
 
 **FIXED / BUILT / REVIEWED / M30 SECURITY-RUNTIME-VALIDATED / FUNCTIONAL COMMITTED /
-DOCUMENTATION COMMITTED / NOT PUSHED / NOT MERGED**
+DOCUMENTATION COMMITTED / FEATURE BRANCH PUSHED / LOCAL MASTER MERGED**
 
 Do not reopen this checkpoint without genuinely new evidence.
 
@@ -5519,7 +5531,7 @@ M30/API29 runtime gates closed PASS:
 
 Do not reopen Checkpoint B without genuinely new evidence.
 
-### CHECKPOINT C - EXPORTED/TASKER SECURITY HARDENING - FUNCTIONAL + DOCUMENTATION COMMITTED
+### CHECKPOINT C - EXPORTED/TASKER SECURITY HARDENING - LOCAL MASTER INTEGRATED
 
 Branch:
 
@@ -5585,7 +5597,7 @@ M30/API29 runtime PASS:
 
 Current status:
 
-**FUNCTIONAL + DOCUMENTATION COMMITTED / NOT PUSHED / NOT MERGED**
+**FUNCTIONAL + DOCUMENTATION COMMITTED / FEATURE BRANCH PUSHED / LOCAL MASTER MERGED**
 
 Do not rerun already-closed build/runtime gates without genuinely new evidence.
 
@@ -5605,34 +5617,42 @@ None of these established a production failure after corrected targeted validati
 
 Do not run another broad reliability/state-integrity/security audit.
 
-Already closed:
+Closed engineering/release gates:
 
 1. Checkpoint A - Shizuku UserService modernization.
 2. Checkpoint B - public-beta state integrity.
 3. S26/API36 integrated-master normal-use release smoke.
 4. Checkpoint C exported-component / Tasker security implementation, build, review,
-   focused M30/API29 runtime validation, and documentation.
+   focused M30/API29 runtime validation, feature documentation, feature publication,
+   and local master integration.
 
 Checkpoint C functional commit:
 
 `43d9444de67ea97a91c468eb22e15033433e55b6`
 
-Checkpoint C functional source and continuation documentation are committed on
-`fix/exported-tasker-security-v1`.
+Checkpoint C feature documentation tip:
 
-Immediate repository workflow:
+`0ed27409b675b70745b9e6336e97cd776b2fb2ab`
 
-1. require exact `approve push` before pushing the feature branch;
-2. after feature-branch push, require exact `approve merge to master` before merging;
-3. after merge, require exact `approve push master` before pushing master.
+Checkpoint C local-master merge:
 
-Do not infer one Git authorization from another.
+`12e16a1b723ef9fc4c14cb3f094db46c58ea493a`
 
-After Checkpoint C is integrated, move on instead of reopening closed gates.
+Remote master publication remains governed by the repository approval rule:
+
+`approve push master`
+
+Never infer that authorization from commit, feature-push, or merge approval.
+
+Because this continuation record itself participates in the final master history, do not
+hard-code its own documentation-commit hash or a transient remote-master publication state.
+Determine local/remote master state directly from Git whenever continuation resumes.
+
+After Checkpoint C publication is complete, move on instead of reopening closed gates.
 
 Remaining engineering/release work:
 
-1. targeted deferred runtime concerns only if current evidence still warrants investigation;
+1. targeted deferred runtime concerns only if genuinely current evidence warrants them;
 2. tunable callback absence, likely post-release;
 3. public release/rebranding:
    - branding/icon/name;
@@ -5648,41 +5668,41 @@ Remaining engineering/release work:
 
 ### Current documentation action
 
-Checkpoint C functional implementation and continuation documentation are committed on:
-
-`fix/exported-tasker-security-v1`
+Checkpoint C is integrated into local `master`.
 
 Functional commit:
 
 `43d9444de67ea97a91c468eb22e15033433e55b6`
 
-Functional parent:
+Feature documentation tip:
 
-`fd1c45c731a01d8ec19e9cbdd174f357745aed23`
+`0ed27409b675b70745b9e6336e97cd776b2fb2ab`
 
-Functional subject:
+Local master merge:
 
-`Harden exported Tasker automation receivers`
+`12e16a1b723ef9fc4c14cb3f094db46c58ea493a`
 
-The documentation commit is the feature-branch tip immediately after the functional commit.
-Its hash is intentionally not embedded here so this continuation state remains self-stable
-when the documentation commit itself is amended.
+Merge subject:
 
-Checkpoint C is not yet pushed or merged.
+`Merge exported Tasker security hardening`
 
-The documentation commit approval has been consumed.
+This final integration-state record belongs in a documentation-only master follow-up.
+Its own commit hash is intentionally not embedded here so the text remains self-stable.
 
-Feature-branch push requires exact:
+Before any documentation commit:
 
-`approve push`
+- verify local `master` still descends directly from merge
+  `12e16a1b723ef9fc4c14cb3f094db46c58ea493a`;
+- verify `PROJECT_CONTINUATION.md` is the only tracked modification;
+- verify the index is clean;
+- run `git diff --check`;
+- require a fresh exact `approve commit`.
 
-Merge to master requires exact:
-
-`approve merge to master`
-
-Master push requires exact:
+Master publication remains a separate operation and always requires exact:
 
 `approve push master`
+
+Local/remote master publication state must be verified directly from Git.
 
 No Git approval is currently active.
 
