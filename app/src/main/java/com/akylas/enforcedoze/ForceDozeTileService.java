@@ -87,7 +87,7 @@ public class ForceDozeTileService extends TileService {
             public void run() {
                 Tile tile = getQsTile();
                 if (tile != null) {
-                    tile.setLabel(active ? "EnforceDoze on" : "EnforceDoze off");
+                    tile.setLabel(active ? "DozePilot on" : "DozePilot off");
                     tile.setState(active ? Tile.STATE_ACTIVE : Tile.STATE_INACTIVE);
                     tile.updateTile();
                 }

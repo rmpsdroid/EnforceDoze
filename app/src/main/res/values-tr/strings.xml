@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
-    <string name="app_name">EnforceDoze Pro</string>
-    <string name="service_active">EnforceDoze Hizmeti Aktif oldu</string>
-    <string name="service_inactive">EnforceDoze Hizmet devre dışı</string>
-    <string name="service_disabled">EnforceDoze servisi Devre dışı</string>
+    <string name="app_name">DozePilot</string>
+    <string name="service_active">DozePilot Hizmeti Aktif oldu</string>
+    <string name="service_inactive">DozePilot Hizmet devre dışı</string>
+    <string name="service_disabled">DozePilot servisi Devre dışı</string>
     <string name="root_workaround_text">SU izniniz reddedildi veya mevcut değil! Eğer root\'unuz yoksa, root olmayan modu nasıl etkinleştireceğinizle ilgili talimatları almak için \'Root workaround\' a basın.</string>
     <string name="root_workaround_button_text">Root workaround</string>
     <string name="close_button_text">Kapat</string>
@@ -20,10 +20,10 @@
     <string name="lockscreen_timeout_dialog_text_p1">Cihazınızdaki kilit ekranı zaman aşımı değeri çok yüksek(</string>
     <string name="lockscreen_timeout_dialog_text_p2">" dakika). Bu, cihazınızın "</string>
     <string name="lockscreen_timeout_dialog_text_p3">"Ekran kapandıktan sonra kendiliğinden kilitlenir "</string>
-    <string name="lockscreen_timeout_dialog_text_p4">" Dakika geçti. Bu aynı zamanda EnforceDoze\'nin bekleyeceği anlamına da gelir "</string>
+    <string name="lockscreen_timeout_dialog_text_p4">" Dakika geçti. Bu aynı zamanda DozePilot\'nin bekleyeceği anlamına da gelir "</string>
     <string name="lockscreen_timeout_dialog_text_p5">"için"</string>
-    <string name="lockscreen_timeout_dialog_text_p6">" Dakika geçmesine izin vermeden cihazınızı Doze moduna geçirmeden önce geçici bir uyandırma kilidini kullanın. EnforceDoze cihazın Doze moduna daha hızlı girmesini sağlamak isterseniz, kilit ekranı zamanaşımını cihazınızın Güvenlik Ayarları\'nda Hemen olarak azaltmayı düşünün. EnforceDoze cihazınızı, kilit ekranı zaman aşımı durumuna bakılmaksızın Doze moduna girmesini sağlamasını isterseniz EnforceDoze Settings\'de 'Ekran zaman aşımını'ı yoksay' seçeneğini etkinleştirin.</string>
-    <string name="how_doze_works_dialog_text">Cihazınızdaki Doze modu nasıl çalışır:\n\nEkran kapalı iken bir kullanıcı cihazı bir süre (30 dakika) fişi çekilmemiş ve hareketsiz bırakırsa, cihaz Doze moduna girer. Doze modunda sistem, uygulamaların ağ ve CPU yoğunluktaki hizmetlere erişimi kısıtlayarak pil tasarrufu yapmaya çalışır. Ayrıca, uygulamanın ağa erişmesini önler ve işleri, eşitlemelerini ve standart alarmlarını erteler.\n\n Sistem, ertelenmiş etkinliklerini uygulamaların tamamlamasına izin vermek için Doze\'den kısa bir süre çıkar. Bu bakım penceresi boyunca sistem bekleyen tüm eşitlemeleri, işleri ve alarmları çalıştırır ve uygulamaların ağa erişmesine izin verir\n\nBu bakım penceresinin tamamlanmasıyla sistem Doze\'ye girer, ağ erişimini askıya alır ve işleri erteler, senkronize eder ve Alarmlar. Sistem, cihaz bir şarj cihazına bağlı olmadığında uzun süreli hareketsizlik durumunda pil tüketimini azaltmaya yardımcı olarak, bakım pencerelerini daha az veya daha sık zamanlayacak şekilde zamanlar.\n\nCihazı taşıyarak cihazı uyandırdığı anda, Ekranı açtığınızda veya bir şarj aleti bağladığınızda sistem Doze\'den çıkıp tüm uygulamalar normal faaliyete dönüyor\n\nEnforceDoze nasıl çalışıyor:\n\nEnforceDoze, cihazı ekran kapalıldıktan hemen sonra Doze moduna girer (veya bir kullanıcı gecikme belirledikten sonra) , Cihazın sabit kalması için 30 dakika beklemek yerine. Bunun üzerine, EnforceDoze cihazın hareket sensörlerini de döndürür, bu nedenle cihazınızı hareket ettirirseniz Doze devre dışı kalmaz. Doze yalnızca bir bakım periyodu sırasında (yukarıda açıklandığı gibi) veya ekranınızı açtığınızda devre dışı bırakılacaktır; bu, cihazın ekran kapalıysa ve cihaz kapalı olmasa bile cihazınızın Doze modunda çok daha uzun süre kalacağı anlamına gelir Sabit, yani pil tasarrufu normalden daha yüksek olacaktır Doze.</string>
+    <string name="lockscreen_timeout_dialog_text_p6">" Dakika geçmesine izin vermeden cihazınızı Doze moduna geçirmeden önce geçici bir uyandırma kilidini kullanın. DozePilot cihazın Doze moduna daha hızlı girmesini sağlamak isterseniz, kilit ekranı zamanaşımını cihazınızın Güvenlik Ayarları\'nda Hemen olarak azaltmayı düşünün. DozePilot cihazınızı, kilit ekranı zaman aşımı durumuna bakılmaksızın Doze moduna girmesini sağlamasını isterseniz DozePilot Settings\'de 'Ekran zaman aşımını'ı yoksay' seçeneğini etkinleştirin.</string>
+    <string name="how_doze_works_dialog_text">Cihazınızdaki Doze modu nasıl çalışır:\n\nEkran kapalı iken bir kullanıcı cihazı bir süre (30 dakika) fişi çekilmemiş ve hareketsiz bırakırsa, cihaz Doze moduna girer. Doze modunda sistem, uygulamaların ağ ve CPU yoğunluktaki hizmetlere erişimi kısıtlayarak pil tasarrufu yapmaya çalışır. Ayrıca, uygulamanın ağa erişmesini önler ve işleri, eşitlemelerini ve standart alarmlarını erteler.\n\n Sistem, ertelenmiş etkinliklerini uygulamaların tamamlamasına izin vermek için Doze\'den kısa bir süre çıkar. Bu bakım penceresi boyunca sistem bekleyen tüm eşitlemeleri, işleri ve alarmları çalıştırır ve uygulamaların ağa erişmesine izin verir\n\nBu bakım penceresinin tamamlanmasıyla sistem Doze\'ye girer, ağ erişimini askıya alır ve işleri erteler, senkronize eder ve Alarmlar. Sistem, cihaz bir şarj cihazına bağlı olmadığında uzun süreli hareketsizlik durumunda pil tüketimini azaltmaya yardımcı olarak, bakım pencerelerini daha az veya daha sık zamanlayacak şekilde zamanlar.\n\nCihazı taşıyarak cihazı uyandırdığı anda, Ekranı açtığınızda veya bir şarj aleti bağladığınızda sistem Doze\'den çıkıp tüm uygulamalar normal faaliyete dönüyor\n\nDozePilot nasıl çalışıyor:\n\nDozePilot, cihazı ekran kapalıldıktan hemen sonra Doze moduna girer (veya bir kullanıcı gecikme belirledikten sonra) , Cihazın sabit kalması için 30 dakika beklemek yerine. Bunun üzerine, DozePilot cihazın hareket sensörlerini de döndürür, bu nedenle cihazınızı hareket ettirirseniz Doze devre dışı kalmaz. Doze yalnızca bir bakım periyodu sırasında (yukarıda açıklandığı gibi) veya ekranınızı açtığınızda devre dışı bırakılacaktır; bu, cihazın ekran kapalıysa ve cihaz kapalı olmasa bile cihazınızın Doze modunda çok daha uzun süre kalacağı anlamına gelir Sabit, yani pil tasarrufu normalden daha yüksek olacaktır Doze.</string>
     <string name="error_text">Hata</string>
     <string name="please_wait_text">Lütfen Bekleyin</string>
     <string name="requesting_su_access_text">SU erişme isteği...</string>
@@ -34,9 +34,9 @@
     <string name="info_text">Hakkında</string>
     <string name="app_already_whitelisted_text">Eklemeye çalıştığınız uygulama zaten beyaz listeye eklendi!</string>
     <string name="app_not_whitelisted_text">Kaldırmaya çalıştığınız uygulama beyaz listede yok</string>
-    <string name="force_doze_info">EnforceDoze, ekranınızı kapattığınız andan itibaren Doze\'yi etkinleştirir. Ayrıca hareket algılamayı devre dışı bırakır, böylece Doze\'nin bakım işlerini yerine getirmesi için yanlışlıkla devre dışı bırakılmaz, böylece standart pil ömrü standart Doze işlevselliğinden çok daha yüksek olur</string>
+    <string name="force_doze_info">DozePilot, ekranınızı kapattığınız andan itibaren Doze\'yi etkinleştirir. Ayrıca hareket algılamayı devre dışı bırakır, böylece Doze\'nin bakım işlerini yerine getirmesi için yanlışlıkla devre dışı bırakılmaz, böylece standart pil ömrü standart Doze işlevselliğinden çok daha yüksek olur</string>
     <string name="hi_text">Merhaba!</string>
-    <string name="disable_when_charging_setting_summary">Cihaz bir şarj cihazına takıldığında EnforceDoze özelliğini kapat</string>
+    <string name="disable_when_charging_setting_summary">Cihaz bir şarj cihazına takıldığında DozePilot özelliğini kapat</string>
     <string name="disable_when_charging_setting_title">Şarj olurken kapat</string>
     <string name="rotate_brightness_fix_setting_summary">Ekranın açılmasından sonra otomatik döndürme ve otomatik parlaklık çalışmama sorunu çöz</string>
     <string name="rotate_brightness_fix_setting_title">Otomatik döndür / parlaklık düzeltme</string>
@@ -48,8 +48,8 @@
     <string name="doze_delay_setting_title">Doze gecikmesi</string>
     <string name="whitelist_apps_setting_summary">Doze modunda uygulamaları beyaz listeye ekleme</string>
     <string name="whitelist_apps_setting_text">Beyaz liste uygualamsı</string>
-    <string name="reset_forcedoze_setting_summary">EnforceDoze öğesini varsayılan duruma sıfırla</string>
-    <string name="reset_forcedoze_setting_title">Reset EnforceDoze</string>
+    <string name="reset_forcedoze_setting_summary">DozePilot öğesini varsayılan duruma sıfırla</string>
+    <string name="reset_forcedoze_setting_title">Reset DozePilot</string>
     <string name="clear_doze_stats_setting_summary">Doze battery istasiklerini sıfırla</string>
     <string name="clear_doze_stats_setting_title">istasikleri sıfırla</string>
     <string name="show_app_logs_setting_summary">Uygulama hata ayıklama günlüklerini göster</string>
@@ -64,7 +64,7 @@
     <string name="doze_stats_menu_item">Doze Battery İstasikleri</string>
     <string name="more_info_menu_item">Daha fazla bilgi</string>
     <string name="forcedoze_active_dialog_title">Bu kadar</string>
-    <string name="forcedoze_active_dialog_text">ForceDoze artık etkin ve bekleme pil ömrü çok daha fazla olacak!</string>
+    <string name="forcedoze_active_dialog_text">DozePilot artık etkin ve bekleme pil ömrü çok daha fazla olacak!</string>
     <string name="donate_dialog_title">Çalışmamı destekle !</string>
     <string name="donate_dialog_text">ForceDoze, reklamları olmayan tamamen ücretsiz ve açık kaynaklı bir uygulamadır ve böcekleri düzeltmek ve özellikleri eklemek / iyileştirmek için haftalık güncellemelerle bunu yapmak ve iyileştirmek için çok fazla zaman ayırdım. Çalışmalarımdan hoşlanıyorsanız, beni daha fazla çalışmaya ve daha da kullanışlı uygulamalar üretmeye motive etmek için bağış Yapmayı düşündünüzmü Hic</string>
     <string name="donate_dialog_button_text">Bağış yapmak istiyorum</string>
@@ -73,18 +73,18 @@
     <string name="loading_whitelisted_packages">Beyaz listeye eklenen paketler yükleniyor...</string>
     <string name="su_perm_denied_msg">SU izniniz reddedildi veya mevcut değil!</string>
     <string name="auto_rotate_brightness_fix_dialog_title">Otomatik döndürme ve otomatik parlaklık düzeltme</string>
-    <string name="auto_rotate_brightness_fix_dialog_text">ForceDoze, bu özelliği kullanmak için telefonunuzda otomatik döndürme ve otomatik parlaklık ayarını değiştirmek için izin ister. İzin vermek için \'Yetkil\' e basın veya reddetmek için \'İptal\' düğmesine basın</string>
+    <string name="auto_rotate_brightness_fix_dialog_text">DozePilot, bu özelliği kullanmak için telefonunuzda otomatik döndürme ve otomatik parlaklık ayarını değiştirmek için izin ister. İzin vermek için \'Yetkil\' e basın veya reddetmek için \'İptal\' düğmesine basın</string>
     <string name="authorize_button_text">Yetki vermek</string>
     <string name="deny_button_text">Reddetmek</string>
     <string name="device_supports_doze_text">Cihazınız Doze\'yi destekliyor</string>
     <string name="cleared_text">Temizlendi</string>
     <string name="doze_battery_stats_clear_msg">Doze pil istatistikleri başarıyla silindi!</string>
     <string name="reset_complete_dialog_title">Tamamlandı</string>
-    <string name="reset_complete_dialog_text">"ForceDoze kendini sıfırladı. Aşağıdaki değişiklikler yapılmıştır:\n\n1) ForceDoze hizmetini durdurun\n2) Sensörleri devre dışı bırakın, yalnızca devre dışı bırakın\n3) Doze modunu devre dışı bırakın ve yeniden etkinleştirin, Doze modunun düzgün şekilde açılmasını sağlayın  n4) Uygulama tercihlerini sıfırlayın\n5) DÖKME, WRITE_SECURE_SETTINGS, READ_PHONE_STATE, WRITE_SETTINGS, READ_LOGS (izin verilen) izinlerini iptal edin\n\nCihazınızı yeniden başlatmanız önerilir. Uygulama şimdi yeniden başlayacak!"</string>
+    <string name="reset_complete_dialog_text">"DozePilot kendini sıfırladı. Aşağıdaki değişiklikler yapılmıştır:\n\n1) DozePilot hizmetini durdurun\n2) Sensörleri devre dışı bırakın, yalnızca devre dışı bırakın\n3) Doze modunu devre dışı bırakın ve yeniden etkinleştirin, Doze modunun düzgün şekilde açılmasını sağlayın  n4) Uygulama tercihlerini sıfırlayın\n5) DÖKME, WRITE_SECURE_SETTINGS, READ_PHONE_STATE, WRITE_SETTINGS, READ_LOGS (izin verilen) izinlerini iptal edin\n\nCihazınızı yeniden başlatmanız önerilir. Uygulama şimdi yeniden başlayacak!"</string>
     <string name="doze_delay_warning_dialog_title">Uyarı</string>
     <string name="doze_delay_warning_dialog_text">Doze Gecikme değeri şu anda çok yüksek ve pil ömrü üzerinde olumsuz bir etkisi olabilir. Gecikmenin pil ömrü üzerindeki etkilerini sınadığınızdan ve pil ömründe gözle görülür bir düşüş varsa gecikmeyi azaltmayı deneyin..</string>
     <string name="forcedoze_reset_initial_dialog_title">Sıfırlamak istiyor musun</string>
-    <string name="forcedoze_reset_initial_dialog_text">ForceDoze\'yi sıfırlamak, aşağıdaki değişiklikleri yapacaktır:\n\n1) ForceDoze hizmetini durdurun\n2) Sensörleri devre dışı bırakın, sadece devre dışı bırakın\n3) Doze modunun düzgün şekilde açıldığından emin olmak için Doze modunu devre dışı bırakın ve yeniden etkinleştirin\n4) Uygulama tercihlerini sıfırlayın\n5) DÖKME, WRITE_SECURE_SETTINGS, READ_PHONE_STATE, WRITE_SETTINGS, READ_LOGS (izin verilirse) iznini iptal et\n\nDevam etmek istiyor musunuz?</string>
+    <string name="forcedoze_reset_initial_dialog_text">DozePilot\'yi sıfırlamak, aşağıdaki değişiklikleri yapacaktır:\n\n1) DozePilot hizmetini durdurun\n2) Sensörleri devre dışı bırakın, sadece devre dışı bırakın\n3) Doze modunun düzgün şekilde açıldığından emin olmak için Doze modunu devre dışı bırakın ve yeniden etkinleştirin\n4) Uygulama tercihlerini sıfırlayın\n5) DÖKME, WRITE_SECURE_SETTINGS, READ_PHONE_STATE, WRITE_SETTINGS, READ_LOGS (izin verilirse) iznini iptal et\n\nDevam etmek istiyor musunuz?</string>
     <string name="yes_button_text">Evet</string>
     <string name="no_button_text">Hayır</string>
     <string name="turn_off_internet_doze_setting_title">Doze sırasında İnternet\'i devre dışı bırak</string>
@@ -106,7 +106,7 @@
     <string name="doze_stats_battery_icon_meaning_dialog_title">simgeler ne anlama geliyor?</string>
     <string name="doze_stats_battery_icon_meaning_dialog_text">Yıldırım simgesi bulunan pil simgesi, Doze oturumu kabul edilebilir sınırlardaysa pil kullanımını gösterir ve ünlem işaretli pil simgesi, Doze oturumu kabul edilebilir sınırların üstündeyken pil kullanımını gösterir. Herhangi bir Doze oturumunda pil kullanımı kabul edilebilir sınırların üzerindeyse, pilinizin boşaltılmasını araştırmak için GSAM\'a veya başka bir üçüncü parti pil istatistikleri uygulamasına bakmanız önerilir</string>
     <string name="clearing_doze_stats_text">Doze istasiklerini sıfırla...</string>
-    <string name="tile_label">EnforceDoze Pro</string>
+    <string name="tile_label">DozePilot</string>
     <string name="notif_blocklist_setting_summary">Doze sırasında bildirimlerin teslim edilmesini önleme</string>
     <string name="notif_blocklist_setting_title">Doze bildirimleri engelleme listesi</string>
     <string name="app_blocklist_setting_summary">Doze sırasında uygulamaların (arka plan hizmetlerininde) çalışmasını engelleyin</string>

@@ -40,7 +40,7 @@ public class TaskerBroadcastsActivity extends AppCompatActivity {
                 AutomationSecurity.TARGET_PACKAGE_ITEM,
                 getPackageName()
                         + "\n\nTap this item to copy the required target package. "
-                        + "Set Tasker's Package field to this value for every EnforceDoze "
+                        + "Set Tasker's Package field to this value for every DozePilot "
                         + "automation broadcast before adding authToken."
         ));
 
@@ -50,7 +50,7 @@ public class TaskerBroadcastsActivity extends AppCompatActivity {
                         ? "Tap this item to copy the per-install authentication token. "
                                 + "Keep this token private. Set Tasker's Package field first, "
                                 + "then add this value as the authToken extra."
-                        : "Authentication token unavailable. EnforceDoze automation fails closed until "
+                        : "Authentication token unavailable. DozePilot automation fails closed until "
                                 + "the token can be stored."
         ));
 

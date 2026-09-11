@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="no_root_workaround_dialog_text">お使いのデバイスがRoot化されていない場合は、以下のADBコマンドをPCから実行することで、このアプリに\'android.permission.DUMP\'（Nougatの場合は \'android.permission.WRITE_SECURE_SETTINGS\'も）を手動で付与できます。</string>
-    <string name="force_doze_info">EnforceDozeは、画面をオフにした瞬間にDozeモードを有効にします。さらに、モーションセンサーを無効化することで、メンテナンスジョブを実行するタイミング以外で誤ってDozeが解除されるのを防ぎ、標準のDoze機能よりも大幅にバッテリーを節約できます</string>
-    <string name="service_inactive">EnforceDoze サービスは無効</string>
+    <string name="force_doze_info">DozePilotは、画面をオフにした瞬間にDozeモードを有効にします。さらに、モーションセンサーを無効化することで、メンテナンスジョブを実行するタイミング以外で誤ってDozeが解除されるのを防ぎ、標準のDoze機能よりも大幅にバッテリーを節約できます</string>
+    <string name="service_inactive">DozePilot サービスは無効</string>
     <string name="root_workaround_button_text">Root回避策</string>
     <string name="close_button_text">閉じる</string>
     <string name="lockscreen_timeout_snackbar_text">デバイスのロック画面のタイムアウト値が長すぎます！</string>
@@ -20,7 +20,7 @@
     <string name="doze_stats_menu_item">Dozeバッテリー統計</string>
     <string name="more_info_menu_item">詳細情報</string>
     <string name="forcedoze_active_dialog_title">それで全部です</string>
-    <string name="forcedoze_active_dialog_text">EnforceDozeが有効になり、スタンバイ時のバッテリー寿命が大幅に改善されます！</string>
+    <string name="forcedoze_active_dialog_text">DozePilotが有効になり、スタンバイ時のバッテリー寿命が大幅に改善されます！</string>
     <string name="donate_dialog_title">私の作業をサポートする</string>
     <string name="donate_dialog_button_text">寄付してサポートしてください</string>
     <string name="about_app_opensrc_text">EnforceDoze for Androidはオープンソースソフトウェアを使用して構築されています：</string>
@@ -45,7 +45,7 @@
     <string name="remove_package_menu_item">パッケージを削除する</string>
     <string name="compact_view_menu_item">コンパクトビュー</string>
     <string name="doze_stats_battery_icon_meaning_dialog_title">アイコンの意味は？</string>
-    <string name="tile_label">EnforceDoze Pro</string>
+    <string name="tile_label">DozePilot</string>
     <string name="notif_blocklist_setting_title">Doze通知ブロックリスト</string>
     <string name="app_blocklist_setting_summary">Dozeモード中にアプリ（およびそのバックグラウンドサービス）が実行されないようにする</string>
     <string name="app_already_in_blocklist">追加しようとしているアプリはすでにブロックリストに登録されています</string>
@@ -67,12 +67,12 @@
     <string name="notification_channel_tips_description">互換性の問題に関する情報</string>
     <string name="notification_channel_silent_name">サイレントサービス</string>
     <string name="notification_channel_silent_description">フォアグラウンドサービスの最小通知</string>
-    <string name="silent_notification_title">EnforceDoze Proが実行中です</string>
+    <string name="silent_notification_title">DozePilotが実行中です</string>
     <string name="silent_notification_text">Android 12+ではこの通知が必要です。タップしてカスタマイズまたは非表示にします。</string>
     <string name="notifications_permission">通知の権限</string>
     <string name="whitelist_music_app_network_setting_title">音楽アプリをホワイトリストに追加する</string>
     <string name="whitelist_music_app_network_setting_summary">音楽が再生中の場合、すべてのネットワークをオフにしない</string>
-    <string name="disable_stats_setting_summary">ForceDoze統計情報を無効にする</string>
+    <string name="disable_stats_setting_summary">DozePilot統計情報を無効にする</string>
     <string name="disable_stats_setting_title">統計情報を無効にする</string>
     <string name="disable_logcat_setting_title">Logcatを無効にする</string>
     <string name="usage_access_permission">アプリ使用状況アクセス</string>
@@ -80,14 +80,14 @@
     <string name="licenses">ライセンス</string>
     <string name="translations">翻訳</string>
     <string name="privacy_policy">プライバシーポリシー</string>
-    <string name="app_name">EnforceDoze Pro</string>
-    <string name="service_disabled">EnforceDoze サービスは無効化</string>
+    <string name="app_name">DozePilot</string>
+    <string name="service_disabled">DozePilot サービスは無効化</string>
     <string name="doze_unsupported_more_info">一部のデバイスでは、OEMによってDozeモードが無効化されています。このオプションを有効にすることで、デフォルトでDozeモードが有効になっていないデバイスでも使用できるようになります。\n\n注意:このオプションは、スマートフォンを再起動するたびに再度有効にする必要があります。</string>
     <string name="copy_command_button_text">コマンドをコピー</string>
     <string name="requesting_su_access_text">SUアクセスを要求しています...</string>
-    <string name="lockscreen_timeout_dialog_text_p6">" 分経過後、一時的なウェイクロックを使用してデバイスをDozeモードに移行させます。EnforceDozeがより早くDozeモードに移行させるようにするには、デバイスのセキュリティ設定でロック画面のタイムアウトを「すぐに」に設定することを検討してください。また、ロック画面のタイムアウトに関係なくDozeモードへ移行させたい場合は、EnforceDozeの設定で「ロック画面のタイムアウトを無視」オプションを有効にしてください。"</string>
+    <string name="lockscreen_timeout_dialog_text_p6">" 分経過後、一時的なウェイクロックを使用してデバイスをDozeモードに移行させます。DozePilotがより早くDozeモードに移行させるようにするには、デバイスのセキュリティ設定でロック画面のタイムアウトを「すぐに」に設定することを検討してください。また、ロック画面のタイムアウトに関係なくDozeモードへ移行させたい場合は、DozePilotの設定で「ロック画面のタイムアウトを無視」オプションを有効にしてください。"</string>
     <string name="lockscreen_timeout_dialog_text_p3">"画面がオフになっても自動的にロックされず "</string>
-    <string name="how_doze_works_dialog_text">デバイスでのDozeモードの動作について:\n\nユーザーがデバイスを充電せず、しばらくの間（30分間）静止させた状態で画面をオフにすると、デバイスはDozeモードに入ります。Dozeモードでは、システムがバッテリー消費を抑えるためにアプリのネットワークアクセスやCPUを多く使用するサービスを制限します。また、アプリのネットワーク通信を遮断し、ジョブの実行や同期、通常のアラームを遅延させます。\n\nシステムは定期的にDozeモードを一時解除し、アプリが遅延された処理を完了できるようにします。この「メンテナンスウィンドウ」では、システムがすべての保留中の同期、ジョブ、アラームを実行し、アプリがネットワークにアクセスできるようにします。\n\nメンテナンスウィンドウが終了すると、システムは再びDozeモードに入り、ネットワークアクセスを停止し、ジョブや同期、アラームを遅延させます。長時間デバイスが充電されない場合、システムはメンテナンスウィンドウの頻度を徐々に減らし、バッテリー消費を抑える仕組みになっています。\n\nユーザーがデバイスを動かす、画面をオンにする、または充電器を接続すると、システムはDozeモードを解除し、すべてのアプリが通常の動作に戻ります。\n\nEnforceDozeの動作について:\n\nEnforceDozeは、通常30分待ってデバイスが静止してからDozeモードに入るのではなく、画面がオフになった直後（またはユーザーが指定した遅延時間後）に即座にDozeモードへ移行させます。さらに、EnforceDozeはデバイスのモーションセンサーを無効にするため、デバイスを動かしてもDozeモードが解除されません。Dozeが解除されるのは、メンテナンスウィンドウ中（前述の通り）か、画面をオンにしたときのみです。そのため、画面がオフの状態でもデバイスが動いていてもDozeモードが長時間維持され、通常のDozeモードよりも大幅にバッテリーを節約できます。</string>
+    <string name="how_doze_works_dialog_text">デバイスでのDozeモードの動作について:\n\nユーザーがデバイスを充電せず、しばらくの間（30分間）静止させた状態で画面をオフにすると、デバイスはDozeモードに入ります。Dozeモードでは、システムがバッテリー消費を抑えるためにアプリのネットワークアクセスやCPUを多く使用するサービスを制限します。また、アプリのネットワーク通信を遮断し、ジョブの実行や同期、通常のアラームを遅延させます。\n\nシステムは定期的にDozeモードを一時解除し、アプリが遅延された処理を完了できるようにします。この「メンテナンスウィンドウ」では、システムがすべての保留中の同期、ジョブ、アラームを実行し、アプリがネットワークにアクセスできるようにします。\n\nメンテナンスウィンドウが終了すると、システムは再びDozeモードに入り、ネットワークアクセスを停止し、ジョブや同期、アラームを遅延させます。長時間デバイスが充電されない場合、システムはメンテナンスウィンドウの頻度を徐々に減らし、バッテリー消費を抑える仕組みになっています。\n\nユーザーがデバイスを動かす、画面をオンにする、または充電器を接続すると、システムはDozeモードを解除し、すべてのアプリが通常の動作に戻ります。\n\nDozePilotの動作について:\n\nDozePilotは、通常30分待ってデバイスが静止してからDozeモードに入るのではなく、画面がオフになった直後（またはユーザーが指定した遅延時間後）に即座にDozeモードへ移行させます。さらに、DozePilotはデバイスのモーションセンサーを無効にするため、デバイスを動かしてもDozeモードが解除されません。Dozeが解除されるのは、メンテナンスウィンドウ中（前述の通り）か、画面をオンにしたときのみです。そのため、画面がオフの状態でもデバイスが動いていてもDozeモードが長時間維持され、通常のDozeモードよりも大幅にバッテリーを節約できます。</string>
     <string name="about_forcedoze_setting_title">EnforceDozeについて</string>
     <string name="lockscreen_timeout_setting_title">ロック画面のタイムアウトを無視する</string>
     <string name="wait_unlock_setting_summary">デバイスのロック解除を待ってDozeモードを解除し、無効にされた機能を有効にする</string>
@@ -98,8 +98,8 @@
     <string name="doze_delay_setting_summary">画面オフ後にDozeモードが有効になる前に遅延を追加する</string>
     <string name="whitelist_apps_setting_summary">Dozeモードからアプリをホワイトリストに追加する</string>
     <string name="whitelist_apps_setting_text">アプリをホワイトリストに追加する</string>
-    <string name="reset_forcedoze_setting_title">EnforceDozeをリセットする</string>
-    <string name="reset_forcedoze_setting_summary">EnforceDozeをデフォルト状態にリセットする</string>
+    <string name="reset_forcedoze_setting_title">DozePilotをリセットする</string>
+    <string name="reset_forcedoze_setting_summary">DozePilotをデフォルト状態にリセットする</string>
     <string name="clear_doze_stats_setting_title">統計情報をクリアする</string>
     <string name="share_full_logcat_menu_item">完全なlogcatを共有する</string>
     <string name="remove_menu_item">削除する</string>
@@ -112,13 +112,13 @@
     <string name="su_perm_denied_msg">SU権限が拒否されるか、利用できません！</string>
     <string name="doze_battery_stats_clear_msg">Dozeのバッテリー統計は正常にクリアされました！</string>
     <string name="turn_off_internet_doze_setting_title">Dozeモード中にインターネットを無効にする</string>
-    <string name="auto_rotate_brightness_fix_dialog_text">EnforceDozeは、この機能を使用するために自動回転と自動明るさの設定を変更する権限が必要です。「承認」を押して権限を付与するか、「キャンセル」を押して拒否してください</string>
-    <string name="reset_complete_dialog_text">EnforceDozeはリセットされました。以下の変更が行われました：\n\n1) EnforceDozeサービスの停止\n2) センサーを再有効化（無効化されていた場合）\n3) Dozeモードを無効化し、再度有効化して、Dozeモードが適切にオンになっていることを確認\n4) アプリの設定をリセット\n5) DUMP、WRITE_SECURE_SETTINGS、READ_PHONE_STATE、WRITE_SETTINGS、READ_LOGSの権限を取り消し（付与されていた場合）\n\nデバイスの再起動をお勧めします。アプリは現在再起動します！</string>
+    <string name="auto_rotate_brightness_fix_dialog_text">DozePilotは、この機能を使用するために自動回転と自動明るさの設定を変更する権限が必要です。「承認」を押して権限を付与するか、「キャンセル」を押して拒否してください</string>
+    <string name="reset_complete_dialog_text">DozePilotはリセットされました。以下の変更が行われました：\n\n1) DozePilotサービスの停止\n2) センサーを再有効化（無効化されていた場合）\n3) Dozeモードを無効化し、再度有効化して、Dozeモードが適切にオンになっていることを確認\n4) アプリの設定をリセット\n5) DUMP、WRITE_SECURE_SETTINGS、READ_PHONE_STATE、WRITE_SETTINGS、READ_LOGSの権限を取り消し（付与されていた場合）\n\nデバイスの再起動をお勧めします。アプリは現在再起動します！</string>
     <string name="turn_off_internet_doze_setting_summary">Dozeモード中にWiFi/モバイルデータを無効にする</string>
     <string name="disable_data_during_doze_setting_summary">Dozeモード中にモバイルデータをオフにする</string>
     <string name="doze_delay_warning_dialog_text">現在、Doze遅延値が高すぎるため、バッテリー寿命に悪影響を与える可能性があります。遅延がバッテリー寿命に与える影響をテストし、バッテリー寿命の低下が顕著であれば、遅延を減らすことを検討してください。</string>
     <string name="disable_data_during_doze_setting_title">Dozeモード中にモバイルデータを無効にする</string>
-    <string name="forcedoze_reset_initial_dialog_text">ForceDozeをリセットすると、以下の変更が行われます：\n\n1) ForceDozeサービスの停止\n2) センサーを再有効化（無効化されていた場合）\n3) Dozeモードを無効化し、再度有効化して、Dozeモードが適切にオンになっていることを確認\n4) アプリの設定をリセット\n5) DUMP、WRITE_SECURE_SETTINGS、READ_PHONE_STATE、WRITE_SETTINGS、READ_LOGSの権限を取り消し（付与されていた場合）\n\n続けますか？</string>
+    <string name="forcedoze_reset_initial_dialog_text">DozePilotをリセットすると、以下の変更が行われます：\n\n1) DozePilotサービスの停止\n2) センサーを再有効化（無効化されていた場合）\n3) Dozeモードを無効化し、再度有効化して、Dozeモードが適切にオンになっていることを確認\n4) アプリの設定をリセット\n5) DUMP、WRITE_SECURE_SETTINGS、READ_PHONE_STATE、WRITE_SETTINGS、READ_LOGSの権限を取り消し（付与されていた場合）\n\n続けますか？</string>
     <string name="ignore_hospot_during_doze_setting_summary">ホットスポット中にWiFi/データが無効にならないようにする</string>
     <string name="tasker_broadcast_setting_summary">Taskerを通じて使用できるブロードキャストを表示する</string>
     <string name="app_doesnt_exist_in_blocklist">削除しようとしているアプリはブロックリストに存在しません</string>
@@ -135,13 +135,13 @@
     <string name="tunables_su_not_available_error_text">SU権限が拒否されるか、利用できません。この機能を使用するにはルート権限が必要です！続行できますが、設定を保存することはできず、クリップボードにコピーすることのみ可能です。</string>
     <string name="ignore_current_app_setting_summary">現在フォーカスしているアプリは、ブロックリストに含まれていてもホワイトリストに追加されます</string>
     <string name="notifications_permission_explanation">このアプリが音楽を再生しているアプリを検出するには、現在表示されている通知を読み取る必要があり、そのために権限が必要です</string>
-    <string name="disable_logcat_setting_summary">ForceDozeがシステムlogcatにログを記録するのを防ぐ</string>
+    <string name="disable_logcat_setting_summary">DozePilotがシステムlogcatにログを記録するのを防ぐ</string>
     <string name="usage_access_explanation">現在フォーカスしているアプリをクエリするためには、アプリに使用状況アクセス権限が必要です。この権限を有効にするには、使用状況アクセス設定を開いてください</string>
     <string name="read_logcat_su_not_avail_or_denied_error_text">SU権限が拒否された、または利用できないため、logcatを読み取ることができません。\n\nこの機能を使用するには、ADBを使用してREAD_LOGS権限を付与してください:\'adb shell pm grant com.rmpsdroid.dozepilot android.permission.READ_LOGS\'（引用符なしで入力してください）</string>
     <string name="please_wait_text">しばらくお待ちください</string>
-    <string name="lockscreen_timeout_dialog_text_p4">" 分が経過するまでロックされません。このため、EnforceDozeも "</string>
+    <string name="lockscreen_timeout_dialog_text_p4">" 分が経過するまでロックされません。このため、DozePilotも "</string>
     <string name="root_workaround_text">SU（スーパーユーザー）権限が拒否されたか、利用できません！Root権限がない場合は、「Root回避策」を押して、Rootなしモードを有効にする方法を確認してください</string>
-    <string name="service_active">EnforceDoze サービスは有効</string>
+    <string name="service_active">DozePilot サービスは有効</string>
     <string name="doze_delay_setting_title">Dozeモード遅延</string>
     <string name="show_app_logs_setting_summary">アプリケーションのデバッグログを表示する</string>
     <string name="show_app_logs_setting_title">デバッグログ</string>
@@ -163,7 +163,7 @@
     <string name="enable_airplane_setting_summary">デバイスがDozeモード中に機内モードを有効にする</string>
     <string name="disable_biometrics_setting_title">画面オフ時に生体認証によるロック解除を無効にする</string>
     <string name="disable_biometrics_setting_summary">画面オフ時に生体認証によるロック解除を無効にする。すべてのデバイスで機能するわけではありません</string>
-    <string name="disable_when_charging_setting_summary">デバイスが充電器に接続されているときにEnforceDozeを無効にする</string>
+    <string name="disable_when_charging_setting_summary">デバイスが充電器に接続されているときにDozePilotを無効にする</string>
     <string name="disable_when_charging_setting_title">充電中に無効にする</string>
     <string name="rotate_brightness_fix_setting_summary">画面オン後に自動回転と自動明るさが機能しない問題の回避策</string>
     <string name="rotate_brightness_fix_setting_title">自動回転/明るさの修正</string>

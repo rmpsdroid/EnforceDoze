@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
-    <string name="app_name">EnforceDoze Pro</string>
-    <string name="service_active">EnforceDoze servizio attivo</string>
-    <string name="service_inactive">EnforceDoze servizio in pausa</string>
-    <string name="service_disabled">EnforceDoze service disattivato</string>
+    <string name="app_name">DozePilot</string>
+    <string name="service_active">DozePilot servizio attivo</string>
+    <string name="service_inactive">DozePilot servizio in pausa</string>
+    <string name="service_disabled">DozePilot service disattivato</string>
     <string name="root_workaround_text">Permessi SU negati o non disponibili! Se non hai il ROOT, premi \'Modo alternativo\' per ricevere le istruzioni su come abilitare la modalità senza ROOT</string>
     <string name="root_workaround_button_text">Modo alternativo</string>
     <string name="close_button_text">Chiudi</string>
@@ -20,10 +20,10 @@
     <string name="lockscreen_timeout_dialog_text_p1">Il tempo del blocco schermo del dispositivo è troppo elevato (</string>
     <string name="lockscreen_timeout_dialog_text_p2">" minuti). Questo significa che il dispositivo non si "</string>
     <string name="lockscreen_timeout_dialog_text_p3">"bloccherà automaticamente dopo lo spegnimento dello schermo fino "</string>
-    <string name="lockscreen_timeout_dialog_text_p4">" a quando i minuti non saranno passati. Questo significa anche che EnforceDoze aspetterà "</string>
+    <string name="lockscreen_timeout_dialog_text_p4">" a quando i minuti non saranno passati. Questo significa anche che DozePilot aspetterà "</string>
     <string name="lockscreen_timeout_dialog_text_p5">"per "</string>
-    <string name="lockscreen_timeout_dialog_text_p6">" minuti prima di far entrare il tuo dispositivo in modalità Doze usando un wake lock temporaneo. Se vuoi che EnforceDoze faccia entrare il dispositivo il prima possibile in modalià Doze, considera di ridurre il tempo di blocco schermo su Immediatamente nelle Impostazioni Sicurezza del dispositivo. Se vuoi che EnforceDoze faccia entrare il dispositivo in modalità Doze indipendentemente dal tempo di blocco dello schermo, attiva l\'opzione \'Ignora tempo blocco schermo\' nelle impostazioni di EnforceDoze."</string>
-    <string name="how_doze_works_dialog_text">Come funziona Doze sul tuo dispositivo:\n\nSe lasci il dispositivo staccato dalla corrente e immobile per un determinato periodo (30 minuti), con lo schermo spento, il dispositivo entra in modalità Doze. In modalità Doze, il sistema tenterà di conservare batteria limitando l\'accesso alla rete e i servizi ad alto utilizzo di CPU delle app. Inoltre evita che le app utilizzino la rete dati e pospone i suoi lavori, sincronizzazioni e allarmi standard\n\nPeriodicamente, il sistema esce per un breve periodo dalla modalità Doze per consentire alle app di completare le attività rinviate. Durante questa finestra di manutenzione, il sistema esegue tutte le sincronizzazioni, lavori, e allarmi in coda, e permette alle app di collegarsi alla rete dati\n\nAlla conclusione di ogni finestra di manutenzione, il sistema entra nuovamente in modalità Doze, sospendendo l\'accesso alla rete dati e posticipando lavori, sincronizzazioni, e allarmi. Col passare del tempo, il sistema programma meno finestre di manutenzione e per un minor tempo, aiutando a ridurre il consumo di batteria nel caso di inattività per lunghi periodi di tempo in assenza di collegamento alla rete elettrica.\n\nAppena l\'utente attiva il dispositivo muovendolo, accendendo lo schermo, o collegandolo alla rete elettrica, il sistema esce dalla modalità Doze e tutte le app riprendono le loro attività\n\nCome lavora EnforceDoze:\n\nEnforceDoze permette al dispositivo di entrare subito in modalità Doze appena spegni lo schermo (o dopo un determinato periodo specificato dall\'utente), invece di aspettare per 30 minuti che il dispositivo rimanga stazionario. Inoltre, EnforceDoze disattiva i sensori di movimento del dispositivo, così Doze non si disattiva quando muovi il dispositivo. Doze si disattiva soltanto durante le finestre di manutenzione (come spiegato prima) o quando accendi lo schermo, il che significa che il dispositivo starà in modalità Doze per molto più tempo rispetto a se il dispositivo fosse a schermo spento ma in movimento, e quindi il risparmio della batteria sarà molto maggiore rispetto al normale Doze.</string>
+    <string name="lockscreen_timeout_dialog_text_p6">" minuti prima di far entrare il tuo dispositivo in modalità Doze usando un wake lock temporaneo. Se vuoi che DozePilot faccia entrare il dispositivo il prima possibile in modalià Doze, considera di ridurre il tempo di blocco schermo su Immediatamente nelle Impostazioni Sicurezza del dispositivo. Se vuoi che DozePilot faccia entrare il dispositivo in modalità Doze indipendentemente dal tempo di blocco dello schermo, attiva l\'opzione \'Ignora tempo blocco schermo\' nelle impostazioni di DozePilot."</string>
+    <string name="how_doze_works_dialog_text">Come funziona Doze sul tuo dispositivo:\n\nSe lasci il dispositivo staccato dalla corrente e immobile per un determinato periodo (30 minuti), con lo schermo spento, il dispositivo entra in modalità Doze. In modalità Doze, il sistema tenterà di conservare batteria limitando l\'accesso alla rete e i servizi ad alto utilizzo di CPU delle app. Inoltre evita che le app utilizzino la rete dati e pospone i suoi lavori, sincronizzazioni e allarmi standard\n\nPeriodicamente, il sistema esce per un breve periodo dalla modalità Doze per consentire alle app di completare le attività rinviate. Durante questa finestra di manutenzione, il sistema esegue tutte le sincronizzazioni, lavori, e allarmi in coda, e permette alle app di collegarsi alla rete dati\n\nAlla conclusione di ogni finestra di manutenzione, il sistema entra nuovamente in modalità Doze, sospendendo l\'accesso alla rete dati e posticipando lavori, sincronizzazioni, e allarmi. Col passare del tempo, il sistema programma meno finestre di manutenzione e per un minor tempo, aiutando a ridurre il consumo di batteria nel caso di inattività per lunghi periodi di tempo in assenza di collegamento alla rete elettrica.\n\nAppena l\'utente attiva il dispositivo muovendolo, accendendo lo schermo, o collegandolo alla rete elettrica, il sistema esce dalla modalità Doze e tutte le app riprendono le loro attività\n\nCome lavora DozePilot:\n\nDozePilot permette al dispositivo di entrare subito in modalità Doze appena spegni lo schermo (o dopo un determinato periodo specificato dall\'utente), invece di aspettare per 30 minuti che il dispositivo rimanga stazionario. Inoltre, DozePilot disattiva i sensori di movimento del dispositivo, così Doze non si disattiva quando muovi il dispositivo. Doze si disattiva soltanto durante le finestre di manutenzione (come spiegato prima) o quando accendi lo schermo, il che significa che il dispositivo starà in modalità Doze per molto più tempo rispetto a se il dispositivo fosse a schermo spento ma in movimento, e quindi il risparmio della batteria sarà molto maggiore rispetto al normale Doze.</string>
     <string name="error_text">Errore</string>
     <string name="please_wait_text">Attendere prego</string>
     <string name="requesting_su_access_text">Richiesta permessi SU…</string>
@@ -34,9 +34,9 @@
     <string name="info_text">Info</string>
     <string name="app_already_whitelisted_text">L\'app che stai tentando di aggiungere è già in lista bianca!</string>
     <string name="app_not_whitelisted_text">L\'app che stai tentando di rimuovere non è presente in lista bianca</string>
-    <string name="force_doze_info">EnforceDoze attiva Doze nel momento in cui spegni lo schermo. Inoltre disattiva i sensori di movimento per evitare che Doze sia disattivato per sbaglio prima della sua finestra di manutenzione, rendendo il risparmio di batteria molto più alto rispetto al Doze standard</string>
+    <string name="force_doze_info">DozePilot attiva Doze nel momento in cui spegni lo schermo. Inoltre disattiva i sensori di movimento per evitare che Doze sia disattivato per sbaglio prima della sua finestra di manutenzione, rendendo il risparmio di batteria molto più alto rispetto al Doze standard</string>
     <string name="hi_text">Ciao!</string>
-    <string name="disable_when_charging_setting_summary">Disattiva EnforceDoze quando il dispositivo è collegato alla rete elettrica</string>
+    <string name="disable_when_charging_setting_summary">Disattiva DozePilot quando il dispositivo è collegato alla rete elettrica</string>
     <string name="disable_when_charging_setting_title">Disattiva quando in carica</string>
     <string name="rotate_brightness_fix_setting_summary">Soluzione temporanea per rotazione automatica e luminosità automatica non funzionante dopo l\'accensione dello schermo</string>
     <string name="rotate_brightness_fix_setting_title">Fix rotazione automatica/luminosità automatica </string>
@@ -48,8 +48,8 @@
     <string name="doze_delay_setting_title">Ritardo Doze</string>
     <string name="whitelist_apps_setting_summary">Lista bianca dalla modalità Doze</string>
     <string name="whitelist_apps_setting_text">App in lista bianca</string>
-    <string name="reset_forcedoze_setting_summary">Resetta EnforceDoze alle impostazioni originali</string>
-    <string name="reset_forcedoze_setting_title">Resetta EnforceDoze</string>
+    <string name="reset_forcedoze_setting_summary">Resetta DozePilot alle impostazioni originali</string>
+    <string name="reset_forcedoze_setting_title">Resetta DozePilot</string>
     <string name="clear_doze_stats_setting_summary">Cancella le statistiche della batteria di Doze</string>
     <string name="clear_doze_stats_setting_title">Cancella statistiche</string>
     <string name="show_app_logs_setting_summary">Mostra i registri di debug</string>
@@ -64,7 +64,7 @@
     <string name="doze_stats_menu_item">Statistiche batteria Doze</string>
     <string name="more_info_menu_item">Maggiori informazioni</string>
     <string name="forcedoze_active_dialog_title">Fatto</string>
-    <string name="forcedoze_active_dialog_text">EnforceDoze è abilitato e la durata della batteria in standby sarà incrementata di molto!</string>
+    <string name="forcedoze_active_dialog_text">DozePilot è abilitato e la durata della batteria in standby sarà incrementata di molto!</string>
     <string name="donate_dialog_title">Supporta il mio lavoro</string>
     <string name="donate_dialog_text">ForceDoze è un programma open-source completamente gratuito e privo di pubblicità ed io ci ho messo tanto impegno per crearla e migliorarla, con aggiornamenti settimanali per sistemare i vari bug e aggiungere nuove funzioni. Se apprezzi il mio lavoro, considera l\'idea di una donazione per motivarmi nel lavorare sodo per creare altre app utili!</string>
     <string name="donate_dialog_button_text">Voglio donare</string>
@@ -73,18 +73,18 @@
     <string name="loading_whitelisted_packages">Caricamento pacchetti lista bianca…</string>
     <string name="su_perm_denied_msg">Permessi SU negati o non disponibili!</string>
     <string name="auto_rotate_brightness_fix_dialog_title">Fix per rotazione automatica e luminosità automatica</string>
-    <string name="auto_rotate_brightness_fix_dialog_text">ForceDoze richiede permessi per modificare le impostazioni di rotazione automatica e luminosità automatica del dispositivo per usare questa funzione. Premi \'Autorizza\' per dare il permesso, oppure \'Annulla\' per negarlo</string>
+    <string name="auto_rotate_brightness_fix_dialog_text">DozePilot richiede permessi per modificare le impostazioni di rotazione automatica e luminosità automatica del dispositivo per usare questa funzione. Premi \'Autorizza\' per dare il permesso, oppure \'Annulla\' per negarlo</string>
     <string name="authorize_button_text">Autorizza</string>
     <string name="deny_button_text">Nega</string>
     <string name="device_supports_doze_text">Il tuo dispositivo supporta Doze</string>
     <string name="cleared_text">Cancellato</string>
     <string name="doze_battery_stats_clear_msg">Statistiche batteria Doze cancellate con successo!</string>
     <string name="reset_complete_dialog_title">Reset completato</string>
-    <string name="reset_complete_dialog_text">ForceDoze si è resettato da solo. Sono stati fatti i seguenti cambiamenti: \n\n1) Fermato servizio ForceDoze\n2) Riattivati i sensori, in caso fossero stati disattivati\n3) Disattivata e riattivata la modalità Doze, per essere sicuri che sia stata attivata correttamente\n4) Reset preferenze app\n5) Rimossi i permessi DUMP, WRITE_SECURE_SETTINGS, READ_PHONE_STATE, WRITE_SETTINGS, READ_LOGS (se concessi)\n\nSi raccomanda di riavviare il dispositivo. Ora l\'app verrà riavviata!</string>
+    <string name="reset_complete_dialog_text">DozePilot si è resettato da solo. Sono stati fatti i seguenti cambiamenti: \n\n1) Fermato servizio DozePilot\n2) Riattivati i sensori, in caso fossero stati disattivati\n3) Disattivata e riattivata la modalità Doze, per essere sicuri che sia stata attivata correttamente\n4) Reset preferenze app\n5) Rimossi i permessi DUMP, WRITE_SECURE_SETTINGS, READ_PHONE_STATE, WRITE_SETTINGS, READ_LOGS (se concessi)\n\nSi raccomanda di riavviare il dispositivo. Ora l\'app verrà riavviata!</string>
     <string name="doze_delay_warning_dialog_title">Attenzione</string>
     <string name="doze_delay_warning_dialog_text">Il valore corrente di ritardo di Doze è troppo alto e potrebbe avere impatti negativi sulla durata della batteria. Assicurati di testare gli effetti del ritardo sulla batteria e considera di ridurlo se noti un peggioramento di essa.</string>
     <string name="forcedoze_reset_initial_dialog_title">Vuoi resettare?</string>
-    <string name="forcedoze_reset_initial_dialog_text">Resettando ForceDoze farai i seguenti cambiamenti: \n\n1) Fermerai il servizio ForceDoze\n2) Riattiverai i sensori, in caso fossero stati disattivati\n3) Disattiverai e riattiverai la modalità Doze, per essere sicuro che sia stata attivata correttamente\n4) Resetterai le preferenze dell\'app\n5) Rimuoverai i permessi DUMP, WRITE_SECURE_SETTINGS, READ_PHONE_STATE, WRITE_SETTINGS, READ_LOGS (se concessi)\n\nVuoi continuare?</string>
+    <string name="forcedoze_reset_initial_dialog_text">Resettando DozePilot farai i seguenti cambiamenti: \n\n1) Fermerai il servizio DozePilot\n2) Riattiverai i sensori, in caso fossero stati disattivati\n3) Disattiverai e riattiverai la modalità Doze, per essere sicuro che sia stata attivata correttamente\n4) Resetterai le preferenze dell\'app\n5) Rimuoverai i permessi DUMP, WRITE_SECURE_SETTINGS, READ_PHONE_STATE, WRITE_SETTINGS, READ_LOGS (se concessi)\n\nVuoi continuare?</string>
     <string name="yes_button_text">Si</string>
     <string name="no_button_text">No</string>
     <string name="turn_off_internet_doze_setting_title">Disattiva Internet durante Doze</string>
@@ -106,7 +106,7 @@
     <string name="doze_stats_battery_icon_meaning_dialog_title">Cosa significano le icone?</string>
     <string name="doze_stats_battery_icon_meaning_dialog_text">L\'icona della batteria con un fulmine indica che il consumo della batteria durante la sessione Doze è nei valori accettabili, invece l\'icona della batteria con un punto esclamativo indica una sessione Doze con uso della batteria maggiore dei valori accettabili. Se l\'uso della batteria in ogni sessione Doze è sopra i vaolri accettabili, si consiglia di usare app tipo GSAM o simili per indagare su cosa consumi eccessivamente la batteria</string>
     <string name="clearing_doze_stats_text">Cancellando statistiche Doze…</string>
-    <string name="tile_label">EnforceDoze Pro</string>
+    <string name="tile_label">DozePilot</string>
     <string name="notif_blocklist_setting_summary">Evita che le notifiche vangano ricevute durante Doze</string>
     <string name="notif_blocklist_setting_title">Lista notifiche blccate in Doze</string>
     <string name="app_blocklist_setting_summary">Evita che app (e i suoi servizi in background) siano attive durante Doze</string>
@@ -151,7 +151,7 @@
     <string name="notification_channel_tips_description">Informazioni sui problemi di compatibilità</string>
     <string name="notification_channel_silent_name">Servizio silenzioso</string>
     <string name="notification_channel_silent_description">Notifica minima per il servizio in primo piano</string>
-    <string name="silent_notification_title">EnforceDoze Pro è in esecuzione</string>
+    <string name="silent_notification_title">DozePilot è in esecuzione</string>
     <string name="silent_notification_text">Android 12+ richiede questa notifica. Tocca per personalizzare o nasconderla.</string>
     <string name="notifications_permission">Autorizzazione alle notifiche</string>
     <string name="notifications_permission_explanation">Per rilevare le app che riproducono musica, questa app deve leggere le notifiche attualmente visualizzate e quindi necessita dell\'autorizzazione</string>
@@ -167,8 +167,8 @@
     <string name="enable_airplane_setting_title">Attiva modalità Aerea sullo schermo spento</string>
     <string name="stats_long_text" formatted="false">Ultimo spegnimento dello schermo: %1$s\nTempo trascorso spento: %2$d min\nUtilizzo della batteria nell\'ultima sessione di Doze: %3$d%%</string>
     <string name="stats_no_data">Nessuna statistica di Doze disponibile</string>
-    <string name="disable_stats_setting_summary">Disabilita le statistiche di ForceDoze</string>
-    <string name="disable_logcat_setting_summary">Impedisci a ForceDoze di registrare nel logcat di sistema</string>
+    <string name="disable_stats_setting_summary">Disabilita le statistiche di DozePilot</string>
+    <string name="disable_logcat_setting_summary">Impedisci a DozePilot di registrare nel logcat di sistema</string>
     <string name="disable_logcat_setting_title">Disabilita Logcat</string>
     <string name="usage_access_explanation">Per interrogare l\'app attualmente in focus, l\'app necessita dell\'autorizzazione di Accesso all\'utilizzo. È necessario abilitarla aprendo le impostazioni di Accesso all\'utilizzo</string>
     <string name="stats_summary_text" formatted="false">Ultimo scarico Doze: %1$d%%</string>
@@ -177,11 +177,11 @@
     <string name="disable_gps_setting_title">Disattiva il GPS a schermo spento</string>
     <string name="disable_gps_setting_summary">Disattiva il GPS/la localizzazione quando il dispositivo è in modalità Doze</string>
     <string name="show_disabled_notification_setting_title">Mostra la notifica quando disabilitato</string>
-    <string name="show_disabled_notification_setting_summary">Mostra una notifica nella barra di stato quando EnforceDoze è disabilitato (tocca per abilitare)</string>
-    <string name="notification_channel_disabled_name">EnforceDoze disabilitato</string>
-    <string name="notification_channel_disabled_description">Notifica quando EnforceDoze è disabilitato</string>
-    <string name="enforcedoze_disabled_notif_title">EnforceDoze è disabilitato</string>
-    <string name="enforcedoze_disabled_notif_text">Tocca per abilitare EnforceDoze</string>
+    <string name="show_disabled_notification_setting_summary">Mostra una notifica nella barra di stato quando DozePilot è disabilitato (tocca per abilitare)</string>
+    <string name="notification_channel_disabled_name">DozePilot disabilitato</string>
+    <string name="notification_channel_disabled_description">Notifica quando DozePilot è disabilitato</string>
+    <string name="enforcedoze_disabled_notif_title">DozePilot è disabilitato</string>
+    <string name="enforcedoze_disabled_notif_text">Tocca per abilitare DozePilot</string>
     <string name="execution_mode_setting_title">Modalità di esecuzione</string>
     <string name="execution_mode_setting_summary">Scegli tra Root o Shizuku per eseguire i comandi</string>
     <string name="execution_mode_root">Root</string>
@@ -191,5 +191,5 @@
     <string name="apply">Applica</string>
     <string name="tile_subtitle_on">Acceso</string>
     <string name="tile_subtitle_off">Spento</string>
-    <string name="airplane_tile_label">EnforceDoze Pro modalità Aerea</string>
+    <string name="airplane_tile_label">DozePilot modalità Aerea</string>
 </resources>

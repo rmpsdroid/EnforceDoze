@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
-    <string name="app_name">EnforceDoze Pro</string>
-    <string name="service_active">Служба EnforceDoze активна</string>
-    <string name="service_inactive">Служба EnforceDoze неактивна</string>
-    <string name="service_disabled">Служба EnforceDoze отключена</string>
+    <string name="app_name">DozePilot</string>
+    <string name="service_active">Служба DozePilot активна</string>
+    <string name="service_inactive">Служба DozePilot неактивна</string>
+    <string name="service_disabled">Служба DozePilot отключена</string>
     <string name="root_workaround_text">Разрешение SU отклонено или недоступно! Если у вас нет root-прав, нажмите «Обход без root» для получения инструкций по включению режима без root</string>
     <string name="root_workaround_button_text">Обход с root-правами</string>
     <string name="close_button_text">Закрыть</string>
@@ -20,10 +20,10 @@
     <string name="lockscreen_timeout_dialog_text_p1">Значение таймаута экрана блокировки на вашем устройстве слишком велико (</string>
     <string name="lockscreen_timeout_dialog_text_p2">" мин). Это означает, что ваше устройство не "</string>
     <string name="lockscreen_timeout_dialog_text_p3">"автоматически блокируется после выключения экрана до истечения "</string>
-    <string name="lockscreen_timeout_dialog_text_p4">" мин. Это также означает, что EnforceDoze будет ждать "</string>
+    <string name="lockscreen_timeout_dialog_text_p4">" мин. Это также означает, что DozePilot будет ждать "</string>
     <string name="lockscreen_timeout_dialog_text_p5">" "</string>
-    <string name="lockscreen_timeout_dialog_text_p6">" мин перед тем, как заставить устройство войти в режим Doze с помощью временного WakeLock. Если вы хотите, чтобы EnforceDoze заставил устройство войти в режим Doze быстрее, рассмотрите возможность уменьшения таймаута экрана блокировки до «Немедленно» в настройках безопасности устройства. Если вы хотите, чтобы EnforceDoze заставил устройство войти в режим Doze независимо от таймаута экрана блокировки, включите опцию «Игнорировать таймаут экрана блокировки» в настройках EnforceDoze."</string>
-    <string name="how_doze_works_dialog_text">Как работает режим Doze на вашем устройстве: \n\nЕсли пользователь оставляет устройство не подключенным к зарядке и неподвижным в течение определенного времени (30 мин) с выключенным экраном, устройство переходит в режим Doze. В режиме Doze система пытается сэкономить заряд батареи, ограничивая доступ приложений к сети и ресурсоемким службам CPU. Также она предотвращает доступ приложений к сети и откладывает их задачи, синхронизации и стандартные сигналы тревоги \n\nПериодически система выходит из режима Doze на короткое время, чтобы приложения могли выполнить отложенные действия. Во время этого окна обслуживания система выполняет все ожидающие синхронизации, задачи и сигналы тревоги, а также разрешает приложениям доступ к сети \n\nПо окончании каждого окна обслуживания система снова переходит в режим Doze, приостанавливая доступ к сети и откладывая задачи, синхронизации и сигналы тревоги. Со временем система планирует окна обслуживания все реже, помогая сократить потребление батареи в случаях длительного бездействия, когда устройство не подключено к зарядному устройству. \n\nКак только пользователь будит устройство движением, включением экрана или подключением зарядного устройства, система выходит из режима Doze, и все приложения возвращаются к нормальной активности \n\nКак работает EnforceDoze: \n\nEnforceDoze заставляет устройство сразу переходить в режим Doze после выключения экрана (или после указанной пользователем задержки), вместо ожидания 30 минут неподвижности устройства. Кроме того, EnforceDoze также отключает датчики движения устройства, поэтому Doze не деактивируется, если вы перемещаете устройство. Doze будет деактивироваться только во время окна обслуживания (как описано выше) или при включении экрана, что означает, что ваше устройство будет оставаться в режиме Doze гораздо дольше, даже если экран выключен и устройство не неподвижно, что означает значительно большую экономию батареи по сравнению с обычным Doze.</string>
+    <string name="lockscreen_timeout_dialog_text_p6">" мин перед тем, как заставить устройство войти в режим Doze с помощью временного WakeLock. Если вы хотите, чтобы DozePilot заставил устройство войти в режим Doze быстрее, рассмотрите возможность уменьшения таймаута экрана блокировки до «Немедленно» в настройках безопасности устройства. Если вы хотите, чтобы DozePilot заставил устройство войти в режим Doze независимо от таймаута экрана блокировки, включите опцию «Игнорировать таймаут экрана блокировки» в настройках DozePilot."</string>
+    <string name="how_doze_works_dialog_text">Как работает режим Doze на вашем устройстве: \n\nЕсли пользователь оставляет устройство не подключенным к зарядке и неподвижным в течение определенного времени (30 мин) с выключенным экраном, устройство переходит в режим Doze. В режиме Doze система пытается сэкономить заряд батареи, ограничивая доступ приложений к сети и ресурсоемким службам CPU. Также она предотвращает доступ приложений к сети и откладывает их задачи, синхронизации и стандартные сигналы тревоги \n\nПериодически система выходит из режима Doze на короткое время, чтобы приложения могли выполнить отложенные действия. Во время этого окна обслуживания система выполняет все ожидающие синхронизации, задачи и сигналы тревоги, а также разрешает приложениям доступ к сети \n\nПо окончании каждого окна обслуживания система снова переходит в режим Doze, приостанавливая доступ к сети и откладывая задачи, синхронизации и сигналы тревоги. Со временем система планирует окна обслуживания все реже, помогая сократить потребление батареи в случаях длительного бездействия, когда устройство не подключено к зарядному устройству. \n\nКак только пользователь будит устройство движением, включением экрана или подключением зарядного устройства, система выходит из режима Doze, и все приложения возвращаются к нормальной активности \n\nКак работает DozePilot: \n\nDozePilot заставляет устройство сразу переходить в режим Doze после выключения экрана (или после указанной пользователем задержки), вместо ожидания 30 минут неподвижности устройства. Кроме того, DozePilot также отключает датчики движения устройства, поэтому Doze не деактивируется, если вы перемещаете устройство. Doze будет деактивироваться только во время окна обслуживания (как описано выше) или при включении экрана, что означает, что ваше устройство будет оставаться в режиме Doze гораздо дольше, даже если экран выключен и устройство не неподвижно, что означает значительно большую экономию батареи по сравнению с обычным Doze.</string>
     <string name="error_text">Ошибка</string>
     <string name="please_wait_text">Пожалуйста, подождите</string>
     <string name="requesting_su_access_text">Запрашивается доступ SU...</string>
@@ -34,9 +34,9 @@
     <string name="info_text">Инфо</string>
     <string name="app_already_whitelisted_text">Приложение, которое вы пытаетесь добавить, уже находится в белом списке!</string>
     <string name="app_not_whitelisted_text">Приложение, которое вы пытаетесь удалить, отсутствует в белом списке</string>
-    <string name="force_doze_info">EnforceDoze включает Doze в момент выключения экрана. Также отключает датчики движения, поэтому Doze не деактивируется случайно, кроме времени выполнения задач обслуживания, что обеспечивает значительно большую экономию батареи по сравнению со стандартной функциональностью Doze</string>
+    <string name="force_doze_info">DozePilot включает Doze в момент выключения экрана. Также отключает датчики движения, поэтому Doze не деактивируется случайно, кроме времени выполнения задач обслуживания, что обеспечивает значительно большую экономию батареи по сравнению со стандартной функциональностью Doze</string>
     <string name="hi_text">Привет!</string>
-    <string name="disable_when_charging_setting_summary">Отключать EnforceDoze при подключении к зарядке</string>
+    <string name="disable_when_charging_setting_summary">Отключать DozePilot при подключении к зарядке</string>
     <string name="disable_when_charging_setting_title">Отключать при зарядке</string>
     <string name="rotate_brightness_fix_setting_summary">Обход для авто-поворота и авто-яркости после включения экрана</string>
     <string name="rotate_brightness_fix_setting_title">Исправление авто-поворота/яркости</string>
@@ -48,8 +48,8 @@
     <string name="doze_delay_setting_title">Задержка Doze</string>
     <string name="whitelist_apps_setting_summary">Добавить приложения в белый список для режима Doze</string>
     <string name="whitelist_apps_setting_text">Белый список приложений</string>
-    <string name="reset_forcedoze_setting_summary">Сбросить EnforceDoze к состоянию по умолчанию</string>
-    <string name="reset_forcedoze_setting_title">Сбросить EnforceDoze</string>
+    <string name="reset_forcedoze_setting_summary">Сбросить DozePilot к состоянию по умолчанию</string>
+    <string name="reset_forcedoze_setting_title">Сбросить DozePilot</string>
     <string name="clear_doze_stats_setting_summary">Очистить статистику батареи Doze</string>
     <string name="clear_doze_stats_setting_title">Очистить статистику</string>
     <string name="show_app_logs_setting_summary">Показывать отладочные логи приложения</string>
@@ -64,7 +64,7 @@
     <string name="doze_stats_menu_item">Статистика батареи Doze</string>
     <string name="more_info_menu_item">Подробнее</string>
     <string name="forcedoze_active_dialog_title">Готово</string>
-    <string name="forcedoze_active_dialog_text">EnforceDoze теперь включен, и время работы батареи в режиме ожидания значительно улучшится!</string>
+    <string name="forcedoze_active_dialog_text">DozePilot теперь включен, и время работы батареи в режиме ожидания значительно улучшится!</string>
     <string name="donate_dialog_title">Поддержите мою работу</string>
     <string name="donate_dialog_text">EnforceDoze — это полностью бесплатное и с открытым исходным кодом приложение без рекламы, в которое я вложил много времени на создание и улучшение с еженедельными обновлениями для исправления ошибок и добавления/улучшения функций. Если вам нравится моя работа, пожалуйста, рассмотрите возможность пожертвования, чтобы мотивировать меня работать усерднее и создавать еще более полезные приложения!</string>
     <string name="donate_dialog_button_text">Хочу пожертвовать</string>
@@ -73,18 +73,18 @@
     <string name="loading_whitelisted_packages">Загрузка пакетов из белого списка...</string>
     <string name="su_perm_denied_msg">Разрешение SU отклонено или недоступно!</string>
     <string name="auto_rotate_brightness_fix_dialog_title">Исправление авто-поворота и авто-яркости</string>
-    <string name="auto_rotate_brightness_fix_dialog_text">EnforceDoze требуется разрешение на изменение настроек авто-поворота и авто-яркости на вашем телефоне для использования этой функции. Нажмите «Разрешить» для предоставления разрешения или «Отклонить» для отказа</string>
+    <string name="auto_rotate_brightness_fix_dialog_text">DozePilot требуется разрешение на изменение настроек авто-поворота и авто-яркости на вашем телефоне для использования этой функции. Нажмите «Разрешить» для предоставления разрешения или «Отклонить» для отказа</string>
     <string name="authorize_button_text">Разрешить</string>
     <string name="deny_button_text">Отклонить</string>
     <string name="device_supports_doze_text">Ваше устройство поддерживает Doze</string>
     <string name="cleared_text">Очищено</string>
     <string name="doze_battery_stats_clear_msg">Статистика батареи Doze успешно очищена!</string>
     <string name="reset_complete_dialog_title">Сброс завершен</string>
-    <string name="reset_complete_dialog_text">EnforceDoze сбросил себя. Выполнены следующие изменения: \n\n1) Остановка службы EnforceDoze \n2) Повторное включение датчиков на случай, если они отключены \n3) Отключение и повторное включение режима Doze для правильного включения \n4) Сброс предпочтений приложения \n5) Отзыв разрешений DUMP, WRITE_SECURE_SETTINGS, READ_PHONE_STATE, WRITE_SETTINGS, READ_LOGS (если предоставлены) \n\nРекомендуется перезагрузить устройство. Приложение перезапустится сейчас!</string>
+    <string name="reset_complete_dialog_text">DozePilot сбросил себя. Выполнены следующие изменения: \n\n1) Остановка службы DozePilot \n2) Повторное включение датчиков на случай, если они отключены \n3) Отключение и повторное включение режима Doze для правильного включения \n4) Сброс предпочтений приложения \n5) Отзыв разрешений DUMP, WRITE_SECURE_SETTINGS, READ_PHONE_STATE, WRITE_SETTINGS, READ_LOGS (если предоставлены) \n\nРекомендуется перезагрузить устройство. Приложение перезапустится сейчас!</string>
     <string name="doze_delay_warning_dialog_title">Предупреждение</string>
     <string name="doze_delay_warning_dialog_text">Значение задержки Doze слишком велико и может негативно повлиять на время работы батареи. Убедитесь, что протестировали влияние задержки на батарею и рассмотрите уменьшение задержки при заметном снижении времени работы.</string>
     <string name="forcedoze_reset_initial_dialog_title">Вы хотите сбросить?</string>
-    <string name="forcedoze_reset_initial_dialog_text">Сброс EnforceDoze выполнит следующие изменения: \n\n1) Остановка службы EnforceDoze \n2) Повторное включение датчиков на случай, если они отключены \n3) Отключение и повторное включение режима Doze для правильного включения \n4) Сброс предпочтений приложения \n5) Отзыв разрешений DUMP, WRITE_SECURE_SETTINGS, READ_PHONE_STATE, WRITE_SETTINGS, READ_LOGS (если предоставлены) \n\nПродолжить?</string>
+    <string name="forcedoze_reset_initial_dialog_text">Сброс DozePilot выполнит следующие изменения: \n\n1) Остановка службы DozePilot \n2) Повторное включение датчиков на случай, если они отключены \n3) Отключение и повторное включение режима Doze для правильного включения \n4) Сброс предпочтений приложения \n5) Отзыв разрешений DUMP, WRITE_SECURE_SETTINGS, READ_PHONE_STATE, WRITE_SETTINGS, READ_LOGS (если предоставлены) \n\nПродолжить?</string>
     <string name="yes_button_text">Да</string>
     <string name="no_button_text">Нет</string>
     <string name="turn_off_internet_doze_setting_title">Отключать интернет во время Doze</string>
@@ -106,7 +106,7 @@
     <string name="doze_stats_battery_icon_meaning_dialog_title">Что означают иконки?</string>
     <string name="doze_stats_battery_icon_meaning_dialog_text">Иконка батареи с молнией указывает, что расход батареи во время этой сессии Doze был в пределах нормы, а иконка батареи с восклицательным знаком указывает, что расход батареи превысил допустимые пределы. Если расход батареи в любой сессии Doze превышает норму, рекомендуется проверить GSAM или другое приложение для статистики батареи, чтобы выяснить, что разрядило батарею</string>
     <string name="clearing_doze_stats_text">Очистка статистики Doze...</string>
-    <string name="tile_label">EnforceDoze Pro</string>
+    <string name="tile_label">DozePilot</string>
     <string name="doze_unsupported_more_info">На некоторых устройствах режим Doze отключен производителем. Эта опция может включить режим Doze на устройствах, где он не включен по умолчанию.\n\nПримечание: вам придется включать эту опцию каждый раз после перезагрузки телефона.</string>
     <string name="copy_command_button_text">Копировать команду</string>
     <string name="disable_motion_sensors_setting_title">Отключать датчики движения при выкл. экрана</string>
@@ -127,7 +127,7 @@
     <string name="wait_unlock_setting_title">Ждать разблокировки для выхода из Doze</string>
     <string name="ignore_hospot_during_doze_setting_summary">Отключить, чтобы предотвратить отключение WiFi/данных при раздаче интернета</string>
     <string name="ignore_hospot_during_doze_setting_title">Игнорировать состояние точки доступа при входе в Doze</string>
-    <string name="airplane_tile_label">EnforceDoze Pro Авиарежим</string>
+    <string name="airplane_tile_label">DozePilot Авиарежим</string>
     <string name="tile_subtitle_on">Вкл</string>
     <string name="tile_subtitle_off">Выкл</string>
     <string name="notif_blocklist_setting_summary">Предотвращать доставку уведомлений во время Doze</string>
@@ -163,15 +163,15 @@
     <string name="notification_channel_tips_description">Информация о проблемах совместимости</string>
     <string name="notification_channel_silent_name">Тихая служба</string>
     <string name="notification_channel_silent_description">Минимальное уведомление для службы на переднем плане</string>
-    <string name="silent_notification_title">EnforceDoze Pro работает</string>
+    <string name="silent_notification_title">DozePilot работает</string>
     <string name="silent_notification_text">Android 12+ требует это уведомление. Нажмите для настройки или скрытия.</string>
     <string name="notifications_permission">Разрешение на уведомления</string>
     <string name="notifications_permission_explanation">Для обнаружения приложений, воспроизводящих музыку, приложению нужно читать текущие уведомления, поэтому требуется разрешение</string>
     <string name="whitelist_music_app_network_setting_title">Белый список музыкального приложения</string>
     <string name="whitelist_music_app_network_setting_summary">Не отключать все сети если играет музыка</string>
-    <string name="disable_stats_setting_summary">Отключить статистику ForceDoze</string>
+    <string name="disable_stats_setting_summary">Отключить статистику DozePilot</string>
     <string name="disable_stats_setting_title">Отключить статистику</string>
-    <string name="disable_logcat_setting_summary">Запретить ForceDoze логировать в системный logcat</string>
+    <string name="disable_logcat_setting_summary">Запретить DozePilot логировать в системный logcat</string>
     <string name="disable_logcat_setting_title">Отключить Logcat</string>
     <string name="usage_access_permission">Доступ к использованию приложений</string>
     <string name="usage_access_explanation">Для определения текущего активного приложения требуется разрешение «Доступ к использованию». Его нужно включить в настройках «Доступ к использованию»</string>
@@ -180,11 +180,11 @@
     <string name="translations">Переводы</string>
     <string name="privacy_policy">Политика конфиденциальности</string>
     <string name="show_disabled_notification_setting_title">Показывать уведомление при отключении</string>
-    <string name="show_disabled_notification_setting_summary">Показывать уведомление в строке состояния когда EnforceDoze отключен (нажмите для включения)</string>
-    <string name="notification_channel_disabled_name">EnforceDoze отключен</string>
-    <string name="notification_channel_disabled_description">Уведомление когда EnforceDoze отключен</string>
-    <string name="enforcedoze_disabled_notif_title">EnforceDoze отключен</string>
-    <string name="enforcedoze_disabled_notif_text">Нажмите для включения EnforceDoze</string>
+    <string name="show_disabled_notification_setting_summary">Показывать уведомление в строке состояния когда DozePilot отключен (нажмите для включения)</string>
+    <string name="notification_channel_disabled_name">DozePilot отключен</string>
+    <string name="notification_channel_disabled_description">Уведомление когда DozePilot отключен</string>
+    <string name="enforcedoze_disabled_notif_title">DozePilot отключен</string>
+    <string name="enforcedoze_disabled_notif_text">Нажмите для включения DozePilot</string>
     <string name="execution_mode_setting_title">Режим выполнения</string>
     <string name="execution_mode_setting_summary">Выберите между Root или Shizuku для выполнения команд</string>
     <string name="execution_mode_root">Root</string>
@@ -204,7 +204,7 @@
     <string name="sponsor_settings_summary">EnforceDoze — бесплатное и с открытым кодом. Поддержите проект!</string>
     <string name="licenses_text">Material Dialogs\nhttps://github.com/afollestad/material-dialogs\nAidan Michael Follestad — Лицензия MIT\n\nlibsuperuser\nhttps://github.com/Chainfire/libsuperuser\nChainfire — Лицензия Apache 2.0\n\nNanotasks\nhttps://github.com/fabiendevos/nanotasks\nFabien Devos — Лицензия Apache 2.0\n\nProcessPhoenix\nhttps://github.com/JakeWharton/ProcessPhoenix\nJake Wharton — Лицензия Apache 2.0\n\nSimpleCustomTabs\nhttps://github.com/eliseomartelli/SimpleCustomTabs\nEliseo Martelli — Лицензия MIT</string>
     <string name="custom_doze_periods_setting_title">Настраиваемые периоды Doze</string>
-    <string name="custom_doze_periods_setting_summary_empty">Нет настраиваемых периодов. EnforceDoze будет работать в любое время.</string>
+    <string name="custom_doze_periods_setting_summary_empty">Нет настраиваемых периодов. DozePilot будет работать в любое время.</string>
     <string name="custom_doze_periods_setting_summary" formatted="false">Активен в течение: %1$s</string>
     <string name="add_custom_doze_period_button">Добавить период</string>
     <string name="custom_doze_period_start_title">Время начала</string>

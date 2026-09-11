@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
-    <string name="app_name">EnforceDoze Pro</string>
-    <string name="service_active">EnforceDoze Service ist aktiv</string>
-    <string name="service_inactive">EnforceDoze Service ist inaktiv</string>
-    <string name="service_disabled">EnforceDoze Service ist deaktiviert</string>
+    <string name="app_name">DozePilot</string>
+    <string name="service_active">DozePilot Service ist aktiv</string>
+    <string name="service_inactive">DozePilot Service ist inaktiv</string>
+    <string name="service_disabled">DozePilot Service ist deaktiviert</string>
     <string name="root_workaround_text">SU Erlaubnis verweigert oder nicht verfügbar! Wenn du kein Root hast, dann drücke \'Root Workaround\', um zu erfahren, wie man den No-Root Modus aktiviert.</string>
     <string name="root_workaround_button_text">Root Workaround</string>
     <string name="close_button_text">Schließen</string>
@@ -20,10 +20,10 @@
     <string name="lockscreen_timeout_dialog_text_p1">Die Dauer bis zum automatischen Sperren ist auf deinem Gerät zu lang (</string>
     <string name="lockscreen_timeout_dialog_text_p2">" Minuten). Dadurch wird dein Gerät nicht "</string>
     <string name="lockscreen_timeout_dialog_text_p3">"automatisch gesperrt, wenn der Bildschirm ausgeht, bis "</string>
-    <string name="lockscreen_timeout_dialog_text_p4">" Minuten vergangen sind. Dadurch wird auch EnforceDoze "</string>
+    <string name="lockscreen_timeout_dialog_text_p4">" Minuten vergangen sind. Dadurch wird auch DozePilot "</string>
     <string name="lockscreen_timeout_dialog_text_p5">"für "</string>
-    <string name="lockscreen_timeout_dialog_text_p6">" Minuten warten, bis das Gerät in den Doze Modus geht, indem es einen temporären Wake Lock benutzt. Wenn du möchtest, dass ForcdDoze das Gerät schneller in den Doze Modus schickt, solltest du die Dauer bis zum automatischen Sperren in den Sicherheits-Einstellungen auf \'Sofort\' stellen. Wenn du möchtest, dass EnforceDoze den Doze Modus unabhängig von dieser Einstellung startet, dann aktiviere die \'Ignoriere Dauer bis zum automatischen Sperren\' Option in den EnforceDoze Einstellungen."</string>
-    <string name="how_doze_works_dialog_text">Wie der Doze Modus auf deinem Gerät funktioniert:\n\nWenn der Benutzer das Gerät ohne Ladegerät und ohne es zu bewegen für eine bestimmte Zeit (30 Minuten) bei ausgeschaltetem Bildschirm liegen lässt, geht das Gerät in den Doze Modus. Im Doze Modus versucht das System Akku zu sparen, indem der App-Zugriff auf das Internet und CPU-intensive Dienste eingeschränkt werden. Es verhindert auch, dass Apps auf das Netzwerk zugreifen und stellt Aufgaben, Synchronisierungen und Standard-Alarme zurück.\n\nDas System verlässt regelmäßig für eine kurze Zeit den Doze Modus, um Apps zu ermöglichen, ihre zurückgestellten Aktivitäten zu erledigen. Während diesem Wartungsfenster führt das System alle unerledigten Synchronisierungen, Aufgaben und Alarme aus und erlaubt den Apps den Zugriff auf das Internet.\n\nAm Ende eines jeden Wartungsfensters geht das System wieder in den Doze Modus, indem es den Internet-Zugriff unterbricht und Aufgaben, Synchronisierungen und Alarme wieder zurückstellt. Mit der Zeit werden die Wartungsfenster immer seltener aufgerufen, wodurch bei längerer Inaktivität und ohne angeschlossenes Ladegerät Akku gespart wird.\n\nSobald der Benutzer das Gerät aufweckt, indem er es bewegt, den Bildschirm anschaltet oder es an ein Ladegerät anschließt, verläßt das System den Doze Modus und alle Apps kehren zu ihrer normalen Aktivität zurück.\n\nWie EnforceDoze funktioniert:\n\nEnforceDoze bewirkt, dass das Gerät unmittelbar nach dem Ausschalten des Bildschirms (oder nach einer vom Benutzer definierten Zeitspanne) in den Doze Modus geht, anstatt 30 Minuten zu warten, dass das Gerät nicht bewegt wird. Zusätzlich schaltet EnforceDoze die Bewegungssensoren aus, damit der Doze Modus nicht deaktiviert wird, wenn du dein Gerät bewegst. Der Doze Modus wird nur während eines Wartungsfensters (siehe oben) oder wenn du den Bilschirm anschaltest deaktiviert, wodurch dein Gerät viel länger im Doze Modus bleibt, selbst wenn das Gerät bei ausgeschaltetem Bildschirm nicht ruht. Dadurch wird deutlich mehr Akku gespart als im normalen Doze Modus.</string>
+    <string name="lockscreen_timeout_dialog_text_p6">" Minuten warten, bis das Gerät in den Doze Modus geht, indem es einen temporären Wake Lock benutzt. Wenn du möchtest, dass DozePilot das Gerät schneller in den Doze Modus schickt, solltest du die Dauer bis zum automatischen Sperren in den Sicherheits-Einstellungen auf \'Sofort\' stellen. Wenn du möchtest, dass DozePilot den Doze Modus unabhängig von dieser Einstellung startet, dann aktiviere die \'Ignoriere Dauer bis zum automatischen Sperren\' Option in den DozePilot Einstellungen."</string>
+    <string name="how_doze_works_dialog_text">Wie der Doze Modus auf deinem Gerät funktioniert:\n\nWenn der Benutzer das Gerät ohne Ladegerät und ohne es zu bewegen für eine bestimmte Zeit (30 Minuten) bei ausgeschaltetem Bildschirm liegen lässt, geht das Gerät in den Doze Modus. Im Doze Modus versucht das System Akku zu sparen, indem der App-Zugriff auf das Internet und CPU-intensive Dienste eingeschränkt werden. Es verhindert auch, dass Apps auf das Netzwerk zugreifen und stellt Aufgaben, Synchronisierungen und Standard-Alarme zurück.\n\nDas System verlässt regelmäßig für eine kurze Zeit den Doze Modus, um Apps zu ermöglichen, ihre zurückgestellten Aktivitäten zu erledigen. Während diesem Wartungsfenster führt das System alle unerledigten Synchronisierungen, Aufgaben und Alarme aus und erlaubt den Apps den Zugriff auf das Internet.\n\nAm Ende eines jeden Wartungsfensters geht das System wieder in den Doze Modus, indem es den Internet-Zugriff unterbricht und Aufgaben, Synchronisierungen und Alarme wieder zurückstellt. Mit der Zeit werden die Wartungsfenster immer seltener aufgerufen, wodurch bei längerer Inaktivität und ohne angeschlossenes Ladegerät Akku gespart wird.\n\nSobald der Benutzer das Gerät aufweckt, indem er es bewegt, den Bildschirm anschaltet oder es an ein Ladegerät anschließt, verläßt das System den Doze Modus und alle Apps kehren zu ihrer normalen Aktivität zurück.\n\nWie DozePilot funktioniert:\n\nDozePilot bewirkt, dass das Gerät unmittelbar nach dem Ausschalten des Bildschirms (oder nach einer vom Benutzer definierten Zeitspanne) in den Doze Modus geht, anstatt 30 Minuten zu warten, dass das Gerät nicht bewegt wird. Zusätzlich schaltet DozePilot die Bewegungssensoren aus, damit der Doze Modus nicht deaktiviert wird, wenn du dein Gerät bewegst. Der Doze Modus wird nur während eines Wartungsfensters (siehe oben) oder wenn du den Bilschirm anschaltest deaktiviert, wodurch dein Gerät viel länger im Doze Modus bleibt, selbst wenn das Gerät bei ausgeschaltetem Bildschirm nicht ruht. Dadurch wird deutlich mehr Akku gespart als im normalen Doze Modus.</string>
     <string name="error_text">Fehler</string>
     <string name="please_wait_text">Bitte warten</string>
     <string name="requesting_su_access_text">Fordere SU Zugriff an...</string>
@@ -34,9 +34,9 @@
     <string name="info_text">Info</string>
     <string name="app_already_whitelisted_text">Die App, die du hinzufügen möchtest, ist bereits auf der Positivliste!</string>
     <string name="app_not_whitelisted_text">Die App, die du entfernen möchtest, existiert nicht auf der Positivliste.</string>
-    <string name="force_doze_info">EnforceDoze aktiviert den Doze Modus, sobald du den Bildschirm ausschaltest. Es deaktiviert auch die Bewegungssensoren, damit der Doze Modus bis zum nächsten Wartungsfenster nicht versehentlich deaktiviert wird, wodurch die Akkuersparnis deutlich höher ausfällt als mit der normalen Doze Funktion.</string>
+    <string name="force_doze_info">DozePilot aktiviert den Doze Modus, sobald du den Bildschirm ausschaltest. Es deaktiviert auch die Bewegungssensoren, damit der Doze Modus bis zum nächsten Wartungsfenster nicht versehentlich deaktiviert wird, wodurch die Akkuersparnis deutlich höher ausfällt als mit der normalen Doze Funktion.</string>
     <string name="hi_text">Hallo!</string>
-    <string name="disable_when_charging_setting_summary">Schaltet EnforceDoze aus, wenn das Gerät am Ladegerät hängt.</string>
+    <string name="disable_when_charging_setting_summary">Schaltet DozePilot aus, wenn das Gerät am Ladegerät hängt.</string>
     <string name="disable_when_charging_setting_title">Schalte während des Ladens aus</string>
     <string name="rotate_brightness_fix_setting_summary">Workaround, wenn automatisches Drehen und Helligkeit nach dem Anschalten des Bildschirms nicht funktioniert.</string>
     <string name="rotate_brightness_fix_setting_title">Automatisches Drehen/Helligkeit Fix</string>
@@ -48,8 +48,8 @@
     <string name="doze_delay_setting_title">Doze Verzögerung</string>
     <string name="whitelist_apps_setting_summary">Setze Apps auf die Positivliste, um sie vom Doze Modus auszunehmen.</string>
     <string name="whitelist_apps_setting_text">Positivliste für Apps</string>
-    <string name="reset_forcedoze_setting_summary">Setzt EnforceDoze auf seine Voreinstellung zurück.</string>
-    <string name="reset_forcedoze_setting_title">Setze EnforceDoze zurück</string>
+    <string name="reset_forcedoze_setting_summary">Setzt DozePilot auf seine Voreinstellung zurück.</string>
+    <string name="reset_forcedoze_setting_title">Setze DozePilot zurück</string>
     <string name="clear_doze_stats_setting_summary">Löscht die Doze Akku Statistik.</string>
     <string name="clear_doze_stats_setting_title">Lösche Statistik</string>
     <string name="show_app_logs_setting_summary">Zeigt die App Debug Logs.</string>
@@ -64,7 +64,7 @@
     <string name="doze_stats_menu_item">Doze Akku Statistik</string>
     <string name="more_info_menu_item">Mehr Info</string>
     <string name="forcedoze_active_dialog_title">Das war\'s</string>
-    <string name="forcedoze_active_dialog_text">EnforceDoze ist nun aktiviert und dein Akkuverbrauch im Standby wird sich deutlich verbessern!</string>
+    <string name="forcedoze_active_dialog_text">DozePilot ist nun aktiviert und dein Akkuverbrauch im Standby wird sich deutlich verbessern!</string>
     <string name="donate_dialog_title">Unterstütze meine Arbeit</string>
     <string name="donate_dialog_text">EnforceDoze ist vollkommen gratis, Open-Source und ohne Werbung. Ich habe viel Zeit investiert, es zu programmieren und zu verbessern, mit wöchentlichen Updates zur Beseitigung von Fehlern und neuen und verbesserten Features. Wenn Dir meine Arbeit gefällt, dann erwäge bitte eine Spende, um mich für meine weitere Arbeit zu motivieren und um noch nützlichere Apps zu erschaffen!</string>
     <string name="donate_dialog_button_text">Ich möchte spenden</string>
@@ -73,18 +73,18 @@
     <string name="loading_whitelisted_packages">Lade Paketnamen von der Positivliste...</string>
     <string name="su_perm_denied_msg">SU Erlaubnis verweigert oder SU nicht verfügbar!</string>
     <string name="auto_rotate_brightness_fix_dialog_title">Fix für automatisches Drehen und Helligkeit</string>
-    <string name="auto_rotate_brightness_fix_dialog_text">EnforceDoze benötigt die Erlaubnis, das automatische Drehen und die automatische Helligkeit auf deinem Telefon zu ändern, um dieses Feature zu benutzen zu können. Drücke \'Genehmigen\' um die Erlaubnis zu erteilen oder \'Abbruch\' um sie zu verweigern.</string>
+    <string name="auto_rotate_brightness_fix_dialog_text">DozePilot benötigt die Erlaubnis, das automatische Drehen und die automatische Helligkeit auf deinem Telefon zu ändern, um dieses Feature zu benutzen zu können. Drücke \'Genehmigen\' um die Erlaubnis zu erteilen oder \'Abbruch\' um sie zu verweigern.</string>
     <string name="authorize_button_text">Genehmigen</string>
     <string name="deny_button_text">Abbruch</string>
     <string name="device_supports_doze_text">dein Gerät unterstützt Doze</string>
     <string name="cleared_text">Gelöscht</string>
     <string name="doze_battery_stats_clear_msg">Die Doze Akku Statistik wurde erfolgreich gelöscht!</string>
     <string name="reset_complete_dialog_title">Zurücksetzen abgeschlossen</string>
-    <string name="reset_complete_dialog_text">ForceDoze hat sich selbst zurückgesetzt. Folgende Änderungen wurden vorgenommen: \n\n1) Stoppe den ForceDoze Dienst\n2) Reaktiviere die Sensoren, für den Fall, dass sie deaktiviert waren\n3) De- und Reaktiviere den Doze Modus, um sicherzustellen, dass er ordnungsgemäß läuft\n4) Setze die App Voreinstellungen zurück\n5) Wiederrufe die DUMP, WRITE_SECURE_SETTINGS, READ_PHONE_STATE, WRITE_SETTINGS, READ_LOGS Erlaubnis (falls sie erteilt war)\n\nEs wird empfohlen, das Gerät neu zu starten. Die App startet jetzt neu!</string>
+    <string name="reset_complete_dialog_text">DozePilot hat sich selbst zurückgesetzt. Folgende Änderungen wurden vorgenommen: \n\n1) Stoppe den DozePilot Dienst\n2) Reaktiviere die Sensoren, für den Fall, dass sie deaktiviert waren\n3) De- und Reaktiviere den Doze Modus, um sicherzustellen, dass er ordnungsgemäß läuft\n4) Setze die App Voreinstellungen zurück\n5) Wiederrufe die DUMP, WRITE_SECURE_SETTINGS, READ_PHONE_STATE, WRITE_SETTINGS, READ_LOGS Erlaubnis (falls sie erteilt war)\n\nEs wird empfohlen, das Gerät neu zu starten. Die App startet jetzt neu!</string>
     <string name="doze_delay_warning_dialog_title">Warnung</string>
     <string name="doze_delay_warning_dialog_text">Die Doze Verzögerung ist momentag zu hoch eingestellt und kann einen negativen Effekt für den Akkuverbrauch haben. Bitte teste den Einfluss der Verzögerung auf den Akkuverbrauch und verringere die Verzögerung, wenn du einen höheren Akkuverbrauch feststellen solltest.</string>
     <string name="forcedoze_reset_initial_dialog_title">Möchtest du zurücksetzen?</string>
-    <string name="forcedoze_reset_initial_dialog_text">Das Zurücksetzen von ForceDoze bewirkt folgende Änderungen: \n\n1) Stoppe den ForceDoze Dienst\n2) Reaktiviere die Sensoren, für den Fall, dass sie deaktiviert waren\n3) De- und Reaktiviere den Doze Modus, um sicherzustellen, dass er ordnungsgemäß läuft\n4) Setze die App Voreinstellungen zurück\n5) Wiederrufe die DUMP, WRITE_SECURE_SETTINGS, READ_PHONE_STATE, WRITE_SETTINGS, READ_LOGS Erlaubnis (falls sie erteilt war)\n\nMöchtest du fortfahren?</string>
+    <string name="forcedoze_reset_initial_dialog_text">Das Zurücksetzen von DozePilot bewirkt folgende Änderungen: \n\n1) Stoppe den DozePilot Dienst\n2) Reaktiviere die Sensoren, für den Fall, dass sie deaktiviert waren\n3) De- und Reaktiviere den Doze Modus, um sicherzustellen, dass er ordnungsgemäß läuft\n4) Setze die App Voreinstellungen zurück\n5) Wiederrufe die DUMP, WRITE_SECURE_SETTINGS, READ_PHONE_STATE, WRITE_SETTINGS, READ_LOGS Erlaubnis (falls sie erteilt war)\n\nMöchtest du fortfahren?</string>
     <string name="yes_button_text">Ja</string>
     <string name="no_button_text">Nein</string>
     <string name="turn_off_internet_doze_setting_title">Deaktiviere das Internet während Doze</string>
@@ -106,7 +106,7 @@
     <string name="doze_stats_battery_icon_meaning_dialog_title">Was bedeuten die Symbole?</string>
     <string name="doze_stats_battery_icon_meaning_dialog_text">Das Batteriesymbol mit einem Blitz zeigt an, dass der Akkuverbrauch während dieses Dozes Zeitraums in einem akzeptablen Bereich war. Das Batteriesymbol mit einem Ausrufezeichen zeigt an, dass der Akkuverbrauch während dieses Doze Zeitraums höher als üblich war. Wenn dein Akkuverbrauch in den Doze Zeiträumen höher als üblich ist, dann ist es ratsam, ihn mit GSAM oder einer anderen App zur Analyse des Akkuverbrauchs zu beobachten, um festzustellen, was den hohen Akkuverbrauch verursacht.</string>
     <string name="clearing_doze_stats_text">Lösche die Doze Statistiken...</string>
-    <string name="tile_label">EnforceDoze Pro</string>
+    <string name="tile_label">DozePilot</string>
     <string name="doze_unsupported_more_info">Bei einigen Geräten ist der Doze Modus vom Hersteller deaktiviert. \nDiese Option kann den Doze Modus aktivieren wenn er nicht automatisch aktiviert ist.</string>
     <string name="disable_motion_sensors_setting_title">Deaktiviere Bewegungssensoren bei ausgeschaltetetem Bildschirm.</string>
     <string name="disable_motion_sensors_setting_summary">Deaktiviere Bewegungssensoren \nwenn das Gerät in den Doze Modus \ngeht.</string>
