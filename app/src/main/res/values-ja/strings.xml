@@ -137,7 +137,7 @@
     <string name="notifications_permission_explanation">このアプリが音楽を再生しているアプリを検出するには、現在表示されている通知を読み取る必要があり、そのために権限が必要です</string>
     <string name="disable_logcat_setting_summary">ForceDozeがシステムlogcatにログを記録するのを防ぐ</string>
     <string name="usage_access_explanation">現在フォーカスしているアプリをクエリするためには、アプリに使用状況アクセス権限が必要です。この権限を有効にするには、使用状況アクセス設定を開いてください</string>
-    <string name="read_logcat_su_not_avail_or_denied_error_text">SU権限が拒否された、または利用できないため、logcatを読み取ることができません。\n\nこの機能を使用するには、ADBを使用してREAD_LOGS権限を付与してください:\'adb shell pm grant com.akylas.enforcedoze.fork android.permission.READ_LOGS\'（引用符なしで入力してください）</string>
+    <string name="read_logcat_su_not_avail_or_denied_error_text">SU権限が拒否された、または利用できないため、logcatを読み取ることができません。\n\nこの機能を使用するには、ADBを使用してREAD_LOGS権限を付与してください:\'adb shell pm grant com.rmpsdroid.dozepilot android.permission.READ_LOGS\'（引用符なしで入力してください）</string>
     <string name="please_wait_text">しばらくお待ちください</string>
     <string name="lockscreen_timeout_dialog_text_p4">" 分が経過するまでロックされません。このため、EnforceDozeも "</string>
     <string name="root_workaround_text">SU（スーパーユーザー）権限が拒否されたか、利用できません！Root権限がない場合は、「Root回避策」を押して、Rootなしモードを有効にする方法を確認してください</string>

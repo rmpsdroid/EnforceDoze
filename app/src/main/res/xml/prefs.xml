@@ -51,7 +51,7 @@
             <intent
                 android:action="android.intent.action.VIEW"
                 android:targetClass="com.akylas.enforcedoze.WhitelistAppsActivity"
-                android:targetPackage="com.akylas.enforcedoze.fork" />
+                android:targetPackage="com.rmpsdroid.dozepilot" />
         </Preference>
     </PreferenceCategory>
     <PreferenceCategory android:title="Doze enhancements" android:key="dozeSettings">
@@ -135,7 +135,7 @@
             <intent
                 android:action="android.intent.action.VIEW"
                 android:targetClass="com.akylas.enforcedoze.BlockNotificationsActivity"
-                android:targetPackage="com.akylas.enforcedoze.fork" />
+                android:targetPackage="com.rmpsdroid.dozepilot" />
         </Preference>
         <Preference
             android:key="blacklistApps"
@@ -144,7 +144,7 @@
             <intent
                 android:action="android.intent.action.VIEW"
                 android:targetClass="com.akylas.enforcedoze.BlockAppsActivity"
-                android:targetPackage="com.akylas.enforcedoze.fork" />
+                android:targetPackage="com.rmpsdroid.dozepilot" />
         </Preference>
     </PreferenceCategory>
     <PreferenceCategory android:title="@string/diagnostics_category_title">
@@ -196,7 +196,7 @@
             <intent
                 android:action="android.intent.action.VIEW"
                 android:targetClass="com.akylas.enforcedoze.LogActivity"
-                android:targetPackage="com.akylas.enforcedoze.fork" />
+                android:targetPackage="com.rmpsdroid.dozepilot" />
         </Preference>
         <Preference
             android:key="taskerBroadcasts"
@@ -205,7 +205,7 @@
             <intent
                 android:action="android.intent.action.VIEW"
                 android:targetClass="com.akylas.enforcedoze.TaskerBroadcastsActivity"
-                android:targetPackage="com.akylas.enforcedoze.fork" />
+                android:targetPackage="com.rmpsdroid.dozepilot" />
         </Preference>
         <Preference
             android:key="aboutForceDoze"
@@ -213,7 +213,7 @@
         <intent
             android:action="android.intent.action.VIEW"
             android:targetClass="com.akylas.enforcedoze.AboutAppActivity"
-            android:targetPackage="com.akylas.enforcedoze.fork" />
+            android:targetPackage="com.rmpsdroid.dozepilot" />
         </Preference>
     </PreferenceCategory>
 </PreferenceScreen>

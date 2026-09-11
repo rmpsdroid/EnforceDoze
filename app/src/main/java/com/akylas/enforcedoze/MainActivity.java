@@ -81,12 +81,56 @@ public class MainActivity extends AppCompatActivity implements CompoundButton.On
     TextView textViewStatus;
     CoordinatorLayout coordinatorLayout;
     ShizukuHandler shizukuHandler;
+    private boolean legacyForkSafetyBlocked = false;
 
     private static void log(String message) {
         logToLogcat(TAG, message);
     }
 
+    private boolean applyLegacyForkSafetyGate(boolean showDialog) {
+        boolean wasServiceEnabled = settings != null
+                && settings.getBoolean("serviceEnabled", false);
+        if (!Utils.enforceLegacyForkSafety(this, "MainActivity")) {
+            return false;
+        }
+
+        boolean firstBlock = !legacyForkSafetyBlocked;
+        legacyForkSafetyBlocked = true;
+        serviceEnabled = false;
+
+        toggleForceDozeSwitch.setOnCheckedChangeListener(null);
+        toggleForceDozeSwitch.setChecked(false);
+        toggleForceDozeSwitch.setEnabled(false);
+        toggleForceDozeSwitch.setOnCheckedChangeListener(this);
+        textViewStatus.setText(R.string.legacy_fork_blocked_status);
+
+        /*
+         * If DozePilot had been enabled before this gate forced it off, request recovery
+         * explicitly. Do not depend on getRunningServices(): it can false-negative on
+         * some Android/One UI versions.
+         */
+        if (firstBlock && wasServiceEnabled) {
+            log("Legacy fork detected while DozePilot was enabled; requesting recovery");
+            Utils.startForceDozeServiceAction(
+                    this, ForceDozeService.ACTION_RESTORE_STATE);
+        }
+
+        if (showDialog && firstBlock && !isFinishing()) {
+            MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this);
+            builder.setTitle(getString(R.string.legacy_fork_detected_title));
+            builder.setMessage(getString(R.string.legacy_fork_detected_message));
+            builder.setPositiveButton(getString(R.string.close_button_text), null);
+            builder.show();
+        }
+
+        return true;
+    }
+
     private void updateToggleState() {
+        if (applyLegacyForkSafetyGate(false)) {
+            return;
+        }
+
         serviceEnabled = settings.getBoolean("serviceEnabled", false);
         toggleForceDozeSwitch.setOnCheckedChangeListener(null);
         toggleForceDozeSwitch.setChecked(serviceEnabled);
@@ -135,6 +179,11 @@ public class MainActivity extends AppCompatActivity implements CompoundButton.On
         LocalBroadcastManager.getInstance(this).registerReceiver(updateStateFromTile, new IntentFilter("update-state-from-tile"));
         ((TextView) findViewById(R.id.textView)).setMovementMethod(new ScrollingMovementMethod());
         toggleForceDozeSwitch.setOnCheckedChangeListener(null);
+
+        // Block before runtime permissions, Shizuku or root setup so the two apps never compete.
+        if (applyLegacyForkSafetyGate(true)) {
+            return;
+        }
 
         if (!Utils.isPostNotificationPermissionGranted(this)) {
             requestNotificationPermission();
@@ -344,6 +393,11 @@ public class MainActivity extends AppCompatActivity implements CompoundButton.On
         if (settings != null) {
             settings.registerOnSharedPreferenceChangeListener(this);
         }
+        if (legacyForkSafetyBlocked && !Utils.isLegacyForkInstalled(this)) {
+            // The user completed migration while we were backgrounded; restart normal setup.
+            recreate();
+            return;
+        }
         updateToggleState();
         // Show disabled notification if EnforceDoze is disabled
         if (!serviceEnabled) {
@@ -510,6 +564,10 @@ public class MainActivity extends AppCompatActivity implements CompoundButton.On
 
     @Override
     public void onCheckedChanged(CompoundButton compoundButton, boolean b) {
+        if (b && applyLegacyForkSafetyGate(true)) {
+            return;
+        }
+
         if (b) {
             editor = settings.edit();
             editor.putBoolean("serviceEnabled", true);

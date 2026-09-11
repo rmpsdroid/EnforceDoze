@@ -27,7 +27,7 @@
     <string name="error_text">Errore</string>
     <string name="please_wait_text">Attendere prego</string>
     <string name="requesting_su_access_text">Richiesta permessi SU…</string>
-    <string name="read_logcat_su_not_avail_or_denied_error_text">Permessi SU negati o non disponibili, quindi non posso leggere il logcat.\n\nPer favore dare il permesso READ_LOGS tramite comando ADB per usare questa funzione: \'adb shell pm grant com.akylas.enforcedoze.fork android.permission.READ_LOGS\' (senza virgolette)</string>
+    <string name="read_logcat_su_not_avail_or_denied_error_text">Permessi SU negati o non disponibili, quindi non posso leggere il logcat.\n\nPer favore dare il permesso READ_LOGS tramite comando ADB per usare questa funzione: \'adb shell pm grant com.rmpsdroid.dozepilot android.permission.READ_LOGS\' (senza virgolette)</string>
     <string name="loading_installed_apps_text">Caricamento app installate…</string>
     <string name="whitelisting_text">Lista bianca</string>
     <string name="whitelisted_apps_restrictions_text">"Un\'app in lista bianca può usare la rete dati e wake lock parziali durante la modalità Doze e stanby dell\'app. Tuttavia, le altre restrizioni saranno applicate alle app in lista bianca, come qualunque altra app. Per esempio, ad un app in lista bianca i lavori e sincronizzazioni verranno rinviati e i regolari allarmi non eseguiti. "</string>

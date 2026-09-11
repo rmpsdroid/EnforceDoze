@@ -27,7 +27,7 @@
     <string name="error_text">Ошибка</string>
     <string name="please_wait_text">Пожалуйста, подождите</string>
     <string name="requesting_su_access_text">Запрашивается доступ SU...</string>
-    <string name="read_logcat_su_not_avail_or_denied_error_text">Разрешение SU отклонено или недоступно, поэтому невозможно читать logcat. \n\nПожалуйста, предоставьте разрешение READ_LOGS через ADB для использования этой функции: «adb shell pm grant com.akylas.enforcedoze.fork android.permission.READ_LOGS» (без кавычек)</string>
+    <string name="read_logcat_su_not_avail_or_denied_error_text">Разрешение SU отклонено или недоступно, поэтому невозможно читать logcat. \n\nПожалуйста, предоставьте разрешение READ_LOGS через ADB для использования этой функции: «adb shell pm grant com.rmpsdroid.dozepilot android.permission.READ_LOGS» (без кавычек)</string>
     <string name="loading_installed_apps_text">Загрузка установленных приложений...</string>
     <string name="whitelisting_text">Белый список</string>
     <string name="whitelisted_apps_restrictions_text">"Приложение из белого списка может использовать сеть и удерживать частичные WakeLock во время Doze и App Standby. Однако другие ограничения все еще применяются к приложению из белого списка, так же как и к другим приложениям. Например, задачи и синхронизации приложения из белого списка откладываются, а его обычные сигналы тревоги AlarmManager не срабатывают. "</string>

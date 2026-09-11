@@ -2621,35 +2621,42 @@ Keep raw logs local unless sanitized publication has a concrete purpose.
 
 ---
 
-# 23. PUBLIC RELEASE PLAN — LATER
+# 23. CHECKPOINT D — PUBLIC RELEASE / DOZEPILOT PROGRAM — ACTIVE
 
-Only after reliability auditing is frozen:
+The reliability/security baseline is frozen unless genuinely new evidence establishes a
+regression. Public-release work now proceeds separately as Checkpoint D; do not reopen
+closed reliability gates merely because branding or release work is active.
 
-1. full regression suite;
-2. review all integrated fixes;
-3. complete rebranding;
-4. app/fork identity review;
-5. new icon/adaptive icon/splash/artwork;
-6. UI/settings modernization;
-7. donation/support review;
-8. preserve upstream attribution and legal notices;
-9. professional GitHub README;
-10. screenshots;
-11. installation/build instructions;
-12. Shizuku instructions;
-13. root instructions if retained;
-14. supported Android/Samsung notes;
-15. troubleshooting;
-16. changelog;
-17. audit/test history;
-18. architecture/reliability notes;
-19. known limitations;
-20. credits/upstream links;
-21. release notes;
-22. signing/release process;
-23. GitHub Releases/APK publication.
+Locked public identity:
 
-Do not mix this work into current reliability branches.
+- app name: `DozePilot`;
+- application ID: `com.rmpsdroid.dozepilot`;
+- Java namespace remains `com.akylas.enforcedoze`;
+- GitHub owner: `rmpsdroid`;
+- upstream EnforceDoze attribution, license notices, and fork history must be preserved.
+
+Checkpoint D status:
+
+1. **D1 — baseline/public-release audit — CLOSED / PASS**
+2. **D2 — final identity and application-ID migration — CLOSED / PASS**
+   - D2.1 application-ID dependency audit — CLOSED / PASS;
+   - D2.2A core application-ID migration — CLOSED / PASS;
+   - D2.2B legacy-install migration safety — CLOSED / PASS;
+   - final D2.2B implementation: Candidate 1D.
+3. **D3 — visible DozePilot branding — NEXT**
+   - app name and visible branding strings;
+   - launcher/adaptive/round/monochrome icons;
+   - splash/artwork/colors;
+   - remaining user-visible EnforceDoze branding;
+   - preserve Java namespace/internal semantic identifiers unless a concrete reason requires change.
+4. **D4 — Material 3 / UI modernization**
+5. **D5 — About / licenses / attribution**
+6. **D6 — release engineering, versioning, signing, install/update checks**
+7. **D7 — README, screenshots, Tasker/MacroDroid, Shizuku/root and support documentation**
+8. **D8 — final release build, device smoke, hashes and GitHub release preparation**
+
+Do not mix public-facing cosmetic work with unnecessary reliability redesign. Closed
+reliability/security architecture remains the baseline.
 
 ---
 
@@ -5343,15 +5350,17 @@ Do not make me restate completed history and do not reopen closed work without g
 
 ### Repository / current integrated baseline
 
+- Public app name: `DozePilot`
 - Fork: `rmpsdroid/EnforceDoze`
 - Local repo: `D:\AndroidProjects\EnforceDoze`
-- Application ID: `com.akylas.enforcedoze.fork`
+- Application ID: `com.rmpsdroid.dozepilot`
 - Java namespace: `com.akylas.enforcedoze`
-- Current integrated branch: `master`
-- Current local `master`:
-  `2549a1830bef221b06950e893011c02106fca87f`
-- Current verified `origin/master`:
-  `2549a1830bef221b06950e893011c02106fca87f`
+- GitHub owner: `rmpsdroid`
+- Current working branch: `master`
+- D2 working-tree base HEAD:
+  `5c9eb223768fc7cc99d39fb7aa890193d010a8ea`
+- D2 source/documentation changes are not yet committed at this checkpoint.
+- Determine local/remote publication state directly from Git whenever work resumes.
 - Checkpoint B functional commit:
   `e6d82fcf769a3c0e5ed8e8eba383564d4998acb4`
 - Checkpoint B merge:
@@ -5565,15 +5574,21 @@ Security architecture:
 
 Automation migration:
 
-All existing Tasker/MacroDroid profiles must set target package
+Checkpoint C's authenticated automation contract remains in force after the D2 identity
+migration.
 
-`com.akylas.enforcedoze.fork`
+New DozePilot Tasker/MacroDroid profiles must target package
+
+`com.rmpsdroid.dozepilot`
 
 and include
 
 `authToken=<per-install token>`
 
-for every EnforceDoze automation broadcast.
+for every authenticated automation broadcast.
+
+Profiles targeting `com.akylas.enforcedoze.fork` belong to the legacy installation and must
+be deleted/recreated for DozePilot. No old-package action aliases are retained.
 
 Frozen candidate APK SHA-256:
 
@@ -5666,43 +5681,119 @@ Remaining engineering/release work:
    - attribution/upstream licensing;
    - GitHub release preparation.
 
-### Current documentation action
+### CHECKPOINT D — CURRENT DOZEPILOT STATE
 
-Checkpoint C is integrated into local `master`.
+Checkpoint C remains CLOSED / PASS and must not be reopened without genuinely new
+evidence.
 
-Functional commit:
+Checkpoint D public-release work has started.
 
-`43d9444de67ea97a91c468eb22e15033433e55b6`
+#### D1 — baseline audit — CLOSED / PASS
 
-Feature documentation tip:
+The release/rebranding baseline was audited before making public identity changes.
+Material 3 themes and the existing XML/View architecture are retained; no Compose rewrite
+is planned. GPL/upstream attribution must remain intact.
 
-`0ed27409b675b70745b9e6336e97cd776b2fb2ab`
+#### D2 — identity/application-ID migration — CLOSED / PASS
 
-Local master merge:
+Locked identity:
 
-`12e16a1b723ef9fc4c14cb3f094db46c58ea493a`
+- app name: `DozePilot`;
+- application ID: `com.rmpsdroid.dozepilot`;
+- Java namespace: `com.akylas.enforcedoze`;
+- GitHub owner: `rmpsdroid`.
 
-Merge subject:
+D2.1 application-ID dependency audit established which identifiers must migrate and which
+internal Java/semantic identifiers must remain unchanged.
 
-`Merge exported Tasker security hardening`
+D2.2A migrated the application ID and app-facing package references, including preferences,
+shortcuts and displayed ADB commands. It intentionally did not rename the Java namespace.
 
-This final integration-state record belongs in a documentation-only master follow-up.
-Its own commit hash is intentionally not embedded here so the text remains self-stable.
+D2.2B added legacy-install migration safety for side-by-side installations of
+`com.akylas.enforcedoze.fork` and `com.rmpsdroid.dozepilot`.
 
-Before any documentation commit:
+Legacy-install policy:
 
-- verify local `master` still descends directly from merge
-  `12e16a1b723ef9fc4c14cb3f094db46c58ea493a`;
-- verify `PROJECT_CONTINUATION.md` is the only tracked modification;
-- verify the index is clean;
-- run `git diff --check`;
-- require a fresh exact `approve commit`.
+- DozePilot may open while the legacy fork is installed;
+- normal ForceDoze activation is blocked while the legacy package exists;
+- `serviceEnabled` is forced back to `false`;
+- the legacy app is never automatically stopped, disabled, uninstalled or modified;
+- recovery-only starts remain permitted so DozePilot-owned state is not stranded;
+- no legacy Tasker action/package aliases are retained.
 
-Master publication remains a separate operation and always requires exact:
+Migration order:
 
-`approve push master`
+1. disable ForceDoze in the old app;
+2. export old settings;
+3. uninstall the old fork;
+4. return to DozePilot;
+5. import the exported settings;
+6. re-authorize root/Shizuku or required ADB permissions for the new package;
+7. review settings and enable DozePilot;
+8. recreate Tasker/MacroDroid profiles for `com.rmpsdroid.dozepilot`.
 
-Local/remote master publication state must be verified directly from Git.
+`SettingsBackup` retains its existing `enforcedoze-settings` format for ordinary settings.
+The per-install automation `authToken` is intentionally separate and does not migrate.
+
+Final D2.2B implementation:
+
+**Candidate 1D**
+
+Candidate 1D fixes the Android 8.0–11 foreground-service contract for explicit
+`ACTION_RESTORE_STATE` recovery. Recovery starts dispatched through
+`startForegroundService()` now promote immediately to foreground even when the ordinary
+persistent-notification preference is disabled. Ordinary pre-Android-12 service
+notification behavior remains unchanged.
+
+Validated Candidate 1D debug APK SHA-256:
+
+`8D79A18C9B43CCE4FCE47BBEDC3EB7D9F8FD5DCC1D0331796FE8FAD094E6C089`
+
+Focused M30/API29 validation established:
+
+- exact Candidate 1D APK hash verified before install;
+- legacy fork installed but stopped;
+- DozePilot `serviceEnabled=false`;
+- authenticated `ENABLE_FORCEDOZE` reached the exported receiver;
+- centralized legacy safety gate blocked normal activation;
+- recovery-only ForceDozeService started successfully on API29;
+- temporary disabled recovery work settled and the service stopped normally;
+- no Doze session was owned, so no false EXIT was recorded;
+- legacy fork remained untouched/stopped;
+- final DeviceIdle state remained `mForceIdle=false`, `ACTIVE`;
+- no root, Shizuku or ADB permission grant was performed by the runtime harness.
+
+An old Candidate 1C `RemoteServiceException` remained in the accumulated device logcat
+buffer and caused a later unbounded crash-search harness false positive. Candidate 1D's
+own test window showed successful service start/recovery/settlement with no new
+foreground-service crash. Do not reopen D2.2B because of that historical log entry.
+
+Current working-tree state before Git checkpoint:
+
+- branch: `master`;
+- base HEAD:
+  `5c9eb223768fc7cc99d39fb7aa890193d010a8ea`;
+- D2 production changes: 19 tracked files;
+- this continuation update adds `PROJECT_CONTINUATION.md` as the twentieth tracked
+  modification;
+- index remains intentionally clean;
+- protected untracked audit/runtime evidence must not be deleted, overwritten or staged.
+
+### NEXT — D2 Git checkpoint, then D3 branding
+
+First review the complete D2 source + continuation diff.
+
+Git authorization remains explicit and separate:
+
+- commit requires exact `approve commit`;
+- feature-branch push requires exact `approve push`;
+- merge to master requires exact `approve merge to master`;
+- master push requires exact `approve push master`.
+
+Do not use `git add .` and do not use `git clean`.
+
+After the D2 Git checkpoint is safely recorded, begin **D3 — visible DozePilot branding**.
+Do not rerun closed D2 build/runtime gates unless genuinely new evidence appears.
 
 No Git approval is currently active.
 

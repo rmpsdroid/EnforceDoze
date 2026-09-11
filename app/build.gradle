@@ -20,10 +20,10 @@ android {
     }
 
     defaultConfig {
-        // Fork identity: installs alongside the upstream com.akylas.enforcedoze rather than
-        // replacing it. The Java/resource namespace above deliberately stays unchanged, so class
-        // names and the R class are untouched - only the on-device package identity differs.
-        applicationId "com.akylas.enforcedoze.fork"
+        // DozePilot public identity. The Java/resource namespace above deliberately stays unchanged,
+        // so class names and the R class remain stable while only the installed package identity
+        // is rebranded for the public release.
+        applicationId "com.rmpsdroid.dozepilot"
         minSdkVersion 24
         targetSdkVersion 36
         versionCode 86

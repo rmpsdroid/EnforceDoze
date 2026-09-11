@@ -24,7 +24,7 @@
     <string name="error_text">Erro</string>
     <string name="please_wait_text">Por favor aguarde</string>
     <string name="requesting_su_access_text">A solicitar acceso SU...</string>
-    <string name="read_logcat_su_not_avail_or_denied_error_text">Permissão SU negada ou SU não disponível, não é possível ler logcat.\n\nPlease grant READ_LOGS permission via ADB to use this feature: \'adb shell pm grant com.akylas.enforcedoze.fork android.permission.READ_LOGS\' (without quotes)</string>
+    <string name="read_logcat_su_not_avail_or_denied_error_text">Permissão SU negada ou SU não disponível, não é possível ler logcat.\n\nPlease grant READ_LOGS permission via ADB to use this feature: \'adb shell pm grant com.rmpsdroid.dozepilot android.permission.READ_LOGS\' (without quotes)</string>
     <string name="loading_installed_apps_text">A carregar as apps instaladas...</string>
     <string name="info_text">Info</string>
     <string name="app_already_whitelisted_text">A app que está a tentar adicionar já se encontra na lista!</string>

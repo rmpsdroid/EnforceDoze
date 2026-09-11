@@ -1377,6 +1377,22 @@ public class ForceDozeService extends Service {
         // A reload delivered as a service intent survives the service having been killed, unlike a
         // LocalBroadcast which is dropped when nothing is listening at that instant.
         String action = intent != null ? intent.getAction() : null;
+
+        /*
+         * Defense in depth for direct starts and START_STICKY recreation. Recovery remains
+         * allowed because blocking it could strand suspended packages or altered device state.
+         */
+        boolean legacyForkInstalled = Utils.enforceLegacyForkSafety(
+                getApplicationContext(), "ForceDozeService.onStartCommand");
+        if (legacyForkInstalled && !ACTION_RESTORE_STATE.equals(action)) {
+            log("Legacy fork installed; converting service start to recovery-only mode");
+            DiagnosticLogger.i("APP",
+                    "legacy_fork_start_blocked action=" + action + " recoveryOnly=true");
+            ensureRecoveryForegroundNotification();
+            handleRestoreStateRequest(startId);
+            return START_STICKY;
+        }
+
         if (action != null) {
             switch (action) {
                 case ACTION_RELOAD_SETTINGS:
@@ -1392,7 +1408,7 @@ public class ForceDozeService extends Service {
                     reloadAppsBlockList();
                     return START_STICKY;
                 case ACTION_RESTORE_STATE:
-                    ensureForegroundNotification();
+                    ensureRecoveryForegroundNotification();
                     handleRestoreStateRequest(startId);
                     return START_STICKY;
             }
@@ -1650,6 +1666,23 @@ public class ForceDozeService extends Service {
             } else {
                 hidePersistentNotification();
             }
+        }
+    }
+
+    /**
+     * ACTION_RESTORE_STATE is dispatched with startForegroundService() from Android 8.0 onward.
+     * Unlike an ordinary pre-Android-12 service start, that explicit recovery path must therefore
+     * promote immediately even when the user has disabled the normal persistent notification.
+     */
+    private void ensureRecoveryForegroundNotification() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (showPersistentNotif) {
+                showPersistentNotification();
+            } else {
+                showSilentNotification();
+            }
+        } else {
+            ensureForegroundNotification();
         }
     }
 

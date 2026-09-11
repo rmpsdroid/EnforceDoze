@@ -27,7 +27,7 @@
     <string name="error_text">Hata</string>
     <string name="please_wait_text">Lütfen Bekleyin</string>
     <string name="requesting_su_access_text">SU erişme isteği...</string>
-    <string name="read_logcat_su_not_avail_or_denied_error_text">SU izinleri reddedildi veya SU mevcut değil, bu nedenle logcat okunamıyor.\n\nBu özelliği kullanmak için lütfen ADB aracılığıyla READ_LOGS iznini verin: \'adb kabuğu pm grant com.akylas.enforcedoze.fork android.permission.READ_LOGS\' (tırnak işaretleri olmadan)</string>
+    <string name="read_logcat_su_not_avail_or_denied_error_text">SU izinleri reddedildi veya SU mevcut değil, bu nedenle logcat okunamıyor.\n\nBu özelliği kullanmak için lütfen ADB aracılığıyla READ_LOGS iznini verin: \'adb shell pm grant com.rmpsdroid.dozepilot android.permission.READ_LOGS\' (tırnak işaretleri olmadan)</string>
     <string name="loading_installed_apps_text">Yüklü Uygulamalar Yükleniyor</string>
     <string name="whitelisting_text">Beyaz Liste</string>
     <string name="whitelisted_apps_restrictions_text">"Beyaz listeye eklenen bir uygulama, Ağ\'ı kullanabilir ve Doze ve Uygulama Bekleme sırasında kısmi uyandırma kilitlerini tutabilir. Bununla birlikte, diğer uygulamalara yaptığı gibi, beyaz listedeki uygulama için de başka kısıtlamalar geçerlidir. Örneğin, beyaz listedeki uygulamanın işleri ve senkronizasyonları ertelenir ve normal AlarmManager alarmları tetiklenmez."</string>

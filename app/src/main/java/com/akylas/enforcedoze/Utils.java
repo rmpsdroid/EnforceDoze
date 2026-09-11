@@ -66,7 +66,52 @@ public class Utils {
     public static final String ACTION_CUSTOM_DOZE_PERIOD_BOUNDARY =
             BuildConfig.APPLICATION_ID + ".ACTION_CUSTOM_DOZE_PERIOD_BOUNDARY";
 
+    /** Previous public-beta/fork package. DozePilot must not run normal Doze control beside it. */
+    public static final String LEGACY_FORK_APPLICATION_ID = "com.akylas.enforcedoze.fork";
+
+    public static boolean isLegacyForkInstalled(Context context) {
+        try {
+            context.getPackageManager().getApplicationInfo(LEGACY_FORK_APPLICATION_ID, 0);
+            return true;
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Hard migration gate shared by UI, receivers, tiles and sticky service recreation.
+     * It only changes DozePilot's own enabled preference; it never modifies the legacy app.
+     */
+    public static boolean enforceLegacyForkSafety(Context context, String source) {
+        if (!isLegacyForkInstalled(context)) {
+            return false;
+        }
+
+        boolean saved = PreferenceManager.getDefaultSharedPreferences(context)
+                .edit()
+                .putBoolean("serviceEnabled", false)
+                .commit();
+        logToLogcat("EnforceDoze",
+                "LEGACY_FORK_BLOCK source=" + source + " serviceEnabledSaved=" + saved);
+        updateTileState(context);
+        return true;
+    }
+
     public static void startForceDozeService(Context context) {
+        if (enforceLegacyForkSafety(context, "startForceDozeService")) {
+            /*
+             * Deliver recovery unconditionally for an explicit blocked start request.
+             * getRunningServices()/isMyServiceRunning() is not reliable enough to be a
+             * safety decision on every Android build.
+             */
+            boolean recoveryRequested = startForceDozeServiceAction(
+                    context, ForceDozeService.ACTION_RESTORE_STATE);
+            logToLogcat("EnforceDoze",
+                    "Blocked normal ForceDozeService start while legacy fork is installed"
+                            + " recoveryRequested=" + recoveryRequested);
+            return;
+        }
+
         if (isMyServiceRunning(ForceDozeService.class, context)) {
             logToLogcat("EnforceDoze", "ForceDozeService already running");
             return;

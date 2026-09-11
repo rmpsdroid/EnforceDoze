@@ -41,7 +41,7 @@
     <string name="requesting_su_access_text">Requiriendo acceso SU...</string>
     <string name="read_logcat_su_not_avail_or_denied_error_text">Permiso SU denegado o SU no disponible, por lo que no puede leer logcat.
 \n
-\nPor favor, concede el permiso READ_LOGS a través de ADB para utilizar esta función: \'adb shell pm grant com.akylas.enforcedoze.fork android.permission.READ_LOGS\' (sin comillas)</string>
+\nPor favor, concede el permiso READ_LOGS a través de ADB para utilizar esta función: \'adb shell pm grant com.rmpsdroid.dozepilot android.permission.READ_LOGS\' (sin comillas)</string>
     <string name="loading_installed_apps_text">Cargando aplicaciones instaladas...</string>
     <string name="whitelisting_text">Lista de permitidos</string>
     <string name="whitelisted_apps_restrictions_text">"Una aplicación que está en la lista de permitidas puede utilizar la red y mantener bloqueos parciales durante Doze y App Standby. Sin embargo, se siguen aplicando otras restricciones a la aplicación de la lista de permitidas, al igual que a otras aplicaciones. Por ejemplo, las tareas y sincronizaciones de la aplicación en la lista de permitidas se aplazan, y sus alarmas normales de AlarmManager no se activan. "</string>

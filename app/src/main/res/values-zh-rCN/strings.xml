@@ -29,7 +29,7 @@
     <string name="error_text">错误</string>
     <string name="please_wait_text">请等待</string>
     <string name="requesting_su_access_text">正在请求root访问权限...</string>
-    <string name="read_logcat_su_not_avail_or_denied_error_text">SU权限被拒绝或SU不可用，因此无法读取log。\n\n请通过ADB授予READ_LOGS权限以使用此功能：\'adb shell pm grant com.akylas.enforcedoze.fork android.permission.READ_LOGS\'（不带引号）</string>
+    <string name="read_logcat_su_not_avail_or_denied_error_text">SU权限被拒绝或SU不可用，因此无法读取log。\n\n请通过ADB授予READ_LOGS权限以使用此功能：\'adb shell pm grant com.rmpsdroid.dozepilot android.permission.READ_LOGS\'（不带引号）</string>
     <string name="loading_installed_apps_text">正在加载已安装的应用...</string>
     <string name="whitelisting_text">白名单</string>
     <string name="whitelisted_apps_restrictions_text">"白名单中的应用程序可以使用网络并在休眠和应用待机期间保持部分唤醒锁。然而，对白名单应用程序的限制仍然适用，就像对其他应用程序一样。例如，白名单应用程序的任务和同步被推迟，并且它的常规警报不会触发。 "</string>

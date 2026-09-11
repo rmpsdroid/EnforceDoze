@@ -35,7 +35,7 @@
     <string name="error_text">பிழை</string>
     <string name="please_wait_text">தயவுசெய்து காத்திருங்கள்</string>
     <string name="requesting_su_access_text">SU அணுகலைக் கோருகிறது ...</string>
-    <string name="read_logcat_su_not_avail_or_denied_error_text">SU இசைவு மறுக்கப்பட்டது அல்லது சு கிடைக்கவில்லை, எனவே LogCat ஐ படிக்க முடியாது.\n\n இந்த அம்சத்தைப் பயன்படுத்த ADB வழியாக READ_LOGS இசைவு வழங்கவும்: \'ADB ஓடு PM கிராண்ட் com.akylas.enforcedoze.fork android.permission.read_logs\' (மேற்கோள்கள் இல்லாமல்)</string>
+    <string name="read_logcat_su_not_avail_or_denied_error_text">SU இசைவு மறுக்கப்பட்டது அல்லது சு கிடைக்கவில்லை, எனவே LogCat ஐ படிக்க முடியாது.\n\n இந்த அம்சத்தைப் பயன்படுத்த ADB வழியாக READ_LOGS இசைவு வழங்கவும்: \'adb shell pm grant com.rmpsdroid.dozepilot android.permission.READ_LOGS\' (மேற்கோள்கள் இல்லாமல்)</string>
     <string name="loading_installed_apps_text">நிறுவப்பட்ட பயன்பாடுகளை ஏற்றுகிறது ...</string>
     <string name="whitelisting_text">அனுமதிப்பட்டியல்</string>
     <string name="info_text">தகவல்</string>

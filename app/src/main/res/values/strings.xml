@@ -28,7 +28,7 @@
     <string name="error_text">Error</string>
     <string name="please_wait_text">Please wait</string>
     <string name="requesting_su_access_text">Requesting SU access...</string>
-    <string name="read_logcat_su_not_avail_or_denied_error_text">SU permission denied or SU not available, so cannot read logcat.\n\nPlease grant READ_LOGS permission via ADB to use this feature: \'adb shell pm grant com.akylas.enforcedoze.fork android.permission.READ_LOGS\' (without quotes)</string>
+    <string name="read_logcat_su_not_avail_or_denied_error_text">SU permission denied or SU not available, so cannot read logcat.\n\nPlease grant READ_LOGS permission via ADB to use this feature: \'adb shell pm grant com.rmpsdroid.dozepilot android.permission.READ_LOGS\' (without quotes)</string>
     <string name="loading_installed_apps_text">Loading installed apps...</string>
     <string name="whitelisting_text">Whitelisting</string>
     <string name="whitelisted_apps_restrictions_text">"An app that is whitelisted can use the network and hold partial wake locks during Doze and App Standby. However, other restrictions still apply to the whitelisted app, just as they do to other apps. For example, the whitelisted app’s jobs and syncs are deferred, and its regular AlarmManager alarms do not fire. "</string>
@@ -271,4 +271,7 @@
     <string name="diagnostic_export_empty">No diagnostic log has been recorded yet</string>
     <string name="diagnostic_cleared">Diagnostic log cleared</string>
     <string name="diagnostic_clear_failed">Could not clear the diagnostic log: %1$s</string>
+    <string name="legacy_fork_detected_title">Previous EnforceDoze installation detected</string>
+    <string name="legacy_fork_detected_message">DozePilot cannot be enabled while the previous EnforceDoze fork is installed. Running both apps can make them compete for Doze and device-state control.\n\nTo migrate safely:\n1. Open the old app and disable its ForceDoze service.\n2. Export the old app settings if you want to migrate them.\n3. Uninstall the old EnforceDoze fork.\n4. Return to DozePilot.\n5. Import the exported settings.\n6. Re-authorize root or Shizuku, or grant the required ADB permissions for the imported configuration.\n7. Review the settings, then enable DozePilot.\n8. Recreate Tasker or MacroDroid actions for DozePilot.\n\nDozePilot will remain disabled until the old app is removed.</string>
+    <string name="legacy_fork_blocked_status">Disabled — previous EnforceDoze installation detected</string>
 </resources>
