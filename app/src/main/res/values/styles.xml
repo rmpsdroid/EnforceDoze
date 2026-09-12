@@ -20,6 +20,12 @@
         <item name="android:windowAllowReturnTransitionOverlap">true</item>
     </style>
 
+    <style name="AppTheme.Launch" parent="AppTheme">
+        <item name="android:windowBackground">@drawable/dozepilot_starting_window</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+
     <style name="Transparent.NoTitleBar" parent="Theme.Material3.Light.NoActionBar">
         <!--on below line we are setting background as transparent color-->
         <item name="android:background">@android:color/transparent</item>

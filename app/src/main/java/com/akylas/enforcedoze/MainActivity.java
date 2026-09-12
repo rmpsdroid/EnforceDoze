@@ -157,6 +157,7 @@ public class MainActivity extends AppCompatActivity implements CompoundButton.On
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        setTheme(R.style.AppTheme);
         super.onCreate(savedInstanceState);
 
 
