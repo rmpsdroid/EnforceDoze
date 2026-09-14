@@ -1,6 +1,48 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="colorPrimary">#FF4081</color>
-    <color name="colorPrimaryDark">#181C25</color>
-    <color name="colorAccent">#FF4081</color>
+
+    <!-- DozePilot locked visual identity. Keep launcher/splash resources separate. -->
+    <color name="dozepilot_midnight">#131A2E</color>
+    <color name="dozepilot_navigation_blue">#4C6FFF</color>
+    <color name="dozepilot_amber">#FFC24B</color>
+    <color name="dozepilot_facet_blue">#6F8AFF</color>
+
+    <!-- Fixed compatibility tones for legacy direct @color callers. -->
+    <color name="dozepilot_primary_fixed">#4058D8</color>
+    <color name="dozepilot_secondary_fixed">#5364A6</color>
+
+    <!-- Material3 semantic role tokens: light mode. -->
+    <color name="dozepilot_primary">#4058D8</color>
+    <color name="dozepilot_primary_inverse">#B8C4FF</color>
+    <color name="dozepilot_on_primary">#FFFFFF</color>
+    <color name="dozepilot_primary_container">#DEE3FF</color>
+    <color name="dozepilot_on_primary_container">#101F58</color>
+
+    <color name="dozepilot_secondary">#5364A6</color>
+    <color name="dozepilot_on_secondary">#FFFFFF</color>
+    <color name="dozepilot_secondary_container">#E0E4FF</color>
+    <color name="dozepilot_on_secondary_container">#101A44</color>
+
+    <color name="dozepilot_tertiary">#805600</color>
+    <color name="dozepilot_on_tertiary">#FFFFFF</color>
+    <color name="dozepilot_tertiary_container">#FFDDB0</color>
+    <color name="dozepilot_on_tertiary_container">#291800</color>
+
+    <color name="dozepilot_surface">#F8F9FF</color>
+    <color name="dozepilot_on_surface">#191B23</color>
+    <color name="dozepilot_surface_variant">#E1E2EC</color>
+    <color name="dozepilot_on_surface_variant">#45464F</color>
+    <color name="dozepilot_surface_container">#F0F1FA</color>
+    <color name="dozepilot_surface_container_high">#EAEBF4</color>
+    <color name="dozepilot_surface_container_highest">#E5E6EF</color>
+    <color name="dozepilot_surface_inverse">#2A314A</color>
+    <color name="dozepilot_on_surface_inverse">#F0F1FA</color>
+    <color name="dozepilot_outline">#757680</color>
+    <color name="dozepilot_outline_variant">#C5C6D0</color>
+
+    <!-- Legacy resource names retained until their direct callers migrate. -->
+    <color name="colorPrimary">@color/dozepilot_primary_fixed</color>
+    <color name="colorPrimaryDark">@color/dozepilot_midnight</color>
+    <color name="colorAccent">@color/dozepilot_secondary_fixed</color>
+
 </resources>

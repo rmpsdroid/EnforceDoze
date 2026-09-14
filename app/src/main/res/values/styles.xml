@@ -10,9 +10,37 @@
         <item name="appBarLayoutStyle">@style/Widget.App.AppBarLayout</item>
         <item name="toolbarStyle">@style/Widget.App.Toolbar</item>
         <item name="preferenceTheme">@style/ThemeOverlay.App.Preference</item>
-        <item name="colorPrimary">@color/colorPrimary</item>
-        <item name="colorPrimaryVariant">@color/colorPrimaryDark</item>
-        <item name="colorAccent">@color/colorAccent</item>
+        <!-- DozePilot Material3 semantic palette. -->
+        <item name="colorPrimary">@color/dozepilot_primary</item>
+        <item name="colorPrimaryInverse">@color/dozepilot_primary_inverse</item>
+        <item name="colorOnPrimary">@color/dozepilot_on_primary</item>
+        <item name="colorPrimaryContainer">@color/dozepilot_primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/dozepilot_on_primary_container</item>
+        <item name="colorSecondary">@color/dozepilot_secondary</item>
+        <item name="colorOnSecondary">@color/dozepilot_on_secondary</item>
+        <item name="colorSecondaryContainer">@color/dozepilot_secondary_container</item>
+        <item name="colorOnSecondaryContainer">@color/dozepilot_on_secondary_container</item>
+        <item name="colorTertiary">@color/dozepilot_tertiary</item>
+        <item name="colorOnTertiary">@color/dozepilot_on_tertiary</item>
+        <item name="colorTertiaryContainer">@color/dozepilot_tertiary_container</item>
+        <item name="colorOnTertiaryContainer">@color/dozepilot_on_tertiary_container</item>
+        <item name="colorSurface">@color/dozepilot_surface</item>
+        <item name="colorOnSurface">@color/dozepilot_on_surface</item>
+        <item name="colorSurfaceVariant">@color/dozepilot_surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/dozepilot_on_surface_variant</item>
+        <item name="colorSurfaceContainer">@color/dozepilot_surface_container</item>
+        <item name="colorSurfaceContainerHigh">@color/dozepilot_surface_container_high</item>
+        <item name="colorSurfaceContainerHighest">@color/dozepilot_surface_container_highest</item>
+        <item name="colorSurfaceInverse">@color/dozepilot_surface_inverse</item>
+        <item name="colorOnSurfaceInverse">@color/dozepilot_on_surface_inverse</item>
+        <item name="colorOutline">@color/dozepilot_outline</item>
+        <item name="colorOutlineVariant">@color/dozepilot_outline_variant</item>
+        <item name="android:colorBackground">@color/dozepilot_surface</item>
+        <item name="colorOnBackground">@color/dozepilot_on_surface</item>
+
+        <!-- AppCompat/M2 compatibility attributes. -->
+        <item name="colorPrimaryVariant">@color/dozepilot_primary</item>
+        <item name="colorAccent">@color/dozepilot_secondary</item>
         <item name="windowActionModeOverlay">true</item>
         <item name="android:windowActivityTransitions">true</item>
         <item name="android:windowContentTransitions">true</item>
@@ -43,6 +71,7 @@
     </style>
     <style name="ThemeOverlay.App.Preference" parent="PreferenceThemeOverlay">
         <item name="switchPreferenceCompatStyle">@style/App.Preference.SwitchPreference</item>
+        <item name="preferenceCategoryTitleTextColor">@color/dozepilot_primary</item>
     </style>
 
     <style name="App.Preference.SwitchPreference" parent="Preference.SwitchPreference.Material">

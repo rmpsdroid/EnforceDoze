@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- DozePilot Material3 semantic role tokens: dark mode. -->
+    <color name="dozepilot_primary">#B8C4FF</color>
+    <color name="dozepilot_primary_inverse">#4058D8</color>
+    <color name="dozepilot_on_primary">#10246B</color>
+    <color name="dozepilot_primary_container">#273B99</color>
+    <color name="dozepilot_on_primary_container">#DEE3FF</color>
+
+    <color name="dozepilot_secondary">#BEC7FF</color>
+    <color name="dozepilot_on_secondary">#25305D</color>
+    <color name="dozepilot_secondary_container">#3C466F</color>
+    <color name="dozepilot_on_secondary_container">#E0E4FF</color>
+
+    <color name="dozepilot_tertiary">#FFD180</color>
+    <color name="dozepilot_on_tertiary">#452B00</color>
+    <color name="dozepilot_tertiary_container">#5E4100</color>
+    <color name="dozepilot_on_tertiary_container">#FFE0A6</color>
+
+    <color name="dozepilot_surface">#131A2E</color>
+    <color name="dozepilot_on_surface">#E4E7F3</color>
+    <color name="dozepilot_surface_variant">#444652</color>
+    <color name="dozepilot_on_surface_variant">#C5C6D0</color>
+    <color name="dozepilot_surface_container">#1B2238</color>
+    <color name="dozepilot_surface_container_high">#232A42</color>
+    <color name="dozepilot_surface_container_highest">#2A314A</color>
+    <color name="dozepilot_surface_inverse">#E5E6EF</color>
+    <color name="dozepilot_on_surface_inverse">#2A314A</color>
+    <color name="dozepilot_outline">#8E909B</color>
+    <color name="dozepilot_outline_variant">#5D5F6B</color>
+
+</resources>
