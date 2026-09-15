@@ -13,7 +13,6 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.graphics.Color;
 import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
@@ -36,7 +35,6 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.SwitchCompat;
 
 import android.text.SpannableString;
-import android.text.method.ScrollingMovementMethod;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.Menu;
@@ -178,7 +176,6 @@ public class MainActivity extends AppCompatActivity implements CompoundButton.On
         textViewStatus = (TextView) findViewById(R.id.textView2);
         updateStateFromTile = new UpdateForceDozeEnabledState();
         LocalBroadcastManager.getInstance(this).registerReceiver(updateStateFromTile, new IntentFilter("update-state-from-tile"));
-        ((TextView) findViewById(R.id.textView)).setMovementMethod(new ScrollingMovementMethod());
         toggleForceDozeSwitch.setOnCheckedChangeListener(null);
 
         // Block before runtime permissions, Shizuku or root setup so the two apps never compete.
@@ -382,7 +379,6 @@ public class MainActivity extends AppCompatActivity implements CompoundButton.On
                                 showLockScreenTimeoutInfoDialog();
                             }
                         })
-                        .setActionTextColor(Color.RED)
                         .show();
             }
         }
